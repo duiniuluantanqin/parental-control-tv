@@ -1,0 +1,11 @@
+.gradle/
+build/
+app/build/
+.idea/
+local.properties
+.tools/
+backend/data.json
+backend/data/
+backend/.env
+backend/__pycache__/
+*.py[cod]

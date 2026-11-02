@@ -1,0 +1,4 @@
+{$TV_PARENTAL_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy tv-parental:8080
+}
