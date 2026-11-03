@@ -93,9 +93,8 @@ object ControlState {
         return (nextDay.timeInMillis - System.currentTimeMillis()).coerceAtLeast(1_000L)
     }
 
-    fun saveRemoteQuestions(context: Context, questions: JSONArray) {
-        prefs(context).edit().putString(REMOTE_QUESTIONS_KEY, questions.toString()).apply()
-    }
+    fun saveRemoteQuestions(context: Context, questions: JSONArray): Boolean =
+        prefs(context).edit().putString(REMOTE_QUESTIONS_KEY, questions.toString()).commit()
 
     fun remoteQuestions(context: Context): String? = prefs(context).getString(REMOTE_QUESTIONS_KEY, null)
 

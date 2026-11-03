@@ -81,8 +81,8 @@
       <div class="form-heading"><div><h2 id="questionDialogTitle">添加题目</h2><p class="muted">填写四个选项，并指定正确答案。</p></div><button id="closeQuestionDialog" class="icon-button" type="button" aria-label="关闭添加题目对话框">×</button></div>
       <label for="promptInput">题目内容<textarea id="promptInput" maxlength="240" rows="2" required></textarea></label>
       <div class="form-meta">
-        <label for="categoryInput">类别<input id="categoryInput" maxlength="40" value="其他" required></label>
-        <label for="difficultyInput">难度<select id="difficultyInput"><option>初中</option><option>小学</option><option>高中</option></select></label>
+        <label for="categoryInput">类别<select id="categoryInput" required><option selected>其他</option></select></label>
+        <label for="difficultyInput">难度<select id="difficultyInput"><option>低</option><option selected>中</option><option>高</option></select></label>
       </div>
       <div class="options-fields">
         <label>A<input class="option-input" maxlength="120" required></label>
@@ -95,14 +95,21 @@
       <div class="form-actions"><button id="cancelQuestion" class="button secondary" type="button">取消</button><button id="submitQuestion" class="button primary" type="submit">保存题目</button></div>
     </form>
   </dialog>
+  <dialog id="questionDetailDialog" aria-labelledby="questionDetailTitle">
+    <div class="form-heading"><div><h2 id="questionDetailTitle">题目详情</h2><p id="questionDetailMeta" class="muted"></p></div><button id="closeQuestionDetail" class="icon-button" type="button" aria-label="关闭题目详情对话框">×</button></div>
+    <p id="questionDetailPrompt" class="question-detail-prompt"></p>
+    <ul id="questionDetailOptions" class="question-detail-options"></ul>
+    <div class="form-actions"><button id="dismissQuestionDetail" class="button secondary" type="button">关闭</button></div>
+  </dialog>
   <dialog id="aiQuestionDialog" class="ai-dialog" aria-labelledby="aiDialogTitle">
     <div class="form-heading"><div><h2 id="aiDialogTitle">用古诗词出题</h2><p class="muted">输入一首诗词，生成多道四选一题目。</p></div><button id="closeAiDialog" class="icon-button" type="button" aria-label="关闭 AI 出题对话框">×</button></div>
     <form id="aiGenerationForm">
       <div class="ai-fields">
         <label for="poemTitleInput">诗词名称<input id="poemTitleInput" maxlength="80" placeholder="例如：静夜思（李白）" required></label>
         <label for="aiCountInput">出题数量<input id="aiCountInput" type="number" min="1" max="10" value="5" required></label>
+        <label for="aiDifficultyInput">难度<select id="aiDifficultyInput"><option>低</option><option selected>中</option><option>高</option></select></label>
       </div>
-      <div class="ai-generation-actions"><p class="muted">每次 1–10 道，难度为初中。重名作品可在名称后补充作者。</p><button id="generateAiQuestions" class="button primary" type="submit">开始出题</button></div>
+      <div class="ai-generation-actions"><p class="muted">每次 1–10 道，可选低、中、高难度。重名作品可在名称后补充作者。</p><button id="generateAiQuestions" class="button primary" type="submit">开始出题</button></div>
     </form>
     <p id="aiNotice" class="form-notice" role="status" aria-live="polite"></p>
     <section id="aiPreview" class="ai-preview" aria-labelledby="aiPoemTitle" hidden>

@@ -1,8 +1,10 @@
 const notice = document.querySelector("#notice");
 const rows = document.querySelector("#questionRows");
 const categoryFilter = document.querySelector("#categoryFilter");
+const categoryInput = document.querySelector("#categoryInput");
 const questionForm = document.querySelector("#questionForm");
 const questionDialog = document.querySelector("#questionDialog");
+const questionDetailDialog = document.querySelector("#questionDetailDialog");
 const aiDialog = document.querySelector("#aiQuestionDialog");
 const aiNotice = document.querySelector("#aiNotice");
 const aiPreview = document.querySelector("#aiPreview");
@@ -12,6 +14,7 @@ const page = location.pathname === "/questions" ? "questions" : "settings";
 const isLoginPage = !["/settings", "/questions"].includes(location.pathname);
 let questions = [];
 let aiQuestions = [];
+let refillTimer;
 
 // Remove credentials saved by the previous version of the admin page.
 sessionStorage.removeItem("tvParentalAdminToken");
@@ -38,7 +41,14 @@ async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (options.body) headers.set("Content-Type", "application/json");
   const response = await fetch(path, { ...options, headers, credentials: "same-origin" });
-  const body = await response.json();
+  let body;
+  try {
+    body = await response.json();
+  } catch {
+    const error = new Error(`后台响应异常（HTTP ${response.status}），请稍后重试`);
+    error.status = response.status;
+    throw error;
+  }
   if (!response.ok) {
     const error = new Error(body.error || `HTTP ${response.status}`);
     error.status = response.status;
@@ -53,6 +63,10 @@ function renderCategories() {
   categoryFilter.replaceChildren(new Option("全部类别", ""));
   for (const category of categories) categoryFilter.add(new Option(category, category));
   categoryFilter.value = categories.includes(selected) ? selected : "";
+  categoryInput.replaceChildren();
+  for (const category of new Set(["古诗词", "数学", "科学", "地理历史", "其他", ...categories])) {
+    categoryInput.add(new Option(category, category, category === "其他", category === "其他"));
+  }
 }
 
 function renderQuestions() {
@@ -71,9 +85,19 @@ function renderQuestions() {
   }
   for (const question of filtered) {
     const tr = document.createElement("tr");
-    for (const value of [question.category, question.prompt, question.answer]) {
+    for (const [column, value] of [question.category, question.prompt, question.answer].entries()) {
       const td = document.createElement("td");
-      td.textContent = value;
+      if (column === 1) {
+        const prompt = document.createElement("button");
+        prompt.type = "button";
+        prompt.className = "question-link";
+        prompt.textContent = value;
+        prompt.setAttribute("aria-haspopup", "dialog");
+        prompt.addEventListener("click", () => showQuestionDetail(question));
+        td.append(prompt);
+      } else {
+        td.textContent = value;
+      }
       tr.append(td);
     }
     const action = document.createElement("td");
@@ -88,6 +112,25 @@ function renderQuestions() {
   }
 }
 
+function showQuestionDetail(question) {
+  document.querySelector("#questionDetailMeta").textContent = `类别：${question.category} · 难度：${question.difficulty}`;
+  document.querySelector("#questionDetailPrompt").textContent = question.prompt;
+  const options = document.querySelector("#questionDetailOptions");
+  options.replaceChildren();
+  for (const [index, option] of question.options.entries()) {
+    const item = document.createElement("li");
+    item.textContent = `${"ABCD"[index]}. ${option}`;
+    if (option === question.answer) {
+      item.className = "correct";
+      const mark = document.createElement("span");
+      mark.textContent = "正确答案";
+      item.append(mark);
+    }
+    options.append(item);
+  }
+  questionDetailDialog.showModal();
+}
+
 async function loadState() {
   const state = await api("/api/v1/admin/state");
   document.querySelector("#dailyLimit").value = state.settings.dailyLimitMinutes;
@@ -97,6 +140,14 @@ async function loadState() {
   questions = state.questions;
   renderCategories();
   renderQuestions();
+  if (refillTimer && questions.length) setNotice(`题库已更新，共 ${questions.length} 道题目`);
+  clearTimeout(refillTimer);
+  refillTimer = undefined;
+  if (!isLoginPage && page === "questions" && !questions.length) {
+    const refill = state.refill || {};
+    setNotice(refill.error ? `题库已空：${refill.error}` : refill.running ? "题库已空，AI 正在补充 50 道综合题…" : "题库已空，等待后台自动补题…", Boolean(refill.error));
+    refillTimer = setTimeout(() => loadState().catch(handleError), 5000);
+  }
 }
 
 async function login(event) {
@@ -147,7 +198,7 @@ async function addQuestion(event) {
   const answerIndex = Number(document.querySelector("#answerInput").value);
   const question = {
     prompt: document.querySelector("#promptInput").value.trim(),
-    category: document.querySelector("#categoryInput").value.trim(),
+    category: categoryInput.value,
     difficulty: document.querySelector("#difficultyInput").value,
     options,
     answer: options[answerIndex],
@@ -219,10 +270,12 @@ async function generateAiQuestions(event) {
   const button = document.querySelector("#generateAiQuestions");
   const titleInput = document.querySelector("#poemTitleInput");
   const countInput = document.querySelector("#aiCountInput");
+  const difficultyInput = document.querySelector("#aiDifficultyInput");
   if (button.disabled) return;
   button.disabled = true;
   titleInput.disabled = true;
   countInput.disabled = true;
+  difficultyInput.disabled = true;
   button.textContent = "正在出题…";
   aiPreview.hidden = true;
   aiQuestions = [];
@@ -231,11 +284,11 @@ async function generateAiQuestions(event) {
   document.querySelector("#aiGenerationForm").setAttribute("aria-busy", "true");
   try {
     const poem = await api("/api/v1/admin/questions/generate", {
-      method: "POST", body: JSON.stringify({ title: titleInput.value.trim(), count: Number(countInput.value) }),
+      method: "POST", body: JSON.stringify({ title: titleInput.value.trim(), count: Number(countInput.value), difficulty: difficultyInput.value }),
     });
     aiQuestions = poem.questions;
     renderAiQuestions(poem);
-    aiNotice.textContent = `已生成 ${aiQuestions.length} 道题，尚未加入题库`;
+    aiNotice.textContent = `已生成 ${aiQuestions.length} 道题（难度：${aiQuestions[0].difficulty}），尚未加入题库`;
     if (!aiDialog.open) setNotice(`《${poem.title}》已生成，打开“AI 出题”查看结果`);
   } catch (error) {
     handleError(error, aiNotice);
@@ -244,6 +297,7 @@ async function generateAiQuestions(event) {
     button.disabled = false;
     titleInput.disabled = false;
     countInput.disabled = false;
+    difficultyInput.disabled = false;
     button.textContent = "重新出题";
     document.querySelector("#aiGenerationForm").removeAttribute("aria-busy");
   }
@@ -282,7 +336,7 @@ async function deleteQuestion(question, button) {
   try {
     await api(`/api/v1/admin/questions/${encodeURIComponent(question.id)}`, { method: "DELETE" });
     await loadState();
-    setNotice("题目已删除");
+    if (questions.length) setNotice("题目已删除");
   } catch (error) {
     handleError(error);
     button.disabled = false;
@@ -333,14 +387,20 @@ document.querySelector("#addQuestionButton").addEventListener("click", () => {
 for (const id of ["closeQuestionDialog", "cancelQuestion"]) {
   document.getElementById(id).addEventListener("click", () => questionDialog.close());
 }
-questionDialog.addEventListener("click", event => {
-  if (event.target === questionDialog) {
-    const bounds = questionDialog.getBoundingClientRect();
-    if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) questionDialog.close();
-  }
-});
+for (const dialog of [questionDialog, questionDetailDialog]) {
+  dialog.addEventListener("click", event => {
+    if (event.target === dialog) {
+      const bounds = dialog.getBoundingClientRect();
+      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) dialog.close();
+    }
+  });
+}
 questionDialog.addEventListener("close", () => document.querySelector("#addQuestionButton").focus());
 questionForm.addEventListener("submit", addQuestion);
+
+for (const id of ["closeQuestionDetail", "dismissQuestionDetail"]) {
+  document.getElementById(id).addEventListener("click", () => questionDetailDialog.close());
+}
 document.querySelector("#aiQuestionButton").addEventListener("click", () => {
   aiDialog.showModal();
   document.querySelector("#poemTitleInput").focus();

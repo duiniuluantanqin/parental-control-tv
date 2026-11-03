@@ -29,7 +29,16 @@ class DeepSeekTests(unittest.TestCase):
         self.assertEqual(payload["response_format"], {"type": "json_object"})
         self.assertEqual(payload["thinking"], {"type": "disabled"})
         self.assertIn("静夜思（李白）", payload["messages"][1]["content"])
+        self.assertEqual(json.loads(payload["messages"][1]["content"])["难度"], "中")
         self.assertNotIn("test-key", json.dumps(payload))
+
+    def test_selected_difficulty_is_sent_to_provider(self):
+        poem = {"title": "静夜思", "author": "李白", "questions": [{}]}
+        for difficulty in ("低", "中", "高"):
+            with self.subTest(difficulty=difficulty), patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("deepseek.urlopen", return_value=self.completion(json.dumps(poem))) as request:
+                deepseek.generate_poem_questions("静夜思", 1, difficulty)
+                payload = json.loads(request.call_args.args[0].data)
+                self.assertEqual(json.loads(payload["messages"][1]["content"])["难度"], difficulty)
 
     def test_missing_key_does_not_call_provider(self):
         with patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}), patch("deepseek.urlopen") as request:
@@ -37,6 +46,21 @@ class DeepSeekTests(unittest.TestCase):
                 deepseek.generate_poem_questions("静夜思", 2)
         self.assertEqual(error.exception.status, 503)
         request.assert_not_called()
+
+    def test_random_questions_include_categories_difficulty_and_excluded_prompts(self):
+        questions = [{"category": "数学", "prompt": "测试题"}]
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("deepseek.urlopen", return_value=self.completion(json.dumps({"questions": questions}))) as request:
+            result = deepseek.generate_random_questions(1, "中", ["已有题干"])
+        self.assertEqual(result, questions)
+        payload = json.loads(request.call_args.args[0].data)
+        user = json.loads(payload["messages"][1]["content"])
+        self.assertEqual(user, {"出题数量": 1, "难度": "中", "已生成题干": ["已有题干"]})
+        for category in ("古诗词", "数学", "科学", "地理历史"):
+            self.assertIn(category, payload["messages"][0]["content"])
+        for result in ({}, {"questions": [{}]}, {"questions": "错误格式"}):
+            with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("deepseek.urlopen", return_value=self.completion(json.dumps(result))):
+                with self.assertRaises(deepseek.DeepSeekError):
+                    deepseek.generate_random_questions(10, "中", [])
 
     def test_provider_errors_are_sanitized_and_not_retried(self):
         for status in (401, 402, 429, 500):

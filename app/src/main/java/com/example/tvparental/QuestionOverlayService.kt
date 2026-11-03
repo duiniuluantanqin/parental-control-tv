@@ -79,7 +79,14 @@ class QuestionOverlayService : Service() {
         currentMode = MODE_QUESTION
         answerSubmitted = false
 
-        val question = QuestionBank.currentOrNext(this)
+        val question = QuestionBank.currentOrNext(this) ?: run {
+            RemoteSync.syncAsync(applicationContext) { result ->
+                if (result.settingsChanged) QuestionAlarmReceiver.scheduleForCurrentState(applicationContext)
+            }
+            QuestionAlarmReceiver.scheduleNext(this)
+            hideOverlay()
+            return
+        }
         val optionTexts = question.options.shuffled()
         val optionViews = mutableListOf<TextView>()
         var selectedIndex = 0
@@ -191,7 +198,10 @@ class QuestionOverlayService : Service() {
         if (answerSubmitted) return
         answerSubmitted = true
         if (selected == question.answer) {
-            QuestionBank.finishCurrent(this)
+            QuestionBank.markCorrect(this, question)
+            RemoteSync.syncAsync(applicationContext) { result ->
+                if (result.settingsChanged) QuestionAlarmReceiver.scheduleForCurrentState(applicationContext)
+            }
             if (ControlState.isDailyLimitReached(this)) {
                 showDailyLock()
                 return

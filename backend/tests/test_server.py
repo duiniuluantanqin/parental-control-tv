@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -21,6 +22,9 @@ import server  # noqa: E402
 
 class AdminApiTests(unittest.TestCase):
     def setUp(self) -> None:
+        key_patch = patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""})
+        key_patch.start()
+        self.addCleanup(key_patch.stop)
         self.temp_dir = tempfile.TemporaryDirectory()
         self.previous_store = server.STORE
         self.previous_auth = server.AUTH
@@ -43,6 +47,8 @@ class AdminApiTests(unittest.TestCase):
         self.httpd.shutdown()
         self.httpd.server_close()
         self.thread.join(timeout=2)
+        if server.STORE.refill_thread is not None:
+            server.STORE.refill_thread.join(timeout=2)
         server.STORE = self.previous_store
         server.AUTH = self.previous_auth
         self.temp_dir.cleanup()
@@ -68,10 +74,159 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(len(state["questions"]), 50)
         self.assertEqual(state["settings"], server.DEFAULT_SETTINGS)
 
+    def random_batch(self, count, difficulty, exclude_prompts):
+        categories = ["古诗词", "数学", "科学", "地理历史"]
+        return [
+            {"category": categories[index % 4], "prompt": f"综合测试题 {len(exclude_prompts) + index}",
+             "options": ["甲", "乙", "丙", "丁"], "answer": "甲"}
+            for index in range(count)
+        ]
+
+    def empty_bank(self):
+        state = server.STORE.load()
+        state["questions"] = []
+        server.STORE.save(state)
+
+    def test_device_only_removes_correct_answer_and_acknowledges_retries(self) -> None:
+        question = server.STORE.load()["questions"][0]
+        for payload, expected in (({}, 400), ({"questionId": [], "answer": "甲"}, 400),
+                                  ({"questionId": question["id"], "answer": "错误答案"}, 409)):
+            status, _ = self.request("/api/v1/device/answers", method="POST", body=payload, authenticated=False)
+            self.assertEqual(status, expected)
+        self.assertEqual(len(server.STORE.load()["questions"]), 50)
+        payload = {"questionId": question["id"], "answer": question["answer"]}
+        for removed in (True, False):
+            status, result = self.request("/api/v1/device/answers", method="POST", body=payload, authenticated=False)
+            self.assertEqual(status, 200)
+            self.assertEqual(result, {"removed": removed})
+            state = server.StateStore(server.STORE.path).load()
+            self.assertEqual(len(state["questions"]), 49)
+            self.assertNotIn(question["id"], [item["id"] for item in state["questions"]])
+
+    def test_last_correct_answer_refills_fifty_mixed_questions(self) -> None:
+        state = server.STORE.load()
+        question = state["questions"][0]
+        state["questions"] = [question]
+        state["settings"]["dailyLimitMinutes"] = 90
+        server.STORE.save(state)
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("server.generate_random_questions", side_effect=self.random_batch) as generate:
+            status, _ = self.request("/api/v1/device/answers", method="POST", authenticated=False,
+                                     body={"questionId": question["id"], "answer": question["answer"]})
+            self.assertEqual(status, 200)
+            server.STORE.refill_thread.join(timeout=2)
+            self.assertEqual(generate.call_count, 5)
+            self.assertEqual([len(call.args[2]) for call in generate.call_args_list], [0, 10, 20, 30, 40])
+        _, state = self.request("/api/v1/device/state", authenticated=False)
+        self.assertEqual(len(state["questions"]), 50)
+        self.assertEqual(len({item["prompt"] for item in state["questions"]}), 50)
+        self.assertEqual({item["category"] for item in state["questions"]}, {"古诗词", "数学", "科学", "地理历史"})
+        self.assertEqual({item["difficulty"] for item in state["questions"]}, {"中"})
+        self.assertEqual(state["settings"]["dailyLimitMinutes"], 90)
+        self.assertNotIn(question["id"], [item["id"] for item in state["questions"]])
+
+    def test_empty_bank_stays_empty_without_key_and_admin_can_delete_last_question(self) -> None:
+        state = server.STORE.load()
+        question = state["questions"][0]
+        state["questions"] = [question]
+        server.STORE.save(state)
+        with patch("server.generate_random_questions") as generate:
+            status, _ = self.request(f"/api/v1/admin/questions/{question['id']}", method="DELETE")
+            self.assertEqual(status, 200)
+            for endpoint in ("/api/v1/device/state", "/api/v1/admin/state"):
+                status, state = self.request(endpoint)
+                self.assertEqual(status, 200)
+                self.assertEqual(state["questions"], [])
+                self.assertIn("DeepSeek Key", state["refill"]["error"])
+            generate.assert_not_called()
+
+    def test_concurrent_empty_syncs_start_only_one_nonblocking_refill(self) -> None:
+        self.empty_bank()
+        release = threading.Event()
+        entered = threading.Event()
+
+        def slow_batch(*args):
+            entered.set()
+            self.assertTrue(release.wait(timeout=5))
+            return self.random_batch(*args)
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("server.generate_random_questions", side_effect=slow_batch) as generate:
+            try:
+                with ThreadPoolExecutor(max_workers=6) as executor:
+                    results = list(executor.map(lambda _: self.request("/api/v1/device/state", authenticated=False), range(6)))
+                self.assertTrue(entered.is_set())
+                self.assertEqual(generate.call_count, 1)
+                self.assertTrue(all(status == 200 and state["questions"] == [] and state["refill"]["running"] for status, state in results))
+            finally:
+                release.set()
+                server.STORE.refill_thread.join(timeout=2)
+            self.assertEqual(generate.call_count, 5)
+        self.assertEqual(len(server.STORE.load()["questions"]), 50)
+
+    def test_failed_or_duplicate_refill_never_partially_saves_and_waits_before_retry(self) -> None:
+        from deepseek import DeepSeekError
+        for failure in (DeepSeekError("模型暂不可用"), self.random_batch(10, "中", [])):
+            server.STORE = server.StateStore(server.STORE.path)
+            self.empty_bank()
+            first = self.random_batch(10, "中", [])
+            with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("server.generate_random_questions", side_effect=[first, failure]) as generate:
+                self.request("/api/v1/device/state", authenticated=False)
+                server.STORE.refill_thread.join(timeout=2)
+                _, state = self.request("/api/v1/device/state", authenticated=False)
+                self.assertEqual(state["questions"], [])
+                self.assertFalse(state["refill"]["running"])
+                self.assertIsNotNone(state["refill"]["error"])
+                self.assertEqual(generate.call_count, 2)
+            server.STORE.next_refill_attempt = 0
+            with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("server.generate_random_questions", side_effect=self.random_batch):
+                self.request("/api/v1/device/state", authenticated=False)
+                server.STORE.refill_thread.join(timeout=2)
+                self.assertEqual(len(server.STORE.load()["questions"]), 50)
+
+    def test_refill_does_not_overwrite_questions_added_by_parent(self) -> None:
+        self.empty_bank()
+        release = threading.Event()
+        entered = threading.Event()
+
+        def slow_batch(*args):
+            entered.set()
+            self.assertTrue(release.wait(timeout=5))
+            return self.random_batch(*args)
+
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("server.generate_random_questions", side_effect=slow_batch):
+            try:
+                self.request("/api/v1/device/state", authenticated=False)
+                self.assertTrue(entered.wait(timeout=2))
+                status, added = self.request("/api/v1/admin/questions", method="POST", body=self.random_batch(1, "中", ["占位"])[0])
+                self.assertEqual(status, 201)
+            finally:
+                release.set()
+                server.STORE.refill_thread.join(timeout=2)
+        self.assertEqual(server.STORE.load()["questions"], [added])
+
+    def test_successful_refill_can_start_again_as_soon_as_bank_is_empty(self) -> None:
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("server.generate_random_questions", side_effect=self.random_batch) as generate:
+            for _ in range(2):
+                self.empty_bank()
+                self.request("/api/v1/device/state", authenticated=False)
+                server.STORE.refill_thread.join(timeout=2)
+                self.assertEqual(len(server.STORE.load()["questions"]), 50)
+            self.assertEqual(generate.call_count, 10)
+
     def test_admin_login_is_required(self) -> None:
         status, body = self.request("/api/v1/admin/state", authenticated=False)
         self.assertEqual(status, 401)
         self.assertIn("error", body)
+
+    def test_unreadable_admin_file_returns_json_error(self) -> None:
+        with patch("server.Path.read_text", side_effect=PermissionError("admin.json unreadable")):
+            status, body = self.request(
+                "/api/v1/admin/login", method="POST",
+                body={"username": "admin", "password": "test-password-123"},
+            )
+            self.assertEqual(status, 503)
+            self.assertIn("error", body)
+            status, _ = self.request("/api/v1/admin/state")
+            self.assertEqual(status, 401)
 
     def test_wrong_password_and_old_bearer_are_rejected(self) -> None:
         status, _ = self.request(
@@ -199,6 +354,30 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 400)
 
+    def test_manual_questions_keep_selected_difficulty(self) -> None:
+        for difficulty in ("低", "中", "高"):
+            question = {
+                "prompt": f"手动出题难度测试：{difficulty}", "difficulty": difficulty,
+                "options": ["甲", "乙", "丙", "丁"], "answer": "甲",
+            }
+            status, created = self.request("/api/v1/admin/questions", method="POST", body=question)
+            self.assertEqual(status, 201)
+            self.assertEqual(created["difficulty"], difficulty)
+        _, state = self.request("/api/v1/device/state", authenticated=False)
+        self.assertEqual([question["difficulty"] for question in state["questions"][-3:]], ["低", "中", "高"])
+
+    def test_legacy_difficulty_is_normalized_on_read_without_rewriting_bank(self) -> None:
+        state = server.STORE.load()
+        for question, difficulty in zip(state["questions"], ("小学", "初中", "高中")):
+            question["difficulty"] = difficulty
+        server.STORE.save(state)
+        original = server.STORE.path.read_bytes()
+        for endpoint in ("/api/v1/admin/state", "/api/v1/device/state"):
+            status, loaded = self.request(endpoint)
+            self.assertEqual(status, 200)
+            self.assertEqual([question["difficulty"] for question in loaded["questions"][:3]], ["低", "中", "高"])
+        self.assertEqual(server.STORE.path.read_bytes(), original)
+
     def test_ai_generation_requires_login_and_valid_input(self) -> None:
         with patch("server.generate_poem_questions") as generate:
             status, _ = self.request(
@@ -206,7 +385,11 @@ class AdminApiTests(unittest.TestCase):
                 body={"title": "静夜思", "count": 3},
             )
             self.assertEqual(status, 401)
-            for payload in ({"title": "", "count": 3}, {"title": "静夜思", "count": True}, {"title": "静夜思", "count": 11}):
+            invalid = [
+                {"title": "", "count": 3}, {"title": "静夜思", "count": True}, {"title": "静夜思", "count": 11},
+                *({"title": "静夜思", "difficulty": value} for value in ("", "初中", None, 1, [])),
+            ]
+            for payload in invalid:
                 status, _ = self.request("/api/v1/admin/questions/generate", method="POST", body=payload)
                 self.assertEqual(status, 400)
             generate.assert_not_called()
@@ -219,10 +402,12 @@ class AdminApiTests(unittest.TestCase):
                 {"prompt": "《静夜思》的作者是哪位诗人？", "options": ["李白", "杜甫", "王维", "白居易"], "answer": "李白"},
             ],
         }
-        with patch("server.generate_poem_questions", return_value=generated):
+        with patch("server.generate_poem_questions", return_value=generated) as generate:
             status, preview = self.request("/api/v1/admin/questions/generate", method="POST", body={"title": "静夜思", "count": 2})
         self.assertEqual(status, 200)
+        generate.assert_called_once_with("静夜思", 2, "中")
         self.assertEqual(preview["questions"][0]["category"], "古诗词")
+        self.assertEqual(preview["questions"][0]["difficulty"], "中")
         self.assertIn("静夜思", preview["questions"][0]["prompt"])
         _, state = self.request("/api/v1/device/state", authenticated=False)
         self.assertEqual(len(state["questions"]), 50)
@@ -236,6 +421,29 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(retried["skipped"], 1)
         _, state = self.request("/api/v1/device/state", authenticated=False)
         self.assertEqual(len(state["questions"]), 51)
+
+    def test_ai_difficulty_reaches_provider_and_survives_import(self) -> None:
+        for difficulty in ("低", "中", "高"):
+            generated = {
+                "title": "静夜思", "author": "李白",
+                "questions": [{
+                    "prompt": f"《静夜思》难度测试：{difficulty}", "difficulty": "小学",
+                    "options": ["甲", "乙", "丙", "丁"], "answer": "甲",
+                }],
+            }
+            with patch("server.generate_poem_questions", return_value=generated) as generate:
+                status, preview = self.request(
+                    "/api/v1/admin/questions/generate", method="POST",
+                    body={"title": "静夜思", "count": 1, "difficulty": difficulty},
+                )
+            self.assertEqual(status, 200)
+            generate.assert_called_once_with("静夜思", 1, difficulty)
+            self.assertEqual(preview["questions"][0]["difficulty"], difficulty)
+            status, imported = self.request("/api/v1/admin/questions/batch", method="POST", body={"questions": preview["questions"]})
+            self.assertEqual(status, 200)
+            self.assertEqual(imported["added"], 1)
+        _, state = self.request("/api/v1/device/state", authenticated=False)
+        self.assertEqual([question["difficulty"] for question in state["questions"][-3:]], ["低", "中", "高"])
 
     def test_invalid_ai_questions_and_batches_do_not_partially_save(self) -> None:
         question = {"prompt": "《静夜思》测试题", "options": ["甲", "乙", "丙", "丁"], "answer": "甲"}
@@ -274,6 +482,21 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(statuses, [201] * 12)
         _, state = self.request("/api/v1/device/state", authenticated=False)
         self.assertEqual(len(state["questions"]), 62)
+
+
+class AdminCredentialFileTests(unittest.TestCase):
+    @unittest.skipUnless(hasattr(os, "geteuid") and os.geteuid() == 0, "requires POSIX root")
+    def test_root_setup_keeps_credentials_owned_by_data_directory_user(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory) / "data"
+            data.mkdir()
+            os.chown(data, 65534, 65534)
+            auth = server.AdminAuth(data / "admin.json")
+            auth.set_password("admin", "test-password-123")
+            self.assertEqual(auth.path.stat().st_uid, 65534)
+            self.assertEqual(auth.path.stat().st_gid, 65534)
+            self.assertEqual(auth.path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(auth.login("admin", "test-password-123")[0], 200)
 
 
 if __name__ == "__main__":

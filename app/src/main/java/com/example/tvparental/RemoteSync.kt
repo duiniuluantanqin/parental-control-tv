@@ -15,9 +15,31 @@ data class SyncResult(
 )
 
 object RemoteSync {
+    @Synchronized
     fun sync(context: Context): SyncResult {
         var connection: HttpURLConnection? = null
         return try {
+            val acknowledged = mutableSetOf<String>()
+            for (question in QuestionBank.pendingCorrectAnswers(context)) {
+                val report = URL("${ControlState.BACKEND_URL}/api/v1/device/answers").openConnection() as HttpURLConnection
+                try {
+                    report.requestMethod = "POST"
+                    report.connectTimeout = 5_000
+                    report.readTimeout = 5_000
+                    report.doOutput = true
+                    report.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    val body = JSONObject().put("questionId", question.id).put("answer", question.answer)
+                        .toString().toByteArray(Charsets.UTF_8)
+                    report.setFixedLengthStreamingMode(body.size)
+                    report.outputStream.use { it.write(body) }
+                    val code = report.responseCode
+                    if (code !in 200..299) return SyncResult(false, "答题结果上报失败（HTTP $code），稍后自动重试")
+                    JSONObject(report.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }).getBoolean("removed")
+                    acknowledged.add(question.id)
+                } finally {
+                    report.disconnect()
+                }
+            }
             connection = URL("${ControlState.BACKEND_URL}/api/v1/device/state").openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
             connection.connectTimeout = 5_000
@@ -36,11 +58,15 @@ object RemoteSync {
             )
             val questions = state.getJSONArray("questions")
             val parsed = QuestionBank.parseQuestions(questions.toString())
-            require(parsed.isNotEmpty()) { "远程题库为空" }
             val settingsChanged = ControlState.settings(context) != settings
             ControlState.updateSettings(context, settings)
-            ControlState.saveRemoteQuestions(context, JSONArray(parsed.map { QuestionBank.toJsonObject(it) }))
-            SyncResult(true, "已同步 ${parsed.size} 道题目", parsed.size, settingsChanged)
+            check(ControlState.saveRemoteQuestions(context, JSONArray(parsed.map { QuestionBank.toJsonObject(it) }))) {
+                "保存题库失败，稍后自动重试"
+            }
+            // Keep the local exclusion until the replacement bank has been saved successfully.
+            QuestionBank.acknowledgeCorrectAnswers(context, acknowledged)
+            val message = if (parsed.isEmpty()) "题库已空，等待后台自动补题" else "已同步 ${parsed.size} 道题目"
+            SyncResult(true, message, parsed.size, settingsChanged)
         } catch (error: Exception) {
             SyncResult(false, error.message ?: "连接后台失败")
         } finally {
