@@ -199,6 +199,64 @@ class AdminApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 400)
 
+    def test_ai_generation_requires_login_and_valid_input(self) -> None:
+        with patch("server.generate_poem_questions") as generate:
+            status, _ = self.request(
+                "/api/v1/admin/questions/generate", method="POST", authenticated=False,
+                body={"title": "静夜思", "count": 3},
+            )
+            self.assertEqual(status, 401)
+            for payload in ({"title": "", "count": 3}, {"title": "静夜思", "count": True}, {"title": "静夜思", "count": 11}):
+                status, _ = self.request("/api/v1/admin/questions/generate", method="POST", body=payload)
+                self.assertEqual(status, 400)
+            generate.assert_not_called()
+
+    def test_ai_preview_does_not_save_and_selected_batch_is_imported_once(self) -> None:
+        generated = {
+            "title": "静夜思", "author": "李白",
+            "questions": [
+                {"prompt": "诗中哪一项表达了作者的感情？", "options": ["思乡", "喜悦", "愤怒", "赞美"], "answer": "思乡"},
+                {"prompt": "《静夜思》的作者是哪位诗人？", "options": ["李白", "杜甫", "王维", "白居易"], "answer": "李白"},
+            ],
+        }
+        with patch("server.generate_poem_questions", return_value=generated):
+            status, preview = self.request("/api/v1/admin/questions/generate", method="POST", body={"title": "静夜思", "count": 2})
+        self.assertEqual(status, 200)
+        self.assertEqual(preview["questions"][0]["category"], "古诗词")
+        self.assertIn("静夜思", preview["questions"][0]["prompt"])
+        _, state = self.request("/api/v1/device/state", authenticated=False)
+        self.assertEqual(len(state["questions"]), 50)
+        selected = {"questions": preview["questions"][:1]}
+        status, imported = self.request("/api/v1/admin/questions/batch", method="POST", body=selected)
+        self.assertEqual(status, 200)
+        self.assertEqual(imported["added"], 1)
+        status, retried = self.request("/api/v1/admin/questions/batch", method="POST", body=selected)
+        self.assertEqual(status, 200)
+        self.assertEqual(retried["added"], 0)
+        self.assertEqual(retried["skipped"], 1)
+        _, state = self.request("/api/v1/device/state", authenticated=False)
+        self.assertEqual(len(state["questions"]), 51)
+
+    def test_invalid_ai_questions_and_batches_do_not_partially_save(self) -> None:
+        question = {"prompt": "《静夜思》测试题", "options": ["甲", "乙", "丙", "丁"], "answer": "甲"}
+        invalid = {**question, "answer": "不在选项中"}
+        for questions in ([question, invalid], [question, question]):
+            with patch("server.generate_poem_questions", return_value={"title": "静夜思", "author": "李白", "questions": questions}):
+                status, _ = self.request("/api/v1/admin/questions/generate", method="POST", body={"title": "静夜思", "count": 2})
+            self.assertEqual(status, 502)
+        for payload in ({"questions": []}, {"questions": [question, invalid]}):
+            status, _ = self.request("/api/v1/admin/questions/batch", method="POST", body=payload)
+            self.assertEqual(status, 400)
+        _, state = self.request("/api/v1/device/state", authenticated=False)
+        self.assertEqual(len(state["questions"]), 50)
+
+    def test_ai_provider_errors_reach_admin_without_leaking_key(self) -> None:
+        from deepseek import DeepSeekError
+        with patch("server.generate_poem_questions", side_effect=DeepSeekError("AI 出题尚未配置", status=503)):
+            status, body = self.request("/api/v1/admin/questions/generate", method="POST", body={"title": "静夜思", "count": 3})
+        self.assertEqual(status, 503)
+        self.assertIn("error", body)
+
     def test_concurrent_question_writes_are_not_lost(self) -> None:
         def add(index: int) -> int:
             question = {

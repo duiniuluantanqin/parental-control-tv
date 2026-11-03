@@ -29,6 +29,8 @@ python backend/server.py
 
 管理页面在 `http://127.0.0.1:8765`，使用上一步设置的用户名和密码登录（用户名默认 `admin`，密码至少 10 个字符）。账号以密码散列保存到 `backend/data/admin.json`，忘记密码时重新运行 `--set-admin`。后台分为“使用规则”和“题库管理”两个页面，添加题目使用弹窗。本机服务用于开发验证；电视正式版本固定连接线上域名。
 
+题库支持 DeepSeek AI 出题：在“AI 出题”中输入一首古诗词的名称（可附作者）与数量，一次生成 1–10 道初中四选一题目，预览并勾选后批量入库。需要在服务环境中配置 `DEEPSEEK_API_KEY`；Key 配置和使用步骤见[部署文档](docs/DEPLOY_ECS.md#deepseek-ai-古诗词出题)。
+
 ## 部署到阿里云 ECS
 
 复用 ECS 上已有的 Caddy，为新域名增加 `reverse_proxy 127.0.0.1:8080`，Python 后台由 systemd 托管。按 [部署文档](docs/DEPLOY_ECS.md) 完成一次性初始化后，推送后台或种子题库到 `main`，GitHub Actions 就会测试、同步代码、重启后台并检查 HTTPS 接口。

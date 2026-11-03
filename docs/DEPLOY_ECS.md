@@ -189,6 +189,37 @@ cd /var/www/html/tvparental
 
 这会替换管理员账号及密码，原登录会话失效，题库与规则保留。服务只保存加盐的密码散列，无法查询密码明文。连续输错 5 次会暂停登录一分钟，稍后重试。
 
+### DeepSeek AI 古诗词出题
+
+AI 出题在后台的“题库管理 → AI 出题”对话框中使用。默认一次生成 5 道，可选 1–10 道；每道题有四个选项和一个正确答案，难度为初中。无需修改电视应用。
+
+首次配置 Key：
+
+1. 用上面的 SSH 命令登录部署账户，用编辑器打开 `/var/www/html/tvparental/backend/.env`，保留已有配置，添加或修改这一行：
+
+   ```dotenv
+   DEEPSEEK_API_KEY=填入你自己的DeepSeekKey
+   ```
+
+   真实 Key 仅保存在 ECS 的这个文件中，不填写在管理页面、Android 或 GitHub 仓库中。`.env` 已由 Git 和自动部署排除。
+2. 保存后以部署账户重启服务，使 systemd 重新加载环境文件：
+
+   ```bash
+   sudo -n /usr/bin/systemctl restart tvparental
+   ```
+
+   更新 Key 时同样需要重启；重启会清除浏览器登录会话，重新登录即可。尚未配置 Key 时，手动添加题目和电视同步照常可用。
+3. 打开 https://tvparental.mediainsight360.com/questions ，登录后点击“AI 出题”，输入例如 `静夜思（李白）`，选择数量并点击“开始出题”。
+4. 页面会显示识别到的诗词名称、作者、多道题目、四个选项及正确答案。核对内容，取消勾选不需要的题目，点击“加入题库”。生成预览时不入库，只有选中的题目会保存；相同题干自动跳过。之后电视按同步间隔获取新题目。
+
+每次点击“开始出题 / 重新出题”都会调用一次 DeepSeek；勾选与加入题库不会再次调用。关闭弹窗后当前生成请求仍会继续，再打开可查看结果。模型可能出现知识错误，预览时需核对原句和答案。重名或生僻作品可在名称后补充作者；生成不完整或格式不正确时不会保存任何题目，可减少数量后重试。
+
+接口固定使用 `https://api.deepseek.com/chat/completions`、模型 `deepseek-flash`，关闭思考模式并启用 JSON 输出，通过 Python 标准库调用，无需安装 SDK。未配置 Key、Key 无效、账户余额不足、请求繁忙和网络超时会显示对应提示，服务不会自动重试付费请求。
+
+本机开发时，需在启动 Python 的进程环境中设置 `DEEPSEEK_API_KEY`；直接运行 `server.py` 不会读取 `.env`。如使用 Docker 备选方案，Compose 会从 `--env-file backend/.env` 传入该变量，更新后需重新创建应用容器。
+
+接口参考：[DeepSeek 官方快速开始](https://api-docs.deepseek.com/zh-cn/)、[JSON 输出说明](https://api-docs.deepseek.com/zh-cn/guides/json_mode)。
+
 ### 电视自动同步
 
 电视应用固定访问 `https://tvparental.mediainsight360.com/api/v1/device/state`，启动服务时同步，之后按后台配置的间隔轮询。安装新版 APK 后无需在电视配置地址或登录账号，旧版保存的地址也不再使用。首页保留“立即同步题目和规则”按钮。离线时继续使用已缓存题库和规则，首次启动无缓存时使用内置的 50 道题。

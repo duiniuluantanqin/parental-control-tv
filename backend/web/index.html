@@ -63,6 +63,7 @@
         <div class="filters">
           <label class="sr-only" for="categoryFilter">筛选类别</label>
           <select id="categoryFilter"><option value="">全部类别</option></select>
+          <button id="aiQuestionButton" class="button secondary" type="button">AI 出题</button>
           <button id="addQuestionButton" class="button primary" type="button">添加题目</button>
         </div>
       </div>
@@ -93,6 +94,22 @@
       <p id="questionNotice" class="form-notice error" role="alert"></p>
       <div class="form-actions"><button id="cancelQuestion" class="button secondary" type="button">取消</button><button id="submitQuestion" class="button primary" type="submit">保存题目</button></div>
     </form>
+  </dialog>
+  <dialog id="aiQuestionDialog" class="ai-dialog" aria-labelledby="aiDialogTitle">
+    <div class="form-heading"><div><h2 id="aiDialogTitle">用古诗词出题</h2><p class="muted">输入一首诗词，生成多道四选一题目。</p></div><button id="closeAiDialog" class="icon-button" type="button" aria-label="关闭 AI 出题对话框">×</button></div>
+    <form id="aiGenerationForm">
+      <div class="ai-fields">
+        <label for="poemTitleInput">诗词名称<input id="poemTitleInput" maxlength="80" placeholder="例如：静夜思（李白）" required></label>
+        <label for="aiCountInput">出题数量<input id="aiCountInput" type="number" min="1" max="10" value="5" required></label>
+      </div>
+      <div class="ai-generation-actions"><p class="muted">每次 1–10 道，难度为初中。重名作品可在名称后补充作者。</p><button id="generateAiQuestions" class="button primary" type="submit">开始出题</button></div>
+    </form>
+    <p id="aiNotice" class="form-notice" role="status" aria-live="polite"></p>
+    <section id="aiPreview" class="ai-preview" aria-labelledby="aiPoemTitle" hidden>
+      <div class="ai-preview-heading"><h3 id="aiPoemTitle"></h3><p class="muted">请核对题目和答案，勾选要加入题库的题目。</p></div>
+      <div id="aiQuestionList" class="ai-question-list"></div>
+      <div class="form-actions"><button id="importAiQuestions" class="button primary" type="button">加入题库</button></div>
+    </section>
   </dialog>
   <script src="/app.js" defer></script>
 </body>

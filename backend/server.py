@@ -18,6 +18,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from deepseek import DeepSeekError, generate_poem_questions
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SEED_FILE = ROOT / "app" / "src" / "main" / "assets" / "questions.json"
@@ -88,6 +90,17 @@ def validate_question(value: object, *, require_id: bool = True) -> dict[str, ob
         "options": normalized_options,
         "answer": answer,
     }
+
+
+def validate_question_batch(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list) or not 1 <= len(value) <= 10:
+        raise ValueError("一次请选择 1–10 道题目")
+    result = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("题目格式不正确")
+        result.append(validate_question({**item, "id": None}, require_id=False))
+    return result
 
 
 def default_state() -> dict[str, object]:
@@ -251,6 +264,46 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self.read_json()
+            if path == "/api/v1/admin/questions/generate":
+                title, count = payload.get("title"), payload.get("count", 5)
+                if not isinstance(title, str) or not 1 <= len(title.strip()) <= 80:
+                    raise ValueError("请输入 1–80 个字符的诗词名称，可附作者")
+                if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 10:
+                    raise ValueError("出题数量需为 1–10 道")
+                # Generate outside the state lock so TV sync and admin writes can continue.
+                poem = generate_poem_questions(title.strip(), count)
+                try:
+                    candidates = []
+                    for item in poem["questions"]:
+                        if not isinstance(item, dict):
+                            raise ValueError("invalid question")
+                        question = {**item, "category": "古诗词", "difficulty": "初中"}
+                        prompt = question.get("prompt")
+                        if isinstance(prompt, str) and poem["title"] not in prompt:
+                            question["prompt"] = f"《{poem['title']}》：{prompt}"
+                        candidates.append(question)
+                    generated = validate_question_batch(candidates)
+                    if len({question["prompt"] for question in generated}) != len(generated):
+                        raise ValueError("duplicate generated questions")
+                except ValueError:
+                    raise DeepSeekError("生成题目的选项、答案或题干不符合要求，请重新生成") from None
+                self.send_json(200, {**poem, "questions": generated})
+                return
+            if path == "/api/v1/admin/questions/batch":
+                candidates = validate_question_batch(payload.get("questions"))
+                with STORE.lock:
+                    state = STORE.load()
+                    existing = {question["prompt"] for question in state["questions"]}
+                    added = 0
+                    for question in candidates:
+                        if question["prompt"] not in existing:
+                            state["questions"].append(question)
+                            existing.add(question["prompt"])
+                            added += 1
+                    if added:
+                        STORE.save(state)
+                self.send_json(200, {"added": added, "skipped": len(candidates) - added})
+                return
             with STORE.lock:
                 state = STORE.load()
                 if path == "/api/v1/admin/settings":
@@ -266,6 +319,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     self.send_json(201, question)
                 else:
                     self.send_json(404, {"error": "not found"})
+        except DeepSeekError as error:
+            self.send_json(error.status, {"error": str(error)})
         except (ValueError, json.JSONDecodeError) as error:
             self.send_json(400, {"error": str(error)})
 

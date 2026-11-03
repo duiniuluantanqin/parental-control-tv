@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+import io
+import json
+import sys
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+from urllib.error import HTTPError, URLError
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import deepseek  # noqa: E402
+
+
+class DeepSeekTests(unittest.TestCase):
+    def completion(self, content, *, finish_reason="stop"):
+        return io.BytesIO(json.dumps({"choices": [{"finish_reason": finish_reason, "message": {"content": content}}]}).encode())
+
+    def test_sends_server_key_and_requests_json_for_one_poem(self):
+        poem = {"title": "静夜思", "author": "李白", "questions": [{"prompt": "第一题"}, {"prompt": "第二题"}]}
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("deepseek.urlopen", return_value=self.completion(json.dumps(poem))) as request:
+            result = deepseek.generate_poem_questions("静夜思（李白）", 2)
+        self.assertEqual(result, poem)
+        outbound = request.call_args.args[0]
+        self.assertEqual(outbound.full_url, "https://api.deepseek.com/chat/completions")
+        self.assertEqual(outbound.get_header("Authorization"), "Bearer test-key")
+        payload = json.loads(outbound.data)
+        self.assertEqual(payload["model"], "deepseek-flash")
+        self.assertEqual(payload["response_format"], {"type": "json_object"})
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+        self.assertIn("静夜思（李白）", payload["messages"][1]["content"])
+        self.assertNotIn("test-key", json.dumps(payload))
+
+    def test_missing_key_does_not_call_provider(self):
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}), patch("deepseek.urlopen") as request:
+            with self.assertRaises(deepseek.DeepSeekError) as error:
+                deepseek.generate_poem_questions("静夜思", 2)
+        self.assertEqual(error.exception.status, 503)
+        request.assert_not_called()
+
+    def test_provider_errors_are_sanitized_and_not_retried(self):
+        for status in (401, 402, 429, 500):
+            with self.subTest(status=status), patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("deepseek.urlopen", side_effect=HTTPError("https://api.deepseek.com", status, "test-key", {}, io.BytesIO(b"test-key"))) as request:
+                with self.assertRaises(deepseek.DeepSeekError) as error:
+                    deepseek.generate_poem_questions("静夜思", 2)
+                self.assertNotIn("test-key", str(error.exception))
+                self.assertEqual(request.call_count, 1)
+
+    def test_timeout_and_bad_or_incomplete_output_are_rejected(self):
+        valid = {"title": "静夜思", "author": "李白", "questions": [{}, {}]}
+        cases = [
+            ("", "stop"), ("   ", "stop"), ("not json", "stop"),
+            (json.dumps(valid), "length"), ("[]", "stop"),
+            (json.dumps({**valid, "questions": [{}]}), "stop"),
+            (json.dumps({**valid, "author": ""}), "stop"),
+            (json.dumps({"error": "unknown poem"}), "stop"),
+        ]
+        for content, reason in cases:
+            with self.subTest(content=content, reason=reason), patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("deepseek.urlopen", return_value=self.completion(content, finish_reason=reason)):
+                with self.assertRaises(deepseek.DeepSeekError):
+                    deepseek.generate_poem_questions("静夜思", 2)
+        for error in (TimeoutError(), URLError("network unavailable")):
+            with self.subTest(error=error), patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("deepseek.urlopen", side_effect=error):
+                with self.assertRaises(deepseek.DeepSeekError):
+                    deepseek.generate_poem_questions("静夜思", 2)
+        for raw in (b"{}", b'{"choices":[]}', b'{"choices":[1]}'):
+            with self.subTest(raw=raw), patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("deepseek.urlopen", return_value=io.BytesIO(raw)):
+                with self.assertRaises(deepseek.DeepSeekError):
+                    deepseek.generate_poem_questions("静夜思", 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

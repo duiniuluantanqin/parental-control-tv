@@ -3,11 +3,15 @@ const rows = document.querySelector("#questionRows");
 const categoryFilter = document.querySelector("#categoryFilter");
 const questionForm = document.querySelector("#questionForm");
 const questionDialog = document.querySelector("#questionDialog");
+const aiDialog = document.querySelector("#aiQuestionDialog");
+const aiNotice = document.querySelector("#aiNotice");
+const aiPreview = document.querySelector("#aiPreview");
 const loginView = document.querySelector("#loginView");
 const adminView = document.querySelector("#adminView");
 const page = location.pathname === "/questions" ? "questions" : "settings";
 const isLoginPage = !["/settings", "/questions"].includes(location.pathname);
 let questions = [];
+let aiQuestions = [];
 
 // Remove credentials saved by the previous version of the admin page.
 sessionStorage.removeItem("tvParentalAdminToken");
@@ -166,6 +170,112 @@ async function addQuestion(event) {
   }
 }
 
+function updateAiSelection() {
+  const count = document.querySelectorAll("#aiQuestionList input:checked").length;
+  const button = document.querySelector("#importAiQuestions");
+  button.textContent = `加入题库（${count} 道）`;
+  button.disabled = count === 0;
+}
+
+function renderAiQuestions(poem) {
+  const list = document.querySelector("#aiQuestionList");
+  document.querySelector("#aiPoemTitle").textContent = `《${poem.title}》 · ${poem.author}`;
+  list.replaceChildren();
+  for (const [index, question] of aiQuestions.entries()) {
+    const card = document.createElement("article");
+    card.className = "ai-question";
+    const label = document.createElement("label");
+    label.className = "ai-question-heading";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = String(index);
+    checkbox.checked = true;
+    checkbox.addEventListener("change", updateAiSelection);
+    const prompt = document.createElement("span");
+    prompt.textContent = `${index + 1}. ${question.prompt}`;
+    label.append(checkbox, prompt);
+    const options = document.createElement("ul");
+    options.className = "ai-options";
+    for (const [optionIndex, option] of question.options.entries()) {
+      const item = document.createElement("li");
+      item.textContent = `${"ABCD"[optionIndex]}. ${option}`;
+      if (option === question.answer) {
+        item.className = "correct";
+        const mark = document.createElement("span");
+        mark.textContent = "正确答案";
+        item.append(mark);
+      }
+      options.append(item);
+    }
+    card.append(label, options);
+    list.append(card);
+  }
+  aiPreview.hidden = false;
+  updateAiSelection();
+}
+
+async function generateAiQuestions(event) {
+  event.preventDefault();
+  const button = document.querySelector("#generateAiQuestions");
+  const titleInput = document.querySelector("#poemTitleInput");
+  const countInput = document.querySelector("#aiCountInput");
+  if (button.disabled) return;
+  button.disabled = true;
+  titleInput.disabled = true;
+  countInput.disabled = true;
+  button.textContent = "正在出题…";
+  aiPreview.hidden = true;
+  aiQuestions = [];
+  aiNotice.classList.remove("error");
+  aiNotice.textContent = "正在围绕这首诗词出题，请稍候…";
+  document.querySelector("#aiGenerationForm").setAttribute("aria-busy", "true");
+  try {
+    const poem = await api("/api/v1/admin/questions/generate", {
+      method: "POST", body: JSON.stringify({ title: titleInput.value.trim(), count: Number(countInput.value) }),
+    });
+    aiQuestions = poem.questions;
+    renderAiQuestions(poem);
+    aiNotice.textContent = `已生成 ${aiQuestions.length} 道题，尚未加入题库`;
+    if (!aiDialog.open) setNotice(`《${poem.title}》已生成，打开“AI 出题”查看结果`);
+  } catch (error) {
+    handleError(error, aiNotice);
+    if (!aiDialog.open) handleError(error);
+  } finally {
+    button.disabled = false;
+    titleInput.disabled = false;
+    countInput.disabled = false;
+    button.textContent = "重新出题";
+    document.querySelector("#aiGenerationForm").removeAttribute("aria-busy");
+  }
+}
+
+async function importAiQuestions() {
+  const selected = [...document.querySelectorAll("#aiQuestionList input:checked")].map(input => aiQuestions[Number(input.value)]);
+  if (!selected.length) return;
+  const button = document.querySelector("#importAiQuestions");
+  const generateButton = document.querySelector("#generateAiQuestions");
+  const checkboxes = document.querySelectorAll("#aiQuestionList input");
+  button.disabled = true;
+  generateButton.disabled = true;
+  for (const checkbox of checkboxes) checkbox.disabled = true;
+  aiNotice.classList.remove("error");
+  try {
+    const result = await api("/api/v1/admin/questions/batch", { method: "POST", body: JSON.stringify({ questions: selected }) });
+    aiQuestions = [];
+    aiPreview.hidden = true;
+    aiNotice.textContent = "";
+    aiDialog.close();
+    await loadState();
+    setNotice(`已加入 ${result.added} 道题目${result.skipped ? `，跳过 ${result.skipped} 道重复题目` : ""}`);
+  } catch (error) {
+    handleError(error, aiDialog.open ? aiNotice : notice);
+  } finally {
+    generateButton.disabled = false;
+    for (const checkbox of checkboxes) checkbox.disabled = false;
+    updateAiSelection();
+  }
+}
+
 async function deleteQuestion(question, button) {
   if (!window.confirm(`删除题目“${question.prompt}”？`)) return;
   button.disabled = true;
@@ -231,5 +341,13 @@ questionDialog.addEventListener("click", event => {
 });
 questionDialog.addEventListener("close", () => document.querySelector("#addQuestionButton").focus());
 questionForm.addEventListener("submit", addQuestion);
+document.querySelector("#aiQuestionButton").addEventListener("click", () => {
+  aiDialog.showModal();
+  document.querySelector("#poemTitleInput").focus();
+});
+document.querySelector("#closeAiDialog").addEventListener("click", () => aiDialog.close());
+aiDialog.addEventListener("close", () => document.querySelector("#aiQuestionButton").focus());
+document.querySelector("#aiGenerationForm").addEventListener("submit", generateAiQuestions);
+document.querySelector("#importAiQuestions").addEventListener("click", importAiQuestions);
 categoryFilter.addEventListener("change", renderQuestions);
 initialize();

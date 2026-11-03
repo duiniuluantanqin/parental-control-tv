@@ -28,6 +28,7 @@
 - Android sources are under `app/`; the 50-question seed bank is `app/src/main/assets/questions.json`.
 - The launcher displays today's use and supports manual sync and an immediate test question. The backend URL is fixed in `ControlState.BACKEND_URL`.
 - The Web admin has separate `/settings` and `/questions` pages and a modal question form. Configure/reset the single admin with `python backend/server.py --set-admin`; password hashes persist in `backend/data/admin.json`.
+- The question bank supports DeepSeek poetry generation (1–10 questions per poem), preview and selected batch import. `DEEPSEEK_API_KEY` stays in the server environment; the standard-library client in `backend/deepseek.py` uses `deepseek-flash` and JSON output. Generation never writes the bank; batch import validates every item and skips duplicate prompts.
 - The Web backend and admin page are under `backend/`; run its API tests with `python -m unittest discover -s backend/tests -v`.
 - ECS deployment uses host-level Caddy + a `tvparental` systemd service running as dedicated user `tvparental-deploy`, code at `/var/www/html/tvparental`. `backend/compose.yaml` remains as a Docker alternative. Keep `backend/.env` and `backend/data/` private.
 - `.github/workflows/deploy-ecs.yml` auto-deploys backend changes on `main` via rsync + SSH + `systemctl restart tvparental`; required secrets are documented in `docs/DEPLOY_ECS.md`.
