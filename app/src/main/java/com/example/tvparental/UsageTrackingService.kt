@@ -115,7 +115,8 @@ class UsageTrackingService : Service() {
     private fun syncRemoteIfDue(force: Boolean = false) {
         if (ControlState.backendUrl(this).isBlank()) return
         val now = SystemClock.elapsedRealtime()
-        if (!force && now - lastRemoteSync < REMOTE_SYNC_INTERVAL_MS) return
+        val intervalMs = ControlState.settings(this).syncIntervalMinutes * 60_000L
+        if (!force && now - lastRemoteSync < intervalMs) return
         lastRemoteSync = now
         Thread {
             val result = RemoteSync.sync(applicationContext)
@@ -181,6 +182,5 @@ class UsageTrackingService : Service() {
         private const val CHANNEL_ID = "usage_tracking"
         private const val NOTIFICATION_ID = 1002
         private const val SAMPLE_INTERVAL_MS = 30_000L
-        private const val REMOTE_SYNC_INTERVAL_MS = 5 * 60_000L
     }
 }

@@ -1,0 +1,98 @@
+name: deploy-ecs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "app/src/main/assets/questions.json"
+      - ".github/workflows/deploy-ecs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tvparental-ecs
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run backend API tests
+        run: python -m unittest discover -s backend/tests -v
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      SSH_PORT: ${{ secrets.ECS_SSH_PORT || '22' }}
+      ECS_HOST: ${{ secrets.ECS_HOST }}
+      TV_PARENTAL_DOMAIN: ${{ vars.TV_PARENTAL_DOMAIN }}
+      DEPLOY_DIR: /var/www/html/tvparental
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          ECS_SSH_KEY: ${{ secrets.ECS_SSH_KEY }}
+          ECS_HOST_KEY: ${{ secrets.ECS_HOST_KEY }}
+        run: |
+          for name in ECS_HOST ECS_SSH_KEY ECS_HOST_KEY TV_PARENTAL_DOMAIN; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing Actions configuration: $name"
+              exit 1
+            fi
+          done
+          install -d -m 700 ~/.ssh
+          umask 077
+          printf '%s\n' "$ECS_SSH_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          HOST_ENTRY="$ECS_HOST"
+          if [[ "$SSH_PORT" != '22' ]]; then
+            HOST_ENTRY="[$ECS_HOST]:$SSH_PORT"
+          fi
+          printf '%s %s\n' "$HOST_ENTRY" "$ECS_HOST_KEY" | tr -d '\r' > ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF
+          Host tvparental-ecs
+              HostName $ECS_HOST
+              User tvparental-deploy
+              Port $SSH_PORT
+              IdentityFile ~/.ssh/deploy_key
+              IdentitiesOnly yes
+              StrictHostKeyChecking yes
+              BatchMode yes
+              ConnectTimeout 15
+          EOF
+
+      - name: Sync sources to ECS
+        run: |
+          ssh tvparental-ecs "test -f $DEPLOY_DIR/backend/.env && mkdir -p $DEPLOY_DIR/app/src/main/assets"
+          rsync -az --delete \
+            --exclude='.env' --exclude='data/' --exclude='data.json*' --exclude='__pycache__/' \
+            backend/ "tvparental-ecs:$DEPLOY_DIR/backend/"
+          rsync -az \
+            app/src/main/assets/questions.json \
+            "tvparental-ecs:$DEPLOY_DIR/app/src/main/assets/questions.json"
+
+      - name: Restart backend service
+        run: |
+          ssh tvparental-ecs 'bash -se' <<'EOF'
+            sudo -n /usr/bin/systemctl restart tvparental
+            curl -fsS --connect-timeout 3 --max-time 10 \
+              --retry 10 --retry-delay 1 --retry-connrefused \
+              http://127.0.0.1:8080/api/v1/device/state > /dev/null
+            systemctl is-active --quiet tvparental
+          EOF
+
+      - name: Verify device API over HTTPS
+        run: |
+          curl -fsS --connect-timeout 10 --max-time 20 \
+            --retry 5 --retry-delay 5 --retry-connrefused \
+            "https://$TV_PARENTAL_DOMAIN/api/v1/device/state" \
+            | python3 -c "import json,sys; s=json.load(sys.stdin); assert s['questions'] and s['settings']; print('questions:', len(s['questions']), '| settings:', s['settings'])"

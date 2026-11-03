@@ -23,7 +23,7 @@ async function api(path, options = {}) {
 }
 
 function enableControls(enabled) {
-  for (const id of ["dailyLimit", "questionInterval", "wrongLock", "saveSettings", "categoryFilter", "toggleQuestionForm"]) {
+  for (const id of ["dailyLimit", "questionInterval", "wrongLock", "syncInterval", "saveSettings", "categoryFilter", "toggleQuestionForm"]) {
     document.getElementById(id).disabled = !enabled;
   }
 }
@@ -79,6 +79,7 @@ async function connect() {
     document.querySelector("#dailyLimit").value = state.settings.dailyLimitMinutes;
     document.querySelector("#questionInterval").value = state.settings.questionIntervalMinutes;
     document.querySelector("#wrongLock").value = state.settings.wrongLockMinutes;
+    document.querySelector("#syncInterval").value = state.settings.syncIntervalMinutes ?? 5;
     questions = state.questions;
     renderCategories();
     renderQuestions();
@@ -96,6 +97,7 @@ async function saveSettings() {
     dailyLimitMinutes: Number(document.querySelector("#dailyLimit").value),
     questionIntervalMinutes: Number(document.querySelector("#questionInterval").value),
     wrongLockMinutes: Number(document.querySelector("#wrongLock").value),
+    syncIntervalMinutes: Number(document.querySelector("#syncInterval").value),
   };
   try {
     await api("/api/v1/admin/settings", { method: "POST", body: JSON.stringify(settings) });

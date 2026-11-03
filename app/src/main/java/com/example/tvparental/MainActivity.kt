@@ -154,7 +154,7 @@ class MainActivity : Activity() {
     private fun refreshStatus() {
         val settings = ControlState.settings(this)
         usageStatus.text = "今日已使用 ${ControlState.todayUsageLabel(this)} / ${settings.dailyLimitMinutes} 分钟"
-        settingsStatus.text = "每 ${settings.questionIntervalMinutes} 分钟答题 · 答错锁定 ${settings.wrongLockMinutes} 分钟 · 题库 ${QuestionBank.all(this).size} 道"
+        settingsStatus.text = "每 ${settings.questionIntervalMinutes} 分钟答题 · 答错锁定 ${settings.wrongLockMinutes} 分钟 · 每 ${settings.syncIntervalMinutes} 分钟同步 · 题库 ${QuestionBank.all(this).size} 道"
         permissionStatus.text = if (canDrawOverlays()) "全屏答题权限：已开启" else "全屏答题权限：未开启"
         testButton.isEnabled = canDrawOverlays()
         testButton.alpha = if (canDrawOverlays()) 1f else 0.45f

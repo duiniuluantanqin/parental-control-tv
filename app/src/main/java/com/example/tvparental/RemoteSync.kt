@@ -38,6 +38,7 @@ object RemoteSync {
                 dailyLimitMinutes = remoteSettings.getInt("dailyLimitMinutes").coerceIn(1, 1440),
                 questionIntervalMinutes = remoteSettings.getInt("questionIntervalMinutes").coerceIn(1, 240),
                 wrongLockMinutes = remoteSettings.getInt("wrongLockMinutes").coerceIn(1, 1440),
+                syncIntervalMinutes = remoteSettings.optInt("syncIntervalMinutes", 5).coerceIn(1, 60),
             )
             val questions = state.getJSONArray("questions")
             val parsed = QuestionBank.parseQuestions(questions.toString())

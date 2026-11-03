@@ -2,7 +2,7 @@
 
 面向雷鸟/TCL Android 9 电视的 Kotlin 家长控制原型。电视每隔 10 分钟显示一道全屏四选一题；方向键选项、OK 键提交。每题只有一次作答机会，答错后锁定 10 分钟。默认每日可用 60 分钟，额度用完后到次日恢复。设备屏幕亮起时计入使用时长，锁定期间不计入。
 
-应用自带 50 道初中难度题目，覆盖古诗词、数学、科学、地理和历史。题库与每日限额、答题间隔、答错锁定时长可以从家长 Web 后台远程管理。设备每 5 分钟同步一次；后台规则也可在电视应用主页手动同步。
+应用自带 50 道初中难度题目，覆盖古诗词、数学、科学、地理和历史。题库与每日限额、答题间隔、答错锁定时长、同步间隔可以从家长 Web 后台远程管理。设备启动时全量同步一次，之后按同步间隔（默认 5 分钟，1–60 分钟可配）轮询；后台规则也可在电视应用主页手动同步。
 
 ## Android 应用
 
@@ -33,13 +33,11 @@ python backend/server.py
 
 ## 部署到阿里云 ECS
 
-建议为 ECS 配置域名 A 记录，开放安全组 TCP 80/443，并用 Compose 部署 Caddy HTTPS 反向代理和应用：
+复用 ECS 上已有的 Caddy，为新域名增加 `reverse_proxy 127.0.0.1:8080`，Python 后台由 systemd 托管。按 [部署文档](docs/DEPLOY_ECS.md) 完成一次性初始化后，推送后台或种子题库到 `main`，GitHub Actions 就会测试、同步代码、重启后台并检查 HTTPS 接口。
 
-1. 在 `backend/.env.example` 基础上创建 `backend/.env`，填入 ECS 域名及至少 24 位随机管理员令牌。此文件不会提交到 Git。
-2. 在项目根目录运行 `docker compose --env-file backend/.env -f backend/compose.yaml up -d --build`。
-3. 首次启动后，Caddy 会为域名申请 TLS 证书。管理地址为 `https://<域名>`；电视后台地址填 `https://<域名>`。
+管理页面和电视后台地址均为 `https://<域名>`。代码位于 `/var/www/html/tvparental`，令牌保存在 `backend/.env`，题库和规则保存在 `backend/data/state.json`；自动发布会保留这些运行数据，请另外备份。应用端口 8080 只监听本机，无需在安全组开放。
 
-题库状态保存在 `backend/data/state.json`，位于持久化目录；重建容器不会清除题库或规则。请备份 `backend/data/`。ECS 只应对公网开放 HTTPS 入口，切勿把应用的 8080 端口直接暴露到公网。管理员令牌通过 HTTPS 输入管理页，不要将真实令牌写入仓库或命令历史。
+已有宿主机 Caddy 时不要运行仓库的 `backend/compose.yaml`，其中自带的 Caddy 会争用 80/443 端口。
 
 ## 后端测试
 

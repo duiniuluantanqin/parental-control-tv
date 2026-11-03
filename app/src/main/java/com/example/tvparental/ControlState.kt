@@ -10,6 +10,7 @@ data class ParentSettings(
     val dailyLimitMinutes: Int = 60,
     val questionIntervalMinutes: Int = 10,
     val wrongLockMinutes: Int = 10,
+    val syncIntervalMinutes: Int = 5,
 )
 
 object ControlState {
@@ -22,6 +23,7 @@ object ControlState {
     private const val DAILY_LIMIT_KEY = "daily_limit_minutes"
     private const val QUESTION_INTERVAL_KEY = "question_interval_minutes"
     private const val WRONG_LOCK_KEY = "wrong_lock_minutes"
+    private const val SYNC_INTERVAL_KEY = "sync_interval_minutes"
     private const val MILLIS_PER_MINUTE = 60_000L
 
     fun settings(context: Context): ParentSettings {
@@ -30,6 +32,7 @@ object ControlState {
             dailyLimitMinutes = preferences.getInt(DAILY_LIMIT_KEY, 60).coerceIn(1, 1440),
             questionIntervalMinutes = preferences.getInt(QUESTION_INTERVAL_KEY, 10).coerceIn(1, 240),
             wrongLockMinutes = preferences.getInt(WRONG_LOCK_KEY, 10).coerceIn(1, 1440),
+            syncIntervalMinutes = preferences.getInt(SYNC_INTERVAL_KEY, 5).coerceIn(1, 60),
         )
     }
 
@@ -38,6 +41,7 @@ object ControlState {
             .putInt(DAILY_LIMIT_KEY, settings.dailyLimitMinutes.coerceIn(1, 1440))
             .putInt(QUESTION_INTERVAL_KEY, settings.questionIntervalMinutes.coerceIn(1, 240))
             .putInt(WRONG_LOCK_KEY, settings.wrongLockMinutes.coerceIn(1, 1440))
+            .putInt(SYNC_INTERVAL_KEY, settings.syncIntervalMinutes.coerceIn(1, 60))
             .apply()
     }
 

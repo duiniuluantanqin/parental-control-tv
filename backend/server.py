@@ -24,6 +24,7 @@ DEFAULT_SETTINGS = {
     "dailyLimitMinutes": 60,
     "questionIntervalMinutes": 10,
     "wrongLockMinutes": 10,
+    "syncIntervalMinutes": 5,
 }
 
 
@@ -34,6 +35,7 @@ def validate_settings(value: object) -> dict[str, int]:
         "dailyLimitMinutes": (1, 1440),
         "questionIntervalMinutes": (1, 240),
         "wrongLockMinutes": (1, 1440),
+        "syncIntervalMinutes": (1, 60),
     }
     result: dict[str, int] = {}
     for name, (minimum, maximum) in limits.items():
