@@ -3,75 +3,97 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>看电视前答题 · 管理后台</title>
+  <title>看电视前答题 · 家长管理</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">
+    <a class="brand" href="/settings">
       <span class="brand-mark" aria-hidden="true">TV</span>
-      <div><strong>看电视前答题</strong><small>家长管理</small></div>
-    </div>
-    <div class="connection">
-      <span id="connectionDot" class="dot"></span>
-      <span id="connectionText">未连接</span>
-    </div>
+      <span><strong>看电视前答题</strong><small>家长管理</small></span>
+    </a>
+    <button id="logoutButton" class="button topbar-button" type="button" hidden>退出登录</button>
   </header>
 
-  <main>
-    <section class="toolbar" aria-label="管理后台连接">
-      <label for="tokenInput">管理员令牌</label>
-      <input id="tokenInput" type="password" autocomplete="off" placeholder="粘贴服务器启动时生成的令牌">
-      <button id="connectButton" class="button primary" type="button">连接</button>
-      <span id="notice" role="status" aria-live="polite"></span>
+  <p id="loadingStatus" class="loading" role="status">正在载入…</p>
+  <main id="loginView" class="login-view" hidden>
+    <section class="login-card" aria-labelledby="loginTitle">
+      <span class="login-eyebrow">家长管理</span>
+      <h1 id="loginTitle">安排好每天的电视时间</h1>
+      <p class="muted">登录后管理使用规则与答题题库。</p>
+      <form id="loginForm">
+        <label for="usernameInput">用户名</label>
+        <input id="usernameInput" name="username" autocomplete="username" maxlength="64" required autofocus>
+        <label for="passwordInput">密码</label>
+        <input id="passwordInput" name="password" type="password" autocomplete="current-password" maxlength="1024" required>
+        <p id="loginNotice" class="form-notice error" role="alert"></p>
+        <button id="loginButton" class="button primary" type="submit">登录</button>
+      </form>
+    </section>
+  </main>
+
+  <main id="adminView" hidden>
+    <nav class="page-nav" aria-label="管理导航">
+      <a href="/settings" data-page="settings">使用规则</a>
+      <a href="/questions" data-page="questions">题库管理</a>
+    </nav>
+    <p id="notice" class="notice" role="status" aria-live="polite"></p>
+
+    <section id="settingsPage" aria-labelledby="settingsTitle" hidden>
+      <div class="section-heading">
+        <div><h1 id="settingsTitle">使用规则</h1><p>安排每天的可用时长与答题节奏。</p></div>
+      </div>
+      <form id="settingsForm" class="settings-panel">
+        <div class="daily-limit">
+          <div><label for="dailyLimit">每日可用时长</label><p>每天重新计算，额度用完后暂停至次日。</p></div>
+          <div class="limit-input"><input id="dailyLimit" type="number" min="1" max="1440" value="60" required><span>分钟 / 天</span></div>
+        </div>
+        <div class="settings-grid">
+          <label for="questionInterval">答题间隔 <span class="input-with-unit"><input id="questionInterval" type="number" min="1" max="240" value="10" required><span>分钟</span></span><small>使用多久后回答一道题</small></label>
+          <label for="wrongLock">答错锁定 <span class="input-with-unit"><input id="wrongLock" type="number" min="1" max="1440" value="10" required><span>分钟</span></span><small>答错后需要等待的时间</small></label>
+          <label for="syncInterval">同步间隔 <span class="input-with-unit"><input id="syncInterval" type="number" min="1" max="60" value="5" required><span>分钟</span></span><small>电视获取最新规则与题目的间隔</small></label>
+        </div>
+        <div class="settings-footer"><p>保存后，电视将在下次同步时应用。</p><button id="saveSettings" class="button primary" type="submit">保存规则</button></div>
+      </form>
     </section>
 
-    <section class="settings-section" aria-labelledby="settingsTitle">
+    <section id="questionsPage" aria-labelledby="questionsTitle" hidden>
       <div class="section-heading">
-        <div><h1 id="settingsTitle">每日规则</h1><p>设备同步后生效</p></div>
-        <button id="saveSettings" class="button secondary" type="button" disabled>保存设置</button>
-      </div>
-      <div class="settings-grid">
-        <label>每日可用时长 <span class="unit">分钟</span><input id="dailyLimit" type="number" min="1" max="1440" value="60" disabled></label>
-        <label>答题间隔 <span class="unit">分钟</span><input id="questionInterval" type="number" min="1" max="240" value="10" disabled></label>
-        <label>答错锁定 <span class="unit">分钟</span><input id="wrongLock" type="number" min="1" max="1440" value="10" disabled></label>
-        <label>同步间隔 <span class="unit">分钟</span><input id="syncInterval" type="number" min="1" max="60" value="5" disabled></label>
-      </div>
-    </section>
-
-    <section class="questions-section" aria-labelledby="questionsTitle">
-      <div class="section-heading">
-        <div><h2 id="questionsTitle">题库 <span id="questionCount" class="count">0</span></h2><p>电视会从题库中随机抽取，当前题目答错后立即锁定。</p></div>
+        <div><h1 id="questionsTitle">题库管理 <span id="questionCount" class="count">0</span></h1><p>电视从题库随机抽题，避免连续重复。</p></div>
         <div class="filters">
           <label class="sr-only" for="categoryFilter">筛选类别</label>
-          <select id="categoryFilter" disabled><option value="">全部类别</option></select>
-          <button id="toggleQuestionForm" class="button primary" type="button" disabled>添加题目</button>
+          <select id="categoryFilter"><option value="">全部类别</option></select>
+          <button id="addQuestionButton" class="button primary" type="button">添加题目</button>
         </div>
       </div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>类别</th><th>题目</th><th>正确答案</th><th>操作</th></tr></thead>
-          <tbody id="questionRows"><tr><td colspan="4" class="empty">连接后台以载入题库</td></tr></tbody>
+          <tbody id="questionRows"></tbody>
         </table>
       </div>
-      <form id="questionForm" class="question-form" hidden>
-        <div class="form-heading"><h3>新题目</h3><button id="closeQuestionForm" class="icon-button" type="button" aria-label="关闭">×</button></div>
-        <label>题目内容<input id="promptInput" maxlength="240" required></label>
-        <div class="form-meta">
-          <label>类别<input id="categoryInput" maxlength="40" value="其他" required></label>
-          <label>难度<select id="difficultyInput"><option>初中</option><option>小学</option><option>高中</option></select></label>
-        </div>
-        <div class="options-fields">
-          <label>A<input class="option-input" maxlength="120" required></label>
-          <label>B<input class="option-input" maxlength="120" required></label>
-          <label>C<input class="option-input" maxlength="120" required></label>
-          <label>D<input class="option-input" maxlength="120" required></label>
-        </div>
-        <label class="correct-answer">正确选项<select id="answerInput"><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select></label>
-        <div class="form-actions"><button id="cancelQuestion" class="button secondary" type="button">取消</button><button id="submitQuestion" class="button primary" type="submit">保存题目</button></div>
-      </form>
     </section>
   </main>
+
+  <dialog id="questionDialog" aria-labelledby="questionDialogTitle">
+    <form id="questionForm" class="question-form">
+      <div class="form-heading"><div><h2 id="questionDialogTitle">添加题目</h2><p class="muted">填写四个选项，并指定正确答案。</p></div><button id="closeQuestionDialog" class="icon-button" type="button" aria-label="关闭添加题目对话框">×</button></div>
+      <label for="promptInput">题目内容<textarea id="promptInput" maxlength="240" rows="2" required></textarea></label>
+      <div class="form-meta">
+        <label for="categoryInput">类别<input id="categoryInput" maxlength="40" value="其他" required></label>
+        <label for="difficultyInput">难度<select id="difficultyInput"><option>初中</option><option>小学</option><option>高中</option></select></label>
+      </div>
+      <div class="options-fields">
+        <label>A<input class="option-input" maxlength="120" required></label>
+        <label>B<input class="option-input" maxlength="120" required></label>
+        <label>C<input class="option-input" maxlength="120" required></label>
+        <label>D<input class="option-input" maxlength="120" required></label>
+      </div>
+      <label class="correct-answer" for="answerInput">正确选项<select id="answerInput"><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select></label>
+      <p id="questionNotice" class="form-notice error" role="alert"></p>
+      <div class="form-actions"><button id="cancelQuestion" class="button secondary" type="button">取消</button><button id="submitQuestion" class="button primary" type="submit">保存题目</button></div>
+    </form>
+  </dialog>
   <script src="/app.js" defer></script>
 </body>
 </html>

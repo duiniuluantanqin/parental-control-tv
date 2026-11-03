@@ -10,13 +10,11 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 
 class MainActivity : Activity() {
-    private lateinit var backendAddress: EditText
     private lateinit var usageStatus: TextView
     private lateinit var settingsStatus: TextView
     private lateinit var syncStatus: TextView
@@ -99,27 +97,9 @@ class MainActivity : Activity() {
         }
         content.addView(divider, matchStartParams())
 
-        backendAddress = EditText(this).apply {
-            hint = "后台地址，例如 http://192.168.1.10:8765"
-            textSize = 18f
-            setSingleLine(true)
-            setText(ControlState.backendUrl(this@MainActivity))
-            isFocusable = true
-            isFocusableInTouchMode = true
-        }
-        content.addView(backendAddress, buttonParams())
-
-        val saveAddressButton = Button(this).apply {
-            text = "保存后台地址"
-            textSize = 18f
-            isFocusable = true
-            setOnClickListener {
-                ControlState.saveBackendUrl(this@MainActivity, backendAddress.text.toString())
-                syncStatus.text = "后台地址已保存"
-                syncButton.requestFocus()
-            }
-        }
-        content.addView(saveAddressButton, buttonParams())
+        content.addView(statusText(16f).apply {
+            text = "题目和规则自动同步，无需配置地址"
+        }, centeredParams())
 
         syncButton = Button(this).apply {
             text = "立即同步题目和规则"
@@ -161,7 +141,6 @@ class MainActivity : Activity() {
     }
 
     private fun syncRemoteSettings() {
-        ControlState.saveBackendUrl(this, backendAddress.text.toString())
         syncButton.isEnabled = false
         syncStatus.text = "正在连接后台…"
         RemoteSync.syncAsync(this) { result ->

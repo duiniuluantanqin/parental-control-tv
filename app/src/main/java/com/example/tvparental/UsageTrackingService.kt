@@ -113,7 +113,6 @@ class UsageTrackingService : Service() {
     }
 
     private fun syncRemoteIfDue(force: Boolean = false) {
-        if (ControlState.backendUrl(this).isBlank()) return
         val now = SystemClock.elapsedRealtime()
         val intervalMs = ControlState.settings(this).syncIntervalMinutes * 60_000L
         if (!force && now - lastRemoteSync < intervalMs) return

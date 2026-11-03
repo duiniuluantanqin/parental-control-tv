@@ -14,7 +14,7 @@ Windows 命令行构建：
 .\gradlew.bat assembleDebug
 ```
 
-APK 位于 `app\build\outputs\apk\debug\app-debug.apk`。应用首页可设置后台 URL、手动同步题目和规则，也能查看今日已用时间。首次使用需要在电视确认系统悬浮窗权限；应用不能静默授予 Android 特殊权限。
+APK 位于 `app\build\outputs\apk\debug\app-debug.apk`。应用自动从 `https://tvparental.mediainsight360.com` 同步题目和规则，无需在电视配置地址或登录；首页可手动同步并查看今日已用时间。首次使用需要在电视确认系统悬浮窗权限；应用不能静默授予 Android 特殊权限。
 
 屏幕亮起时长按 30 秒采样，额度临近耗尽时会缩短采样间隔。后台服务在开机后恢复；TCL 固件还需要通过 ADB 放行 `APP_AUTO_START` 与 `APP_ASSOC_START`。完整安装升级步骤见 [docs/INSTALL_TCL.md](docs/INSTALL_TCL.md)。
 
@@ -23,19 +23,17 @@ APK 位于 `app\build\outputs\apk\debug\app-debug.apk`。应用首页可设置�
 需要 Python 3.11 或更高版本，无第三方 Python 依赖。先启动本机服务：
 
 ```powershell
-$adminToken = (New-Guid).ToString('N') + (New-Guid).ToString('N')
-$env:TV_PARENTAL_ADMIN_TOKEN = $adminToken
-Write-Output "Admin token: $adminToken"
+python backend/server.py --set-admin
 python backend/server.py
 ```
 
-管理页面在 `http://127.0.0.1:8765`。将电脑与电视接入同一局域网，在电视主页输入 `http://<电脑局域网地址>:8765`，保存并同步。Windows 防火墙需允许可信家庭网络访问 TCP 8765。管理页面使用启动时设置的令牌；题目和规则 API 只读接口供电视同步。
+管理页面在 `http://127.0.0.1:8765`，使用上一步设置的用户名和密码登录（用户名默认 `admin`，密码至少 10 个字符）。账号以密码散列保存到 `backend/data/admin.json`，忘记密码时重新运行 `--set-admin`。后台分为“使用规则”和“题库管理”两个页面，添加题目使用弹窗。本机服务用于开发验证；电视正式版本固定连接线上域名。
 
 ## 部署到阿里云 ECS
 
 复用 ECS 上已有的 Caddy，为新域名增加 `reverse_proxy 127.0.0.1:8080`，Python 后台由 systemd 托管。按 [部署文档](docs/DEPLOY_ECS.md) 完成一次性初始化后，推送后台或种子题库到 `main`，GitHub Actions 就会测试、同步代码、重启后台并检查 HTTPS 接口。
 
-管理页面和电视后台地址均为 `https://<域名>`。代码位于 `/var/www/html/tvparental`，令牌保存在 `backend/.env`，题库和规则保存在 `backend/data/state.json`；自动发布会保留这些运行数据，请另外备份。应用端口 8080 只监听本机，无需在安全组开放。
+管理页面为 https://tvparental.mediainsight360.com/ 。代码位于 `/var/www/html/tvparental`，管理员账号散列保存在 `backend/data/admin.json`，题库和规则保存在 `backend/data/state.json`；自动发布会保留这些运行数据，请另外备份。旧版令牌不再用于登录，升级后设置管理员账号的步骤见部署文档。应用端口 8080 只监听本机，无需在安全组开放。
 
 已有宿主机 Caddy 时不要运行仓库的 `backend/compose.yaml`，其中自带的 Caddy 会争用 80/443 端口。
 

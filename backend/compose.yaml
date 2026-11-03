@@ -6,7 +6,7 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 8080
-      TV_PARENTAL_ADMIN_TOKEN: ${TV_PARENTAL_ADMIN_TOKEN:?set a long admin token in backend/.env}
+      TV_PARENTAL_ADMIN_FILE: /data/admin.json
       TV_PARENTAL_DATA_FILE: /data/state.json
     expose:
       - "8080"

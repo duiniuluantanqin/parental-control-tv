@@ -14,11 +14,11 @@ data class ParentSettings(
 )
 
 object ControlState {
+    const val BACKEND_URL = "https://tvparental.mediainsight360.com"
     private const val PREFERENCES = "parental_control"
     private const val DAY_KEY = "usage_day"
     private const val USED_MILLIS_KEY = "used_millis"
     private const val LOCKOUT_UNTIL_KEY = "lockout_until"
-    private const val BACKEND_URL_KEY = "backend_url"
     private const val REMOTE_QUESTIONS_KEY = "remote_questions"
     private const val DAILY_LIMIT_KEY = "daily_limit_minutes"
     private const val QUESTION_INTERVAL_KEY = "question_interval_minutes"
@@ -91,12 +91,6 @@ object ControlState {
             add(Calendar.DAY_OF_YEAR, 1)
         }
         return (nextDay.timeInMillis - System.currentTimeMillis()).coerceAtLeast(1_000L)
-    }
-
-    fun backendUrl(context: Context): String = prefs(context).getString(BACKEND_URL_KEY, "").orEmpty()
-
-    fun saveBackendUrl(context: Context, url: String) {
-        prefs(context).edit().putString(BACKEND_URL_KEY, url.trim().trimEnd('/')).apply()
     }
 
     fun saveRemoteQuestions(context: Context, questions: JSONArray) {

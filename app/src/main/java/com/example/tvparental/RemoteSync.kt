@@ -16,15 +16,9 @@ data class SyncResult(
 
 object RemoteSync {
     fun sync(context: Context): SyncResult {
-        val baseUrl = ControlState.backendUrl(context)
-        if (baseUrl.isBlank()) return SyncResult(false, "请先设置后台地址")
-        if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
-            return SyncResult(false, "后台地址必须以 http:// 或 https:// 开头")
-        }
-
         var connection: HttpURLConnection? = null
         return try {
-            connection = URL("${baseUrl.trimEnd('/')}/api/v1/device/state").openConnection() as HttpURLConnection
+            connection = URL("${ControlState.BACKEND_URL}/api/v1/device/state").openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
             connection.connectTimeout = 5_000
             connection.readTimeout = 5_000
