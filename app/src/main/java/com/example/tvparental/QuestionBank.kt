@@ -1,6 +1,7 @@
 package com.example.tvparental
 
 import android.content.Context
+import android.content.SharedPreferences
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -35,9 +36,9 @@ object QuestionBank {
         val questions = all(context)
         if (questions.isEmpty()) return null
         val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-        val currentId = preferences.getString(CURRENT_QUESTION_ID, null)
+        val currentId = questionId(preferences, CURRENT_QUESTION_ID)
         questions.firstOrNull { it.id == currentId }?.let { return it }
-        val previousId = preferences.getString(LAST_QUESTION_ID, null)
+        val previousId = questionId(preferences, LAST_QUESTION_ID)
         val candidates = if (questions.size > 1) questions.filterNot { it.id == previousId } else questions
         val question = candidates.random()
         preferences.edit()
@@ -45,6 +46,17 @@ object QuestionBank {
             .putString(CURRENT_QUESTION_ID, question.id)
             .apply()
         return question
+    }
+
+    private fun questionId(preferences: SharedPreferences, key: String): String? {
+        // Older releases saved integer IDs. getString throws on those values after an upgrade.
+        return when (val value = preferences.all[key]) {
+            is String -> value
+            is Int -> value.toString().also { id ->
+                preferences.edit().putString(key, id).apply()
+            }
+            else -> null
+        }
     }
 
     fun finishCurrent(context: Context) {
