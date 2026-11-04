@@ -38,6 +38,11 @@ class UsageTrackingService : Service() {
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == RemoteSync.ACTION_SYNC_COMPLETED) {
+                wasInteractive = powerManager().isInteractive
+                refreshTrackedState()
+                return
+            }
             accountElapsedTime()
             wasInteractive = intent?.action == Intent.ACTION_SCREEN_ON
             updateEnforcement()
@@ -66,6 +71,7 @@ class UsageTrackingService : Service() {
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(RemoteSync.ACTION_SYNC_COMPLETED)
         }
         registerReceiver(screenReceiver, filter)
         receiverRegistered = true
@@ -75,7 +81,12 @@ class UsageTrackingService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        syncRemoteIfDue(force = true)
+        if (intent?.action == ACTION_REFRESH_DISPLAY) {
+            wasInteractive = powerManager().isInteractive
+            refreshTrackedState()
+        } else {
+            syncRemoteIfDue(force = true)
+        }
         return START_STICKY
     }
 
@@ -145,7 +156,9 @@ class UsageTrackingService : Service() {
 
     private fun maybeShowUsageReminder() {
         val remaining = ControlState.remainingDailyMillis(this)
-        if (!canShowUsageReminder() || remaining > TEN_MINUTE_THRESHOLD_MS) {
+        if (!canShowUsageReminder() ||
+            (!ControlState.alwaysShowRemainingTime(this) && remaining > TEN_MINUTE_THRESHOLD_MS)
+        ) {
             hideUsageReminder()
             return
         }
@@ -221,6 +234,12 @@ class UsageTrackingService : Service() {
         reminderWindowManager = null
     }
 
+    private fun refreshTrackedState() {
+        updateEnforcement()
+        maybeShowUsageReminder()
+        updateNotification()
+    }
+
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private fun syncRemoteIfDue(force: Boolean = false) {
@@ -294,6 +313,7 @@ class UsageTrackingService : Service() {
 
     companion object {
         const val ACTION_START = "com.example.tvparental.action.START_USAGE_TRACKING"
+        const val ACTION_REFRESH_DISPLAY = "com.example.tvparental.action.REFRESH_USAGE_DISPLAY"
         private const val CHANNEL_ID = "usage_tracking"
         private const val NOTIFICATION_ID = 1002
         private const val SAMPLE_INTERVAL_MS = 30_000L

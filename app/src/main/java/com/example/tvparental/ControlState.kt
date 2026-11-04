@@ -37,6 +37,7 @@ object ControlState {
     private const val QUESTION_INTERVAL_KEY = "question_interval_minutes"
     private const val WRONG_LOCK_KEY = "wrong_lock_minutes"
     private const val SYNC_INTERVAL_KEY = "sync_interval_minutes"
+    private const val ALWAYS_SHOW_REMAINING_TIME_KEY = "always_show_remaining_time"
     private const val MILLIS_PER_MINUTE = 60_000L
     private const val TEMP_EXTENSION_KEY = "temp_extension_millis"
     const val TEN_MINUTE_REMINDER_MINUTES = 10
@@ -74,6 +75,13 @@ object ControlState {
             wrongLockMinutes = preferences.getInt(WRONG_LOCK_KEY, 10).coerceIn(1, 1440),
             syncIntervalMinutes = preferences.getInt(SYNC_INTERVAL_KEY, 5).coerceIn(1, 60),
         )
+    }
+
+    fun alwaysShowRemainingTime(context: Context): Boolean =
+        prefs(context).getBoolean(ALWAYS_SHOW_REMAINING_TIME_KEY, false)
+
+    fun setAlwaysShowRemainingTime(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(ALWAYS_SHOW_REMAINING_TIME_KEY, enabled).apply()
     }
 
     fun updateSettings(context: Context, settings: ParentSettings) {
