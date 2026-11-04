@@ -11,7 +11,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.PixelFormat
-import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -21,6 +20,8 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.view.Gravity
 import android.view.WindowManager
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
 
 class UsageTrackingService : Service() {
@@ -30,7 +31,8 @@ class UsageTrackingService : Service() {
     private var wasInteractive = false
     private var receiverRegistered = false
     private var lastEnforcementAction: String? = null
-    private var reminderView: TextView? = null
+    private var reminderView: LinearLayout? = null
+    private var reminderText: TextView? = null
     private var reminderWindowManager: WindowManager? = null
 
     private val screenReceiver = object : BroadcastReceiver() {
@@ -174,12 +176,12 @@ class UsageTrackingService : Service() {
         if (reminderView !== view) return
         val text = if (remaining <= ONE_MINUTE_THRESHOLD_MS) {
             val seconds = (remaining + ONE_SECOND_MS - 1L) / ONE_SECOND_MS
-            "$seconds sec left"
+            "${seconds}s"
         } else {
             val minutes = (remaining + MILLIS_PER_MINUTE - 1L) / MILLIS_PER_MINUTE
-            "$minutes min left"
+            "${minutes}m"
         }
-        view.text = text
+        reminderText?.text = text
     }
 
     private fun canShowUsageReminder(): Boolean =
@@ -188,20 +190,31 @@ class UsageTrackingService : Service() {
             ControlState.isUsageWindowAllowed(this) &&
             (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this))
 
-    private fun createUsageReminder() = TextView(this).apply {
-        setTextColor(Color.WHITE)
-        textSize = 20f
-        setPadding(dp(20), dp(14), dp(20), dp(14))
-        background = GradientDrawable().apply {
-            setColor(Color.argb(165, 20, 54, 48))
-            setStroke(dp(1), Color.argb(190, 138, 205, 174))
-            cornerRadius = dp(8).toFloat()
+    private fun createUsageReminder() = LinearLayout(this).apply {
+        gravity = Gravity.CENTER_VERTICAL
+        val icon = ImageView(this@UsageTrackingService).apply {
+            setImageResource(R.drawable.ic_timer)
+            setColorFilter(Color.WHITE)
+            alpha = REMINDER_ALPHA
         }
+        addView(icon, LinearLayout.LayoutParams(dp(20), dp(20)))
+        val label = TextView(this@UsageTrackingService).apply {
+            setTextColor(Color.WHITE)
+            textSize = 16f
+            alpha = REMINDER_ALPHA
+            setPadding(dp(5), 0, 0, 0)
+        }
+        addView(label, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ))
+        reminderText = label
     }
 
     private fun hideUsageReminder() {
         reminderView?.let { view -> runCatching { reminderWindowManager?.removeViewImmediate(view) } }
         reminderView = null
+        reminderText = null
         reminderWindowManager = null
     }
 
@@ -280,5 +293,6 @@ class UsageTrackingService : Service() {
         private const val ONE_MINUTE_THRESHOLD_MS = ControlState.ONE_MINUTE_REMINDER_MINUTES * 60_000L
         private const val MILLIS_PER_MINUTE = 60_000L
         private const val ONE_SECOND_MS = 1_000L
+        private const val REMINDER_ALPHA = 0.68f
     }
 }
