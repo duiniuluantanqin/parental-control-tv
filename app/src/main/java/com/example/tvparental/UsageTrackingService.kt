@@ -28,6 +28,7 @@ class UsageTrackingService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var lastSample = 0L
     private var lastRemoteSync = 0L
+    private var remoteSyncInProgress = false
     private var wasInteractive = false
     private var receiverRegistered = false
     private var lastEnforcementAction: String? = null
@@ -71,10 +72,12 @@ class UsageTrackingService : Service() {
         updateEnforcement()
         updateNotification()
         handler.post(ticker)
-        syncRemoteIfDue(force = true)
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        syncRemoteIfDue(force = true)
+        return START_STICKY
+    }
 
     override fun onDestroy() {
         handler.removeCallbacks(ticker)
@@ -221,16 +224,21 @@ class UsageTrackingService : Service() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private fun syncRemoteIfDue(force: Boolean = false) {
+        if (remoteSyncInProgress) return
         val now = SystemClock.elapsedRealtime()
         val intervalMs = ControlState.settings(this).syncIntervalMinutes * 60_000L
         if (!force && now - lastRemoteSync < intervalMs) return
         lastRemoteSync = now
+        remoteSyncInProgress = true
         Thread {
             val result = RemoteSync.sync(applicationContext)
-            if (result.success) handler.post {
-                if (result.settingsChanged) QuestionAlarmReceiver.scheduleForCurrentState(applicationContext)
-                updateEnforcement()
-                updateNotification()
+            handler.post {
+                remoteSyncInProgress = false
+                if (result.success) {
+                    if (result.settingsChanged) QuestionAlarmReceiver.scheduleForCurrentState(applicationContext)
+                    updateEnforcement()
+                    updateNotification()
+                }
             }
         }.start()
     }

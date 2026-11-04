@@ -10,8 +10,8 @@ android {
         applicationId = "com.example.tvparental"
         minSdk = 28
         targetSdk = 28
-        versionCode = 18
-        versionName = "0.8.8"
+        versionCode = 20
+        versionName = "0.9.0"
     }
 
     buildTypes {

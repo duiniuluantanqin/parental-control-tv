@@ -4,8 +4,11 @@ import android.app.Activity
 import android.app.Dialog
 import android.app.admin.DevicePolicyManager
 import android.content.ActivityNotFoundException
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.res.ColorStateList
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
@@ -35,6 +38,12 @@ class MainActivity : Activity() {
             statusHandler.postDelayed(this, STATUS_REFRESH_INTERVAL_MS)
         }
     }
+    private val syncCompletedReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            refreshStatus()
+        }
+    }
+    private var syncReceiverRegistered = false
     private lateinit var usageStatus: TextView
     private lateinit var settingsStatus: TextView
     private lateinit var syncStatus: TextView
@@ -60,6 +69,7 @@ class MainActivity : Activity() {
                 View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
             )
         setContentView(buildContent())
+        registerSyncReceiver()
         startUsageTracking()
         QuestionAlarmReceiver.ensureScheduled(this)
         refreshStatus()
@@ -68,6 +78,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        registerSyncReceiver()
         statusHandler.removeCallbacks(statusRefresh)
         statusRefresh.run()
         if (!canDrawOverlays() && !autoOpenedOverlaySettings) {
@@ -78,7 +89,26 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         statusHandler.removeCallbacks(statusRefresh)
+        unregisterSyncReceiver()
         super.onPause()
+    }
+
+    private fun registerSyncReceiver() {
+        if (syncReceiverRegistered) return
+        val filter = IntentFilter(RemoteSync.ACTION_SYNC_COMPLETED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(syncCompletedReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(syncCompletedReceiver, filter)
+        }
+        syncReceiverRegistered = true
+    }
+
+    private fun unregisterSyncReceiver() {
+        if (!syncReceiverRegistered) return
+        unregisterReceiver(syncCompletedReceiver)
+        syncReceiverRegistered = false
     }
 
     private fun buildContent(): View {

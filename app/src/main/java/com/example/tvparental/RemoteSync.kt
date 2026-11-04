@@ -1,6 +1,7 @@
 package com.example.tvparental
 
 import android.content.Context
+import android.content.Intent
 import android.os.Handler
 import org.json.JSONArray
 import org.json.JSONObject
@@ -89,6 +90,7 @@ object RemoteSync {
             SyncResult(false, error.message ?: "Could not connect to the server.")
         } finally {
             connection?.disconnect()
+            context.sendBroadcast(Intent(ACTION_SYNC_COMPLETED).setPackage(context.packageName))
         }
     }
 
@@ -108,4 +110,6 @@ object RemoteSync {
         require(hour in 0..23 && minute in 0..59) { "Invalid usage time window." }
         return hour * 60 + minute
     }
+
+    const val ACTION_SYNC_COMPLETED = "com.example.tvparental.action.SYNC_COMPLETED"
 }
