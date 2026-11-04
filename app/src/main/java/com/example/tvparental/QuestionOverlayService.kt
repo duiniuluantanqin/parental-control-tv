@@ -98,7 +98,7 @@ class QuestionOverlayService : Service() {
 
         val root = createRoot()
         val title = TextView(this).apply {
-            text = "看电视前答题  ·  ${question.category}"
+            text = "Answer to continue · ${QuestionBank.displayCategory(question.category)}"
             setTextColor(Color.rgb(193, 203, 194))
             textSize = 20f
             gravity = Gravity.START or Gravity.CENTER_VERTICAL
@@ -180,7 +180,7 @@ class QuestionOverlayService : Service() {
         )
 
         val status = TextView(this).apply {
-            text = "答错后将锁定电视一段时间"
+            text = "An incorrect answer starts a lockout."
             setTextColor(Color.rgb(205, 214, 206))
             textSize = 18f
             gravity = Gravity.CENTER
@@ -218,7 +218,7 @@ class QuestionOverlayService : Service() {
             }
             (root as? LinearLayout)?.let { layout ->
                 (layout.getChildAt(layout.childCount - 1) as? TextView)?.apply {
-                    text = "回答正确"
+                    text = "Correct answer"
                     setTextColor(Color.rgb(185, 222, 119))
                 }
             }
@@ -287,9 +287,9 @@ class QuestionOverlayService : Service() {
         }
         val title = TextView(this).apply {
             text = when (mode) {
-                MODE_DAILY_LOCK -> "今日可用看电视时间已用完"
-                MODE_USAGE_WINDOW -> "当前不在允许使用时段"
-                else -> "本次答题错误"
+                MODE_DAILY_LOCK -> "Today's screen-time limit has been reached"
+                MODE_USAGE_WINDOW -> "Outside allowed hours"
+                else -> "Incorrect answer"
             }
             setTextColor(Color.rgb(220, 235, 222))
             textSize = 28f
@@ -299,11 +299,11 @@ class QuestionOverlayService : Service() {
 
         val message = TextView(this).apply {
             text = if (mode == MODE_DAILY_LOCK) {
-                "今日额度已用完，明日恢复使用"
+                "Today's allowance is used. Access returns tomorrow."
             } else if (mode == MODE_USAGE_WINDOW) {
-                "请在家长设置的可用时段内观看"
+                "Try again during an allowed time window."
             } else {
-                "本题只有一次作答机会，请等待解锁"
+                "This question allows one answer. Wait for the lockout to end."
             }
             setTextColor(Color.WHITE)
             textSize = 38f
@@ -320,7 +320,7 @@ class QuestionOverlayService : Service() {
         root.addView(lockCountdown, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(56)))
         if (mode == MODE_USAGE_WINDOW) {
             root.addView(TextView(this).apply {
-                text = "电视将在下一个可用时段自动恢复"
+                text = "TV access resumes at the next allowed time."
                 setTextColor(Color.rgb(150, 160, 152))
                 textSize = 18f
                 gravity = Gravity.CENTER
@@ -337,7 +337,7 @@ class QuestionOverlayService : Service() {
         failedAttempts = 0
         if (!ControlState.hasUnlockPassword(this)) {
             root.addView(TextView(this).apply {
-                text = "家长可在应用主页设置解锁密码"
+                text = "Set a parent PIN on the home screen."
                 setTextColor(Color.rgb(150, 160, 152))
                 textSize = 18f
                 gravity = Gravity.CENTER
@@ -345,9 +345,9 @@ class QuestionOverlayService : Service() {
             return
         }
         val idleHint = if (mode == MODE_DAILY_LOCK) {
-            "家长解锁：输入密码可延长 15 分钟"
+            "Parent unlock · Enter your PIN to add 15 minutes"
         } else {
-            "家长解锁：用方向键输入 6 位密码"
+            "Parent unlock · Enter your 6-direction PIN"
         }
         val hint = TextView(this).apply {
             text = idleHint
@@ -371,14 +371,14 @@ class QuestionOverlayService : Service() {
                 if (failedAttempts >= MAX_PASSWORD_ATTEMPTS) {
                     failedAttempts = 0
                     unlockPad?.inputEnabled = false
-                    hint.text = "错误次数过多，30 秒后再试"
+                    hint.text = "Too many attempts. Try again in 30 seconds."
                     handler.postDelayed({
                         unlockPad?.inputEnabled = true
                         unlockPad?.reset()
                         hint.text = idleHint
                     }, PASSWORD_COOLDOWN_MS)
                 } else {
-                    hint.text = "密码错误，还可尝试 ${MAX_PASSWORD_ATTEMPTS - failedAttempts} 次"
+                    hint.text = "Incorrect PIN. ${MAX_PASSWORD_ATTEMPTS - failedAttempts} attempts left."
                 }
             }
         }
@@ -415,7 +415,7 @@ class QuestionOverlayService : Service() {
             if (ControlState.isUsageWindowAllowed(this)) {
                 return refreshBlockingState()
             }
-            lockCountdown?.text = "下个可用时段 · 还剩 ${formatRemaining(ControlState.millisUntilNextAllowedUsageWindow(this))}"
+            lockCountdown?.text = "Next allowed window · ${formatRemaining(ControlState.millisUntilNextAllowedUsageWindow(this))} remaining"
             handler.removeCallbacks(lockTicker)
             handler.postDelayed(lockTicker, 1_000L)
             return
@@ -443,9 +443,9 @@ class QuestionOverlayService : Service() {
                 }
                 return
             }
-            lockCountdown?.text = "${formatRemaining(remaining)} 后解锁"
+            lockCountdown?.text = "Unlocks in ${formatRemaining(remaining)}"
         } else {
-            lockCountdown?.text = "明日解锁 · 还剩 ${formatRemaining(ControlState.millisUntilNextDay())}"
+            lockCountdown?.text = "Resumes tomorrow · ${formatRemaining(ControlState.millisUntilNextDay())} remaining"
         }
         handler.removeCallbacks(lockTicker)
         handler.postDelayed(lockTicker, 1_000L)
@@ -558,7 +558,7 @@ class QuestionOverlayService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(CHANNEL_ID, "答题看护", NotificationManager.IMPORTANCE_LOW)
+            val channel = NotificationChannel(CHANNEL_ID, "Question lock", NotificationManager.IMPORTANCE_LOW)
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
@@ -573,8 +573,8 @@ class QuestionOverlayService : Service() {
         )
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
-                .setContentTitle("答题看护正在运行")
-                .setContentText("电视播放受每日时长与答题规则管理")
+                .setContentTitle("Question lock is active")
+                .setContentText("TV access follows screen-time limits and quiz rules.")
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
@@ -582,7 +582,7 @@ class QuestionOverlayService : Service() {
         } else {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
-                .setContentTitle("答题看护正在运行")
+                .setContentTitle("Question lock is active")
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)

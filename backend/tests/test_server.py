@@ -71,8 +71,15 @@ class AdminApiTests(unittest.TestCase):
     def test_device_state_starts_with_fifty_questions_and_default_rules(self) -> None:
         status, state = self.request("/api/v1/device/state", authenticated=False)
         self.assertEqual(status, 200)
+        self.assertEqual(state["version"], server.BACKEND_VERSION)
         self.assertEqual(len(state["questions"]), 50)
         self.assertEqual(state["settings"], server.DEFAULT_SETTINGS)
+
+    def test_existing_settings_without_disabled_windows_load_with_empty_windows(self) -> None:
+        state = server.STORE.load()
+        state["settings"].pop("disabledTimeWindows")
+        server.STORE.save(state)
+        self.assertEqual(server.STORE.load()["settings"]["disabledTimeWindows"], server.DEFAULT_SETTINGS["disabledTimeWindows"])
 
     def random_batch(self, count, difficulty, exclude_prompts):
         categories = ["古诗词", "数学", "科学", "地理历史"]
@@ -316,6 +323,11 @@ class AdminApiTests(unittest.TestCase):
                 "2": [{"start": "22:00", "end": "02:00"}],
                 "3": [], "4": [], "5": [], "6": [], "7": [],
             },
+            "disabledTimeWindows": {
+                "1": [{"start": "12:00", "end": "13:00"}],
+                "2": [{"start": "01:00", "end": "01:30"}],
+                "3": [], "4": [], "5": [], "6": [], "7": [],
+            },
             "questionIntervalMinutes": 12,
             "wrongLockMinutes": 10,
             "syncIntervalMinutes": 3,
@@ -351,6 +363,12 @@ class AdminApiTests(unittest.TestCase):
             "/api/v1/admin/settings",
             method="POST",
             body={"usageTimeWindows": {**server.DEFAULT_SETTINGS["usageTimeWindows"], "1": [{"start": "08:00", "end": "08:00"}]}},
+        )
+        self.assertEqual(status, 400)
+        status, _ = self.request(
+            "/api/v1/admin/settings",
+            method="POST",
+            body={"disabledTimeWindows": {**server.DEFAULT_SETTINGS["disabledTimeWindows"], "1": [{"start": "08:00", "end": "08:00"}]}},
         )
         self.assertEqual(status, 400)
         status, _ = self.request(

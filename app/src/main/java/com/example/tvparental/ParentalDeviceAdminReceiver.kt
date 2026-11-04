@@ -10,7 +10,7 @@ import android.widget.Toast
 class ParentalDeviceAdminReceiver : DeviceAdminReceiver() {
     override fun onEnabled(context: Context, intent: Intent) {
         super.onEnabled(context, intent)
-        Toast.makeText(context, "卸载保护已启用", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "Uninstall protection enabled.", Toast.LENGTH_SHORT).show()
     }
 
     override fun onDisableRequested(context: Context, intent: Intent): CharSequence {
@@ -20,14 +20,14 @@ class ParentalDeviceAdminReceiver : DeviceAdminReceiver() {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(verifyIntent)
-            return "需要输入家长密码才能停用设备管理器并卸载应用"
+            return "Enter the parent PIN to turn off device administration and uninstall the app."
         }
-        return "正在停用卸载保护"
+        return "Turning off uninstall protection."
     }
 
     override fun onDisabled(context: Context, intent: Intent) {
         super.onDisabled(context, intent)
-        Toast.makeText(context, "卸载保护已停用", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "Uninstall protection disabled.", Toast.LENGTH_SHORT).show()
     }
 
     companion object {

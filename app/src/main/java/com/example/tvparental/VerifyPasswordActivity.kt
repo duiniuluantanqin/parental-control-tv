@@ -41,14 +41,14 @@ class VerifyPasswordActivity : Activity() {
         }
 
         box.addView(TextView(this).apply {
-            text = "卸载前需要验证家长密码"
+            text = "Verify the parent PIN to uninstall"
             setTextColor(Color.WHITE)
             textSize = 28f
             gravity = Gravity.CENTER
         }, matchParams())
 
         val hintView = TextView(this).apply {
-            text = "用方向键输入 6 位密码"
+            text = "Enter the 6-direction PIN using the remote"
             setTextColor(Color.rgb(193, 203, 194))
             textSize = 18f
             gravity = Gravity.CENTER
@@ -60,10 +60,10 @@ class VerifyPasswordActivity : Activity() {
         pad = PasswordPad(this, true) { entered ->
             if (ControlState.verifyUnlockPassword(this, entered)) {
                 ParentalDeviceAdminReceiver.removeDeviceAdmin(this)
-                Toast.makeText(this, "验证成功，卸载保护已停用", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Verified. Uninstall protection is off.", Toast.LENGTH_LONG).show()
                 finish()
             } else {
-                hintView.text = "密码错误，请重新输入"
+                hintView.text = "Incorrect PIN. Try again."
                 pad.reset()
             }
         }
@@ -73,7 +73,7 @@ class VerifyPasswordActivity : Activity() {
         ))
 
         box.addView(TextView(this).apply {
-            text = "方向键输入 · OK 清空重输 · 返回键取消"
+            text = "Use the D-pad · OK clears · Back cancels"
             setTextColor(Color.rgb(150, 160, 152))
             textSize = 16f
             gravity = Gravity.CENTER

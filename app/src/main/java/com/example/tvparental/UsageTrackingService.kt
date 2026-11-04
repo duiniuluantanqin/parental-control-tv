@@ -111,7 +111,7 @@ class UsageTrackingService : Service() {
 
     private fun updateNotification() {
         val notification = buildNotification(
-            "今日已用 ${ControlState.todayUsageLabel(this)} / ${ControlState.todayDailyLimitMinutes(this)} 分钟",
+            "Used today: ${ControlState.todayUsageLabel(this)} / ${ControlState.todayDailyLimitMinutes(this)} min",
         )
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification)
     }
@@ -174,10 +174,10 @@ class UsageTrackingService : Service() {
         if (reminderView !== view) return
         val text = if (remaining <= ONE_MINUTE_THRESHOLD_MS) {
             val seconds = (remaining + ONE_SECOND_MS - 1L) / ONE_SECOND_MS
-            "今日可用时间还剩 $seconds 秒"
+            "$seconds sec left"
         } else {
             val minutes = (remaining + MILLIS_PER_MINUTE - 1L) / MILLIS_PER_MINUTE
-            "今日可用时间还剩 $minutes 分钟"
+            "$minutes min left"
         }
         view.text = text
     }
@@ -193,8 +193,8 @@ class UsageTrackingService : Service() {
         textSize = 20f
         setPadding(dp(20), dp(14), dp(20), dp(14))
         background = GradientDrawable().apply {
-            setColor(Color.argb(205, 22, 30, 31))
-            setStroke(dp(1), Color.argb(210, 210, 239, 111))
+            setColor(Color.argb(165, 20, 54, 48))
+            setStroke(dp(1), Color.argb(190, 138, 205, 174))
             cornerRadius = dp(8).toFloat()
         }
     }
@@ -233,14 +233,14 @@ class UsageTrackingService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "电视时长看护",
+                "Screen time controls",
                 NotificationManager.IMPORTANCE_LOW,
             )
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
-    private fun buildNotification(text: String = "正在记录今日电视使用时长"): Notification {
+    private fun buildNotification(text: String = "Tracking today's screen time"): Notification {
         val launchIntent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this,
@@ -250,7 +250,7 @@ class UsageTrackingService : Service() {
         )
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
-                .setContentTitle("电视时长看护")
+                .setContentTitle("Screen time controls")
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
                 .setContentIntent(pendingIntent)
@@ -259,7 +259,7 @@ class UsageTrackingService : Service() {
         } else {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
-                .setContentTitle("电视时长看护")
+                .setContentTitle("Screen time controls")
                 .setContentText(text)
                 .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
                 .setContentIntent(pendingIntent)

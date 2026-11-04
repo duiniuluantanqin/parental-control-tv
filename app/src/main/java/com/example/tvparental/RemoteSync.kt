@@ -33,7 +33,7 @@ object RemoteSync {
                     report.setFixedLengthStreamingMode(body.size)
                     report.outputStream.use { it.write(body) }
                     val code = report.responseCode
-                    if (code !in 200..299) return SyncResult(false, "答题结果上报失败（HTTP $code），稍后自动重试")
+                    if (code !in 200..299) return SyncResult(false, "Answer report failed (HTTP $code). It will retry later.")
                     JSONObject(report.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }).getBoolean("removed")
                     acknowledged.add(question.id)
                 } finally {
@@ -46,7 +46,7 @@ object RemoteSync {
             connection.readTimeout = 5_000
             connection.useCaches = false
             val code = connection.responseCode
-            if (code !in 200..299) return SyncResult(false, "后台返回 HTTP $code")
+            if (code !in 200..299) return SyncResult(false, "Server returned HTTP $code.")
             val payload = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             val state = JSONObject(payload)
             val remoteSettings = state.getJSONObject("settings")
@@ -55,8 +55,8 @@ object RemoteSync {
                 weeklyLimitsJson.getInt(day.toString()).coerceIn(0, 1440)
             }
             val windowsJson = remoteSettings.getJSONObject("usageTimeWindows")
-            val usageWindows = (1..7).map { day ->
-                val dayWindows = windowsJson.getJSONArray(day.toString())
+            fun parseWindows(windowsByDay: JSONObject) = (1..7).map { day ->
+                val dayWindows = windowsByDay.optJSONArray(day.toString()) ?: JSONArray()
                 (0 until dayWindows.length()).map { index ->
                     val window = dayWindows.getJSONObject(index)
                     UsageWindow(
@@ -65,9 +65,11 @@ object RemoteSync {
                     )
                 }
             }
+            val disabledWindowsJson = remoteSettings.optJSONObject("disabledTimeWindows") ?: JSONObject()
             val settings = ParentSettings(
                 weeklyDailyLimitMinutes = weeklyLimits,
-                usageTimeWindows = usageWindows,
+                usageTimeWindows = parseWindows(windowsJson),
+                disabledTimeWindows = parseWindows(disabledWindowsJson),
                 questionIntervalMinutes = remoteSettings.getInt("questionIntervalMinutes").coerceIn(1, 240),
                 wrongLockMinutes = remoteSettings.getInt("wrongLockMinutes").coerceIn(1, 1440),
                 syncIntervalMinutes = remoteSettings.optInt("syncIntervalMinutes", 5).coerceIn(1, 60),
@@ -77,14 +79,14 @@ object RemoteSync {
             val settingsChanged = ControlState.settings(context) != settings
             ControlState.updateSettings(context, settings)
             check(ControlState.saveRemoteQuestions(context, JSONArray(parsed.map { QuestionBank.toJsonObject(it) }))) {
-                "保存题库失败，稍后自动重试"
+                "Could not save the question bank. It will retry later."
             }
             // Keep the local exclusion until the replacement bank has been saved successfully.
             QuestionBank.acknowledgeCorrectAnswers(context, acknowledged)
-            val message = if (parsed.isEmpty()) "题库已空，等待后台自动补题" else "已同步 ${parsed.size} 道题目"
+            val message = if (parsed.isEmpty()) "Question bank is empty. Waiting for the server to refill it." else "Synced ${parsed.size} questions."
             SyncResult(true, message, parsed.size, settingsChanged)
         } catch (error: Exception) {
-            SyncResult(false, error.message ?: "连接后台失败")
+            SyncResult(false, error.message ?: "Could not connect to the server.")
         } finally {
             connection?.disconnect()
         }
@@ -100,10 +102,10 @@ object RemoteSync {
 
     private fun minuteOfDay(value: String): Int {
         val parts = value.split(":")
-        require(parts.size == 2 && parts.all { it.length == 2 }) { "无效的使用时段" }
-        val hour = parts[0].toIntOrNull() ?: error("无效的使用时段")
-        val minute = parts[1].toIntOrNull() ?: error("无效的使用时段")
-        require(hour in 0..23 && minute in 0..59) { "无效的使用时段" }
+        require(parts.size == 2 && parts.all { it.length == 2 }) { "Invalid usage time window." }
+        val hour = parts[0].toIntOrNull() ?: error("Invalid usage time window.")
+        val minute = parts[1].toIntOrNull() ?: error("Invalid usage time window.")
+        require(hour in 0..23 && minute in 0..59) { "Invalid usage time window." }
         return hour * 60 + minute
     }
 }

@@ -30,11 +30,13 @@ PORT = int(os.environ.get("PORT", "8765"))
 MAX_BODY_BYTES = 64 * 1024
 SESSION_SECONDS = 12 * 60 * 60
 SESSION_COOKIE = "tvparental_session"
+BACKEND_VERSION = "1.0.4"
 
 WEEKDAYS = tuple(str(day) for day in range(1, 8))
 DEFAULT_SETTINGS = {
     "weeklyDailyLimitMinutes": {day: 60 for day in WEEKDAYS},
     "usageTimeWindows": {day: [] for day in WEEKDAYS},
+    "disabledTimeWindows": {day: [] for day in WEEKDAYS},
     "questionIntervalMinutes": 10,
     "wrongLockMinutes": 10,
     "syncIntervalMinutes": 5,
@@ -43,7 +45,7 @@ DEFAULT_SETTINGS = {
 
 def validate_settings(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
-        raise ValueError("settings must be an object")
+        raise ValueError("使用规则格式不正确")
     limits = {
         "questionIntervalMinutes": (1, 240),
         "wrongLockMinutes": (1, 1440),
@@ -51,26 +53,48 @@ def validate_settings(value: object) -> dict[str, object]:
     }
     daily_limits = value.get("weeklyDailyLimitMinutes", DEFAULT_SETTINGS["weeklyDailyLimitMinutes"])
     if not isinstance(daily_limits, dict) or set(daily_limits) != set(WEEKDAYS):
-        raise ValueError("weeklyDailyLimitMinutes must define all seven weekdays")
+        raise ValueError("每周每日时长必须包含周一至周日")
     normalized_limits: dict[str, int] = {}
     for day in WEEKDAYS:
         number = daily_limits[day]
         if isinstance(number, bool) or not isinstance(number, int) or not 0 <= number <= 1440:
-            raise ValueError(f"weeklyDailyLimitMinutes[{day}] must be an integer from 0 to 1440")
+            raise ValueError(f"第 {day} 天的每日时长必须是 0 到 1440 之间的整数")
         normalized_limits[day] = number
 
-    windows = value.get("usageTimeWindows", DEFAULT_SETTINGS["usageTimeWindows"])
-    if not isinstance(windows, dict) or set(windows) != set(WEEKDAYS):
-        raise ValueError("usageTimeWindows must define all seven weekdays")
-    normalized_windows: dict[str, list[dict[str, str]]] = {}
+    normalized_windows = validate_weekly_windows(
+        value.get("usageTimeWindows", DEFAULT_SETTINGS["usageTimeWindows"]),
+        "允许时段",
+    )
+    normalized_disabled_windows = validate_weekly_windows(
+        value.get("disabledTimeWindows", DEFAULT_SETTINGS["disabledTimeWindows"]),
+        "禁用时段",
+    )
+
+    result: dict[str, object] = {
+        "weeklyDailyLimitMinutes": normalized_limits,
+        "usageTimeWindows": normalized_windows,
+        "disabledTimeWindows": normalized_disabled_windows,
+    }
+    for name, (minimum, maximum) in limits.items():
+        number = value.get(name, DEFAULT_SETTINGS[name])
+        if isinstance(number, bool) or not isinstance(number, int) or not minimum <= number <= maximum:
+            raise ValueError(f"{name} 必须是 {minimum} 到 {maximum} 之间的整数")
+        result[name] = number
+    return result
+
+
+def validate_weekly_windows(value: object, name: str) -> dict[str, list[dict[str, str]]]:
+    if not isinstance(value, dict) or set(value) != set(WEEKDAYS):
+        raise ValueError(f"{name} 必须包含周一至周日")
+    normalized: dict[str, list[dict[str, str]]] = {}
     for day in WEEKDAYS:
-        day_windows = windows[day]
+        day_windows = value[day]
         if not isinstance(day_windows, list) or len(day_windows) > 8:
-            raise ValueError(f"usageTimeWindows[{day}] must be a list of at most 8 time ranges")
+            raise ValueError(f"{name} 的第 {day} 天最多可设置 8 个时段")
         normalized_day: list[dict[str, str]] = []
         for window in day_windows:
             if not isinstance(window, dict):
-                raise ValueError("each usage time range must be an object")
+                raise ValueError("时段格式不正确")
             start = window.get("start")
             end = window.get("end")
             try:
@@ -83,52 +107,42 @@ def validate_settings(value: object) -> dict[str, object]:
                 or start_time.isoformat(timespec="minutes") != start
                 or end_time.isoformat(timespec="minutes") != end
             ):
-                raise ValueError("time ranges must use HH:MM values")
+                raise ValueError("时段时间必须使用 HH:MM 格式")
             if start == end:
-                raise ValueError("a time range start and end must differ")
+                raise ValueError("时段开始和结束时间不能相同")
             normalized_day.append({"start": start, "end": end})
-        normalized_windows[day] = normalized_day
-
-    result: dict[str, object] = {
-        "weeklyDailyLimitMinutes": normalized_limits,
-        "usageTimeWindows": normalized_windows,
-    }
-    for name, (minimum, maximum) in limits.items():
-        number = value.get(name, DEFAULT_SETTINGS[name])
-        if isinstance(number, bool) or not isinstance(number, int) or not minimum <= number <= maximum:
-            raise ValueError(f"{name} must be an integer from {minimum} to {maximum}")
-        result[name] = number
-    return result
+        normalized[day] = normalized_day
+    return normalized
 
 
 def validate_question(value: object, *, require_id: bool = True) -> dict[str, object]:
     if not isinstance(value, dict):
-        raise ValueError("question must be an object")
+        raise ValueError("题目格式不正确")
     prompt = value.get("prompt")
     options = value.get("options")
     answer = value.get("answer")
     category = value.get("category", "其他")
     difficulty = value.get("difficulty", "中")
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt.strip()) > 240:
-        raise ValueError("prompt must contain 1 to 240 characters")
+        raise ValueError("题目内容长度必须为 1 到 240 个字符")
     if not isinstance(options, list) or len(options) != 4:
-        raise ValueError("each question must have exactly four options")
+        raise ValueError("每道题必须包含四个选项")
     if any(not isinstance(item, str) or not item.strip() or len(item.strip()) > 120 for item in options):
-        raise ValueError("each option must contain 1 to 120 characters")
+        raise ValueError("选项长度必须为 1 到 120 个字符")
     normalized_options = [item.strip() for item in options]
     if len(set(normalized_options)) != 4:
-        raise ValueError("options must be distinct")
+        raise ValueError("四个选项必须各不相同")
     if not isinstance(answer, str) or answer not in normalized_options:
-        raise ValueError("answer must match one of the four options")
+        raise ValueError("正确答案必须与其中一个选项完全一致")
     if not isinstance(category, str) or not category.strip() or len(category.strip()) > 40:
-        raise ValueError("category must contain 1 to 40 characters")
+        raise ValueError("类别长度必须为 1 到 40 个字符")
     if not isinstance(difficulty, str) or not difficulty.strip() or len(difficulty.strip()) > 40:
-        raise ValueError("difficulty must contain 1 to 40 characters")
+        raise ValueError("难度长度必须为 1 到 40 个字符")
     difficulty = difficulty.strip()
     difficulty = {"小学": "低", "初中": "中", "高中": "高"}.get(difficulty, difficulty)
     question_id = value.get("id")
     if require_id and (not isinstance(question_id, str) or not question_id.strip()):
-        raise ValueError("question id is required")
+        raise ValueError("题目 ID 不能为空")
     return {
         "id": question_id.strip() if isinstance(question_id, str) and question_id.strip() else f"q-{uuid.uuid4().hex[:12]}",
         "category": category.strip(),
@@ -201,7 +215,11 @@ class StateStore:
             state = self.load()
             if not state["questions"]:
                 self.ensure_refill()
-            return {**state, "refill": {"running": self.refill_running, "error": self.refill_error}}
+            return {
+                **state,
+                "version": BACKEND_VERSION,
+                "refill": {"running": self.refill_running, "error": self.refill_error},
+            }
 
     def ensure_refill(self) -> None:
         with self.lock:
@@ -330,7 +348,7 @@ AUTH = AdminAuth(ADMIN_FILE)
 
 
 class RequestHandler(BaseHTTPRequestHandler):
-    server_version = "TvParentalAdmin/1.0"
+    server_version = f"TvParentalAdmin/{BACKEND_VERSION}"
 
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
@@ -346,7 +364,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif path == "/styles.css":
             self.send_static("styles.css", "text/css; charset=utf-8")
         else:
-            self.send_json(404, {"error": "not found"})
+            self.send_json(404, {"error": "页面不存在"})
 
     def do_POST(self) -> None:
         path = urlsplit(self.path).path
@@ -374,7 +392,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json(400, {"error": str(error)})
             return
         if not path.startswith("/api/v1/admin/"):
-            self.send_json(404, {"error": "not found"})
+            self.send_json(404, {"error": "请求地址不存在"})
             return
         if not self.same_origin():
             return
@@ -457,7 +475,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     STORE.save(state)
                     self.send_json(201, question)
                 else:
-                    self.send_json(404, {"error": "not found"})
+                    self.send_json(404, {"error": "请求地址不存在"})
         except DeepSeekError as error:
             self.send_json(error.status, {"error": str(error)})
         except (ValueError, json.JSONDecodeError) as error:
@@ -467,7 +485,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         prefix = "/api/v1/admin/questions/"
         path = urlsplit(self.path).path
         if not path.startswith(prefix):
-            self.send_json(404, {"error": "not found"})
+            self.send_json(404, {"error": "请求地址不存在"})
             return
         if not self.same_origin() or not self.require_admin():
             return
@@ -478,7 +496,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             assert isinstance(questions, list)
             remaining = [question for question in questions if question["id"] != question_id]
             if len(remaining) == len(questions):
-                self.send_json(404, {"error": "question not found"})
+                self.send_json(404, {"error": "题目不存在"})
                 return
             state["questions"] = remaining
             STORE.save(state)
@@ -488,10 +506,10 @@ class RequestHandler(BaseHTTPRequestHandler):
     def read_json(self) -> dict[str, object]:
         length = int(self.headers.get("Content-Length", "0"))
         if length <= 0 or length > MAX_BODY_BYTES:
-            raise ValueError("request body is empty or too large")
+            raise ValueError("请求内容为空或超出大小限制")
         payload = json.loads(self.rfile.read(length).decode("utf-8"))
         if not isinstance(payload, dict):
-            raise ValueError("request body must be a JSON object")
+            raise ValueError("请求内容必须是 JSON 对象")
         return payload
 
     def require_admin(self) -> bool:

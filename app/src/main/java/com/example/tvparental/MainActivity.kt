@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Dialog
 import android.app.admin.DevicePolicyManager
 import android.content.ActivityNotFoundException
+import android.content.res.ColorStateList
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
@@ -11,23 +12,36 @@ import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.GridLayout
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 
 class MainActivity : Activity() {
+    private val statusHandler = Handler(Looper.getMainLooper())
+    private val statusRefresh = object : Runnable {
+        override fun run() {
+            if (isFinishing || isDestroyed) return
+            refreshStatus()
+            statusHandler.postDelayed(this, STATUS_REFRESH_INTERVAL_MS)
+        }
+    }
     private lateinit var usageStatus: TextView
     private lateinit var settingsStatus: TextView
     private lateinit var syncStatus: TextView
     private lateinit var permissionStatus: TextView
     private lateinit var passwordStatus: TextView
     private lateinit var adminStatus: TextView
+    private lateinit var usageProgress: ProgressBar
     private lateinit var permissionButton: Button
     private lateinit var testButton: Button
     private lateinit var syncButton: Button
@@ -35,6 +49,7 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REQUEST_CODE_ENABLE_ADMIN = 1001
+        private const val STATUS_REFRESH_INTERVAL_MS = 30_000L
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -53,103 +68,174 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        refreshStatus()
+        statusHandler.removeCallbacks(statusRefresh)
+        statusRefresh.run()
         if (!canDrawOverlays() && !autoOpenedOverlaySettings) {
             autoOpenedOverlaySettings = true
             openOverlaySettings()
         }
     }
 
+    override fun onPause() {
+        statusHandler.removeCallbacks(statusRefresh)
+        super.onPause()
+    }
+
     private fun buildContent(): View {
-        val scroll = ScrollView(this).apply { setBackgroundColor(Color.rgb(18, 24, 25)) }
+        val scroll = ScrollView(this).apply { setBackgroundColor(Color.rgb(15, 22, 24)) }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(72), dp(40), dp(72), dp(40))
+            setPadding(dp(64), dp(36), dp(64), dp(36))
         }
-        usageStatus = statusText(32f)
-        usageStatus.setPadding(0, dp(16), 0, dp(24))
-        content.addView(usageStatus, centeredParams())
-
-        val versionText = TextView(this).apply {
-            text = "版本 ${packageManager.getPackageInfo(packageName, 0).versionName}"
-            setTextColor(Color.rgb(150, 160, 152))
-            textSize = 16f
-            gravity = Gravity.CENTER
-            setPadding(0, 0, 0, dp(8))
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
         }
-        content.addView(versionText, centeredParams())
+        header.addView(TextView(this).apply {
+            text = "PARENTAL TV"
+            setTextColor(Color.rgb(205, 235, 220))
+            textSize = 18f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+        }, LinearLayout.LayoutParams(0, dp(32), 1f))
+        header.addView(TextView(this).apply {
+            text = "APP v${packageManager.getPackageInfo(packageName, 0).versionName}"
+            setTextColor(Color.rgb(160, 174, 174))
+            textSize = 14f
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+        })
+        content.addView(header)
+        content.addView(View(this).apply {
+            setBackgroundColor(Color.rgb(51, 65, 66))
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1)).apply {
+            topMargin = dp(18)
+            bottomMargin = dp(30)
+        })
 
-        settingsStatus = statusText(18f)
-        content.addView(settingsStatus, centeredParams())
-
-        syncStatus = statusText(16f)
-        content.addView(syncStatus, centeredParams())
-
-        permissionStatus = statusText(18f)
-        permissionStatus.setPadding(0, dp(16), 0, dp(4))
-        content.addView(permissionStatus, centeredParams())
-
-        passwordStatus = statusText(18f)
-        passwordStatus.setPadding(0, 0, 0, dp(4))
-        content.addView(passwordStatus, centeredParams())
-
-        adminStatus = statusText(18f)
-        adminStatus.setPadding(0, 0, 0, dp(16))
-        content.addView(adminStatus, centeredParams())
-
-        permissionButton = menuButton("打开悬浮窗权限设置", 18f) { openOverlaySettings() }
-        content.addView(permissionButton, buttonParams())
-
-        content.addView(menuButton("设置解锁密码（6 位方向键）", 18f) { startPasswordSetup() }, buttonParams())
-
-        testButton = menuButton("立即答题测试", 20f) { showQuestionNow() }
-        content.addView(testButton, buttonParams())
-
-        val divider = TextView(this).apply {
-            text = "远程家长后台"
-            setTextColor(Color.rgb(210, 239, 111))
-            textSize = 21f
-            setPadding(0, dp(24), 0, dp(10))
+        val dashboard = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
         }
-        content.addView(divider, matchStartParams())
+        val overview = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 0, dp(42), 0)
+        }
+        overview.addView(labelText("TODAY'S USAGE"), matchStartParams())
+        usageStatus = statusText(34f).apply {
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            setTextColor(Color.WHITE)
+            setPadding(0, dp(14), 0, dp(10))
+        }
+        overview.addView(usageStatus, matchStartParams())
+        usageProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1000
+            progressTintList = ColorStateList.valueOf(Color.rgb(138, 205, 174))
+            progressBackgroundTintList = ColorStateList.valueOf(Color.rgb(45, 58, 60))
+        }
+        overview.addView(usageProgress, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(8)))
+        settingsStatus = statusText(17f).apply {
+            gravity = Gravity.START
+            setTextColor(Color.rgb(191, 203, 200))
+            setPadding(0, dp(24), 0, 0)
+        }
+        overview.addView(settingsStatus, matchStartParams())
+        dashboard.addView(overview, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
 
-        content.addView(statusText(16f).apply {
-            text = "题目和规则自动同步，无需配置地址"
-        }, centeredParams())
+        dashboard.addView(View(this).apply {
+            setBackgroundColor(Color.rgb(51, 65, 66))
+        }, LinearLayout.LayoutParams(dp(1), LinearLayout.LayoutParams.MATCH_PARENT))
 
-        syncButton = menuButton("立即同步题目和规则", 18f) { syncRemoteSettings() }
-        content.addView(syncButton, buttonParams())
+        val controls = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(42), 0, 0, 0)
+        }
+        controls.addView(labelText("DEVICE CONTROLS"), matchStartParams())
+        permissionStatus = statusText(15f).apply { gravity = Gravity.START }
+        passwordStatus = statusText(15f).apply { gravity = Gravity.START }
+        adminStatus = statusText(15f).apply { gravity = Gravity.START }
+        controls.addView(permissionStatus, matchStartParams())
+        controls.addView(passwordStatus, matchStartParams())
+        controls.addView(adminStatus, matchStartParams())
+
+        val actionGrid = GridLayout(this).apply {
+            columnCount = 2
+            rowCount = 2
+            useDefaultMargins = false
+            setPadding(0, dp(22), 0, 0)
+        }
+        val actions = listOf(
+            menuButton("Overlay access", android.R.drawable.ic_menu_manage) { openOverlaySettings() },
+            menuButton("Set parent PIN", android.R.drawable.ic_lock_lock) { startPasswordSetup() },
+            menuButton("Test question", android.R.drawable.ic_media_play) { showQuestionNow() },
+            menuButton("Sync now", android.R.drawable.ic_popup_sync) { syncRemoteSettings() },
+        )
+        permissionButton = actions[0]
+        testButton = actions[2]
+        syncButton = actions[3]
+        actions.forEachIndexed { index, button ->
+            actionGrid.addView(button, GridLayout.LayoutParams(
+                GridLayout.spec(index / 2, 1f),
+                GridLayout.spec(index % 2, 1f),
+            ).apply {
+                width = 0
+                height = dp(58)
+                setMargins(dp(5), dp(5), dp(5), dp(5))
+            })
+        }
+        controls.addView(actionGrid, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        syncStatus = statusText(15f).apply {
+            gravity = Gravity.START
+            setTextColor(Color.rgb(160, 174, 174))
+            setPadding(dp(5), dp(10), 0, 0)
+            text = "Questions and rules sync automatically."
+        }
+        controls.addView(syncStatus, matchStartParams())
+        dashboard.addView(controls, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+        content.addView(dashboard, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
         scroll.addView(content)
         return scroll
     }
 
-    private fun menuButton(label: String, size: Float, onClick: () -> Unit) = Button(this).apply {
+    private fun labelText(label: String) = TextView(this).apply {
         text = label
-        textSize = size
+        setTextColor(Color.rgb(138, 205, 174))
+        textSize = 13f
+        typeface = android.graphics.Typeface.DEFAULT_BOLD
+        setPadding(0, 0, 0, dp(12))
+    }
+
+    private fun menuButton(label: String, iconResource: Int, onClick: () -> Unit) = Button(this).apply {
+        text = label
+        textSize = 14f
         isAllCaps = false
         isFocusable = true
         stateListAnimator = null
-        minHeight = dp(64)
+        minHeight = dp(58)
+        minWidth = 0
+        compoundDrawablePadding = dp(10)
+        setPadding(dp(12), 0, dp(8), 0)
         applyFocusStyle(this, false)
+        val icon = getDrawable(iconResource)?.mutate()?.apply { setTint(Color.rgb(188, 207, 198)) }
+        setCompoundDrawablesRelativeWithIntrinsicBounds(icon, null, null, null)
         setOnFocusChangeListener { view, focused -> applyFocusStyle(view as Button, focused) }
         setOnClickListener { onClick() }
     }
 
     private fun applyFocusStyle(button: Button, focused: Boolean) {
+        val foreground = if (focused) Color.rgb(15, 34, 30) else Color.rgb(235, 241, 237)
         button.background = GradientDrawable().apply {
-            setColor(if (focused) Color.rgb(210, 239, 111) else Color.rgb(48, 56, 58))
-            setStroke(dp(if (focused) 4 else 1), if (focused) Color.WHITE else Color.rgb(92, 102, 104))
-            cornerRadius = dp(10).toFloat()
+            setColor(if (focused) Color.rgb(138, 205, 174) else Color.rgb(27, 37, 39))
+            setStroke(dp(if (focused) 3 else 1), if (focused) Color.rgb(239, 185, 104) else Color.rgb(67, 84, 84))
+            cornerRadius = dp(5).toFloat()
         }
-        button.setTextColor(if (focused) Color.rgb(24, 31, 25) else Color.WHITE)
+        button.setTextColor(foreground)
+        button.compoundDrawablesRelative.firstOrNull()?.setTint(foreground)
     }
 
     private fun statusText(size: Float) = TextView(this).apply {
-        setTextColor(Color.WHITE)
+        setTextColor(Color.rgb(194, 207, 202))
         textSize = size
-        gravity = Gravity.CENTER
+        gravity = Gravity.START
+        setPadding(0, dp(6), 0, dp(6))
     }
 
     private fun centeredParams() = LinearLayout.LayoutParams(
@@ -159,34 +245,39 @@ class MainActivity : Activity() {
 
     private fun matchStartParams() = centeredParams().apply { gravity = Gravity.START }
 
-    private fun buttonParams() = LinearLayout.LayoutParams(
-        LinearLayout.LayoutParams.MATCH_PARENT,
-        LinearLayout.LayoutParams.WRAP_CONTENT,
-    ).apply { setMargins(0, dp(8), 0, dp(8)) }
-
     private fun refreshStatus() {
         val settings = ControlState.settings(this)
-        usageStatus.text = "今日已使用 ${ControlState.todayUsageLabel(this)} / ${ControlState.todayDailyLimitMinutes(this)} 分钟"
-        settingsStatus.text = "每 ${settings.questionIntervalMinutes} 分钟答题 · 答错锁定 ${settings.wrongLockMinutes} 分钟 · 每 ${settings.syncIntervalMinutes} 分钟同步 · 题库 ${QuestionBank.all(this).size} 道"
-        permissionStatus.text = if (canDrawOverlays()) "悬浮答题权限：已开启" else "悬浮答题权限：未开启（请在系统页面中允许）"
-        passwordStatus.text = if (ControlState.hasUnlockPassword(this)) "解锁密码：已设置" else "解锁密码：未设置（锁定后将无法用密码解锁）"
-        adminStatus.text = if (ControlState.isDeviceAdminActive(this)) {
-            "卸载保护：已启用（卸载前需输入密码）"
+        val dailyLimit = ControlState.todayDailyLimitMinutes(this)
+        usageStatus.text = "${ControlState.todayUsageLabel(this)} / $dailyLimit min"
+        settingsStatus.text = "Question every ${settings.questionIntervalMinutes} min\nIncorrect-answer lock: ${settings.wrongLockMinutes} min\nSync every ${settings.syncIntervalMinutes} min · ${QuestionBank.all(this).size} questions"
+        val dailyLimitMillis = dailyLimit * 60_000L + ControlState.tempExtension(this)
+        usageProgress.progress = if (dailyLimitMillis > 0L) {
+            ((ControlState.usedMillis(this) * 1000L) / dailyLimitMillis).toInt().coerceIn(0, 1000)
         } else {
-            "卸载保护：未启用（设置密码后自动启用）"
+            1000
         }
+        permissionStatus.text = if (canDrawOverlays()) "Overlay permission · Enabled" else "Overlay permission · Needs access"
+        permissionStatus.setTextColor(if (canDrawOverlays()) Color.rgb(138, 205, 174) else Color.rgb(239, 185, 104))
+        passwordStatus.text = if (ControlState.hasUnlockPassword(this)) "Parent PIN · Set" else "Parent PIN · Not set"
+        passwordStatus.setTextColor(if (ControlState.hasUnlockPassword(this)) Color.rgb(138, 205, 174) else Color.rgb(239, 185, 104))
+        adminStatus.text = if (ControlState.isDeviceAdminActive(this)) {
+            "Uninstall protection · On"
+        } else {
+            "Uninstall protection · Off"
+        }
+        adminStatus.setTextColor(if (ControlState.isDeviceAdminActive(this)) Color.rgb(138, 205, 174) else Color.rgb(160, 174, 174))
         testButton.isEnabled = canDrawOverlays()
         testButton.alpha = if (canDrawOverlays()) 1f else 0.45f
     }
 
     private fun syncRemoteSettings() {
         syncButton.isEnabled = false
-        syncStatus.text = "正在连接后台…"
+        syncStatus.text = "Connecting to server…"
         RemoteSync.syncAsync(this) { result ->
             syncButton.isEnabled = true
             syncStatus.text = if (result.success) {
                 if (result.settingsChanged) QuestionAlarmReceiver.scheduleForCurrentState(this)
-                "${result.message}；规则已更新"
+                "${result.message.removeSuffix(".")} · Rules updated."
             } else {
                 result.message
             }
@@ -199,27 +290,27 @@ class MainActivity : Activity() {
             enterNewPassword()
             return
         }
-        askPassword("验证当前密码", "请先输入当前的 6 位方向键密码", true) { entered, pad, hint, dialog ->
+        askPassword("Verify current PIN", "Enter your 6-direction parent PIN.", true) { entered, pad, hint, dialog ->
             if (ControlState.verifyUnlockPassword(this, entered)) {
                 dialog.dismiss()
                 enterNewPassword()
             } else {
-                hint.text = "密码错误，请重新输入"
+                hint.text = "Incorrect PIN. Try again."
                 pad.reset()
             }
         }
     }
 
     private fun enterNewPassword() {
-        askPassword("设置解锁密码", "用方向键输入 6 位密码，例如 上 下 上 下 左 右", false) { first, _, _, dialog ->
+        askPassword("Set parent PIN", "Enter a 6-direction PIN using the remote.", false) { first, _, _, dialog ->
             dialog.dismiss()
-            askPassword("再次输入密码确认", "请按同样的顺序再输入一遍", false) { second, pad, hint, confirmDialog ->
+            askPassword("Confirm parent PIN", "Enter the same sequence again.", false) { second, pad, hint, confirmDialog ->
                 if (second == first) {
                     ControlState.setUnlockPassword(this, first)
                     confirmDialog.dismiss()
                     activateDeviceAdmin()
                 } else {
-                    hint.text = "两次输入不一致，请重新输入"
+                    hint.text = "The sequences do not match. Try again."
                     pad.reset()
                 }
             }
@@ -230,17 +321,17 @@ class MainActivity : Activity() {
         if (!ControlState.isDeviceAdminActive(this)) {
             val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
                 putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, ControlState.getDeviceAdminComponent(this@MainActivity))
-                putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "启用设备管理器后，卸载应用前需要先输入家长密码停用管理器")
+                putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "A parent PIN is required to turn off uninstall protection before removing this app.")
             }
             try {
                 startActivityForResult(intent, REQUEST_CODE_ENABLE_ADMIN)
             } catch (e: Exception) {
                 refreshStatus()
-                Toast.makeText(this, "解锁密码已保存", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Parent PIN saved.", Toast.LENGTH_LONG).show()
             }
         } else {
             refreshStatus()
-            Toast.makeText(this, "解锁密码已保存", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Parent PIN saved.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -249,9 +340,9 @@ class MainActivity : Activity() {
         if (requestCode == REQUEST_CODE_ENABLE_ADMIN) {
             refreshStatus()
             if (resultCode == RESULT_OK) {
-                Toast.makeText(this, "解锁密码和卸载保护已启用", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Parent PIN and uninstall protection are enabled.", Toast.LENGTH_LONG).show()
             } else {
-                Toast.makeText(this, "解锁密码已保存，但卸载保护未启用", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Parent PIN saved. Uninstall protection is off.", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -295,7 +386,7 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams.WRAP_CONTENT,
         ))
         box.addView(TextView(this).apply {
-            text = "方向键输入 · OK 清空重输 · 返回键取消"
+            text = "Use the D-pad · OK clears · Back cancels"
             setTextColor(Color.rgb(150, 160, 152))
             textSize = 16f
             gravity = Gravity.CENTER
@@ -320,7 +411,7 @@ class MainActivity : Activity() {
                 ),
             )
         } catch (_: ActivityNotFoundException) {
-            Toast.makeText(this, "此设备没有悬浮窗权限设置页，请在系统设置的应用权限里手动开启", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Overlay settings are unavailable. Enable overlay access in system app settings.", Toast.LENGTH_LONG).show()
         }
     }
 

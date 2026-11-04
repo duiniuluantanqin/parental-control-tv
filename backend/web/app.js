@@ -54,7 +54,7 @@ async function api(path, options = {}) {
     throw error;
   }
   if (!response.ok) {
-    const error = new Error(body.error || `HTTP ${response.status}`);
+    const error = new Error(body.error || `后台返回 HTTP ${response.status}`);
     error.status = response.status;
     throw error;
   }
@@ -135,51 +135,73 @@ function showQuestionDetail(question) {
   questionDetailDialog.showModal();
 }
 
-function renderTimeWindows(container, day, windows) {
+function renderTimeWindows(container, day, windows, disabled) {
   container.replaceChildren();
   if (!windows.length) {
-    const allDay = document.createElement("span");
-    allDay.className = "all-day-label";
-    allDay.textContent = "全天";
-    container.append(allDay);
+    const emptyLabel = document.createElement("span");
+    emptyLabel.className = disabled ? "all-day-label no-disabled-windows-label" : "all-day-label";
+    emptyLabel.textContent = disabled ? "未设置禁用时段" : "全天可用";
+    container.append(emptyLabel);
     return;
   }
 
   for (const [index, window] of windows.entries()) {
     const row = document.createElement("div");
-    row.className = "time-window";
+    row.className = disabled ? "time-window disabled-time-window" : "time-window";
     const start = document.createElement("input");
     start.type = "time";
     start.required = true;
     start.value = window.start;
     start.dataset.windowStart = "true";
-    start.setAttribute("aria-label", `${day}时段 ${index + 1} 开始时间`);
+    start.setAttribute("aria-label", `${day}${disabled ? "禁用" : "允许"}时段 ${index + 1} 开始时间`);
     const end = document.createElement("input");
     end.type = "time";
     end.required = true;
     end.value = window.end;
     end.dataset.windowEnd = "true";
-    end.setAttribute("aria-label", `${day}时段 ${index + 1} 结束时间`);
+    end.setAttribute("aria-label", `${day}${disabled ? "禁用" : "允许"}时段 ${index + 1} 结束时间`);
     const separator = document.createElement("span");
     separator.textContent = "至";
     const remove = document.createElement("button");
     remove.className = "remove-window";
     remove.type = "button";
     remove.textContent = "×";
-    remove.setAttribute("aria-label", `移除${day}时段 ${index + 1}`);
+    remove.setAttribute("aria-label", `移除${day}${disabled ? "禁用" : "允许"}时段 ${index + 1}`);
     remove.addEventListener("click", () => {
       row.remove();
-      container.closest("tr")?.querySelector(".add-window")?.removeAttribute("disabled");
+      container.closest(".window-editor")?.querySelector(".add-window")?.removeAttribute("disabled");
       if (!container.querySelector(".time-window")) {
-        const allDay = document.createElement("span");
-        allDay.className = "all-day-label";
-        allDay.textContent = "全天";
-        container.append(allDay);
+        renderTimeWindows(container, day, [], disabled);
       }
     });
     row.append(start, separator, end, remove);
     container.append(row);
   }
+}
+
+function createWindowEditor(label, windows, disabled) {
+  const editor = document.createElement("div");
+  editor.className = disabled ? "window-editor disabled-window-editor" : "window-editor";
+  const list = document.createElement("div");
+  list.className = disabled ? "window-list disabled-window-list" : "window-list";
+  renderTimeWindows(list, label, windows, disabled);
+  const add = document.createElement("button");
+  add.className = "add-window";
+  add.type = "button";
+  add.textContent = disabled ? "+ 添加禁用时段" : "+ 添加时段";
+  add.disabled = windows.length >= 8;
+  add.addEventListener("click", () => {
+    const current = [...list.querySelectorAll(".time-window")].map(item => ({
+      start: item.querySelector("[data-window-start]").value,
+      end: item.querySelector("[data-window-end]").value,
+    }));
+    if (current.length >= 8) return;
+    current.push(disabled ? { start: "12:00", end: "13:00" } : { start: "08:00", end: "20:00" });
+    renderTimeWindows(list, label, current, disabled);
+    add.disabled = current.length >= 8;
+  });
+  editor.append(list, add);
+  return editor;
 }
 
 function renderWeeklySettings(settings) {
@@ -200,7 +222,7 @@ function renderWeeklySettings(settings) {
     limit.required = true;
     limit.value = settings.weeklyDailyLimitMinutes[day];
     limit.dataset.day = day;
-    limit.setAttribute("aria-label", `${label}使用时长，分钟`);
+    limit.setAttribute("aria-label", `${label}每日使用时长，分钟`);
     const unit = document.createElement("span");
     unit.textContent = "分钟";
     const limitControl = document.createElement("div");
@@ -208,36 +230,18 @@ function renderWeeklySettings(settings) {
     limitControl.append(limit, unit);
     limitCell.append(limitControl);
 
-    const windowsCell = document.createElement("td");
-    const editor = document.createElement("div");
-    editor.className = "window-editor";
-    const list = document.createElement("div");
-    list.className = "window-list";
-    renderTimeWindows(list, label, settings.usageTimeWindows[day]);
-    const add = document.createElement("button");
-    add.className = "add-window";
-    add.type = "button";
-    add.textContent = "+ 添加时段";
-    add.disabled = settings.usageTimeWindows[day].length >= 8;
-    add.addEventListener("click", () => {
-      const current = [...list.querySelectorAll(".time-window")].map(item => ({
-        start: item.querySelector("[data-window-start]").value,
-        end: item.querySelector("[data-window-end]").value,
-      }));
-      if (current.length >= 8) return;
-      current.push({ start: "08:00", end: "20:00" });
-      renderTimeWindows(list, label, current);
-      add.disabled = current.length >= 8;
-    });
-    editor.append(list, add);
-    windowsCell.append(editor);
-    row.append(dayCell, limitCell, windowsCell);
+    const allowedCell = document.createElement("td");
+    allowedCell.append(createWindowEditor(label, settings.usageTimeWindows[day], false));
+    const disabledCell = document.createElement("td");
+    disabledCell.append(createWindowEditor(label, settings.disabledTimeWindows?.[day] || [], true));
+    row.append(dayCell, limitCell, allowedCell, disabledCell);
     rows.append(row);
   }
 }
 
 async function loadState() {
   const state = await api("/api/v1/admin/state");
+  if (state.version) document.querySelector("#backendVersion").textContent = `后台 v${state.version}`;
   renderWeeklySettings(state.settings);
   document.querySelector("#questionInterval").value = state.settings.questionIntervalMinutes;
   document.querySelector("#wrongLock").value = state.settings.wrongLockMinutes;
@@ -285,18 +289,28 @@ async function saveSettings(event) {
   ]));
   const usageTimeWindows = Object.fromEntries(weekdays.map(([day]) => [
     day,
-    [...document.querySelectorAll(`#weeklyRows tr[data-day="${day}"] .time-window`)].map(row => ({
+    [...document.querySelectorAll(`#weeklyRows tr[data-day="${day}"] .window-list:not(.disabled-window-list) .time-window`)].map(row => ({
       start: row.querySelector("[data-window-start]").value,
       end: row.querySelector("[data-window-end]").value,
     })),
   ]));
-  if (Object.values(usageTimeWindows).some(windows => windows.some(window => window.start === window.end))) {
+  const disabledTimeWindows = Object.fromEntries(weekdays.map(([day]) => [
+    day,
+    [...document.querySelectorAll(`#weeklyRows tr[data-day="${day}"] .disabled-window-list .time-window`)].map(row => ({
+      start: row.querySelector("[data-window-start]").value,
+      end: row.querySelector("[data-window-end]").value,
+    })),
+  ]));
+  if ([usageTimeWindows, disabledTimeWindows].some(byDay =>
+    Object.values(byDay).some(windows => windows.some(window => window.start === window.end))
+  )) {
     setNotice("时段开始和结束时间不能相同", true);
     return;
   }
   const settings = {
     weeklyDailyLimitMinutes,
     usageTimeWindows,
+    disabledTimeWindows,
     questionIntervalMinutes: Number(document.querySelector("#questionInterval").value),
     wrongLockMinutes: Number(document.querySelector("#wrongLock").value),
     syncIntervalMinutes: Number(document.querySelector("#syncInterval").value),

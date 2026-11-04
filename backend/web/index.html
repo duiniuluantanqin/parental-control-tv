@@ -10,7 +10,7 @@
   <header class="topbar">
     <a class="brand" href="/settings">
       <span class="brand-mark" aria-hidden="true">TV</span>
-      <span><strong>看电视前答题</strong><small>家长管理</small></span>
+      <span><strong>看电视前答题</strong><small>家长管理</small><small id="backendVersion">后台 v1.0.4</small></span>
     </a>
     <button id="logoutButton" class="button topbar-button" type="button" hidden>退出登录</button>
   </header>
@@ -41,24 +41,24 @@
 
     <section id="settingsPage" aria-labelledby="settingsTitle" hidden>
       <div class="section-heading">
-        <div><h1 id="settingsTitle">使用规则</h1><p>分别设置每周额度与每天的可用时段。</p></div>
+        <div><h1 id="settingsTitle">使用规则</h1><p>分别设置每周额度、允许时段和禁用时段。</p></div>
       </div>
       <form id="settingsForm" class="settings-panel">
         <div class="weekly-heading">
-          <div><h2>每周使用额度</h2><p>时段留空表示全天可用；时长设为 0 表示当天不可使用。允许设置跨午夜时段。</p></div>
+          <div><h2>每周使用安排</h2><p>允许时段留空表示全天可用；禁用时段优先于允许时段。时长设为 0 表示当天不可使用，时段允许跨午夜。</p></div>
         </div>
         <div class="weekly-table-wrap">
           <table class="weekly-table">
-            <thead><tr><th scope="col">星期</th><th scope="col">使用时长</th><th scope="col">允许使用时段</th></tr></thead>
+            <thead><tr><th scope="col">星期</th><th scope="col">每日时长</th><th scope="col">允许时段</th><th scope="col">禁用时段</th></tr></thead>
             <tbody id="weeklyRows"></tbody>
           </table>
         </div>
         <div class="settings-grid">
           <label for="questionInterval">答题间隔 <span class="input-with-unit"><input id="questionInterval" type="number" min="1" max="240" value="10" required><span>分钟</span></span><small>使用多久后回答一道题</small></label>
           <label for="wrongLock">答错锁定 <span class="input-with-unit"><input id="wrongLock" type="number" min="1" max="1440" value="10" required><span>分钟</span></span><small>答错后需要等待的时间</small></label>
-          <label for="syncInterval">同步间隔 <span class="input-with-unit"><input id="syncInterval" type="number" min="1" max="60" value="5" required><span>分钟</span></span><small>电视获取最新规则与题目的间隔</small></label>
+          <label for="syncInterval">同步间隔 <span class="input-with-unit"><input id="syncInterval" type="number" min="1" max="60" value="5" required><span>分钟</span></span><small>电视获取规则与题目的间隔</small></label>
         </div>
-        <div class="settings-footer"><p>保存后，电视将在下次同步时应用。</p><button id="saveSettings" class="button primary" type="submit">保存规则</button></div>
+        <div class="settings-footer"><p>电视将在下次同步时应用已保存的规则。</p><button id="saveSettings" class="button primary" type="submit">保存规则</button></div>
       </form>
     </section>
 
@@ -86,8 +86,8 @@
       <div class="form-heading"><div><h2 id="questionDialogTitle">添加题目</h2><p class="muted">填写四个选项，并指定正确答案。</p></div><button id="closeQuestionDialog" class="icon-button" type="button" aria-label="关闭添加题目对话框">×</button></div>
       <label for="promptInput">题目内容<textarea id="promptInput" maxlength="240" rows="2" required></textarea></label>
       <div class="form-meta">
-        <label for="categoryInput">类别<select id="categoryInput" required><option selected>其他</option></select></label>
-        <label for="difficultyInput">难度<select id="difficultyInput"><option>低</option><option selected>中</option><option>高</option></select></label>
+        <label for="categoryInput">类别<select id="categoryInput" required><option value="其他" selected>其他</option></select></label>
+        <label for="difficultyInput">难度<select id="difficultyInput"><option value="低">低</option><option value="中" selected>中</option><option value="高">高</option></select></label>
       </div>
       <div class="options-fields">
         <label>A<input class="option-input" maxlength="120" required></label>
@@ -112,9 +112,9 @@
       <div class="ai-fields">
         <label for="poemTitleInput">诗词名称<input id="poemTitleInput" maxlength="80" placeholder="例如：静夜思（李白）" required></label>
         <label for="aiCountInput">出题数量<input id="aiCountInput" type="number" min="1" max="10" value="5" required></label>
-        <label for="aiDifficultyInput">难度<select id="aiDifficultyInput"><option>低</option><option selected>中</option><option>高</option></select></label>
+        <label for="aiDifficultyInput">难度<select id="aiDifficultyInput"><option value="低">低</option><option value="中" selected>中</option><option value="高">高</option></select></label>
       </div>
-      <div class="ai-generation-actions"><p class="muted">每次 1–10 道，可选低、中、高难度。重名作品可在名称后补充作者。</p><button id="generateAiQuestions" class="button primary" type="submit">开始出题</button></div>
+      <div class="ai-generation-actions"><p class="muted">每次生成 1–10 道，可选低、中、高难度。重名作品可补充作者。</p><button id="generateAiQuestions" class="button primary" type="submit">开始出题</button></div>
     </form>
     <p id="aiNotice" class="form-notice" role="status" aria-live="polite"></p>
     <section id="aiPreview" class="ai-preview" aria-labelledby="aiPoemTitle" hidden>

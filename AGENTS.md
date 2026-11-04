@@ -10,6 +10,7 @@
 
 ## Development rules
 
+- Keep all Android app interface text in English. Keep the backend admin interface and its user-facing messages in Chinese unless the user explicitly requests another language.
 - Use Kotlin and Android Studio for the Android app. Keep Android dependencies minimal and support API 28.
 - Keep the launcher and overlay usable with a TV remote: large labels, visible focus, D-pad navigation, and OK activation.
 - Global display requires `SYSTEM_ALERT_WINDOW`; request it through Android settings and never try to grant it silently.
@@ -19,6 +20,7 @@
 - Randomly select from the 50 built-in questions, avoid repeating the previous question, and preserve an unanswered question across service restarts.
 - An answer is consumed once. A wrong answer starts the configured lockout; a daily quota exhaustion blocks until the next local day.
 - The default rules are 60 minutes per day, one question every 10 minutes, a 10-minute wrong-answer lock, and a 5-minute sync interval (configurable 1-60). The remote backend can change these values.
+- Daily usage rules support per-weekday allowed time windows and disabled time windows. Disabled windows always take priority when they overlap allowed windows.
 - The device polls the backend: full sync on service start, then every `syncIntervalMinutes` from the synced settings.
 - The device syncs questions and rules from `https://tvparental.mediainsight360.com/api/v1/device/state` without TV-side configuration. Management requires a username/password session; never put admin credentials in the Android app.
 - Backend code uses Python's standard library. Keep runtime state and secrets outside version control. Use HTTPS for any public ECS deployment.

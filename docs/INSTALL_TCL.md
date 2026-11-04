@@ -5,7 +5,7 @@
 ## 升级前
 
 1. 电视开机，并与电脑连接同一网络。
-2. 保持包名 `com.example.tvparental` 不变。当前版本为 `0.8.1`（`versionCode` 11）；每次改动都在 `app/build.gradle.kts` 中把 `versionCode` 增加 1，并同步更新 `versionName`。不要更换用于签名的电脑/Android Studio 用户配置，否则电视可能拒绝覆盖安装。
+2. 保持包名 `com.example.tvparental` 不变。当前版本为 `0.8.4`（`versionCode` 14）；每次改动都在 `app/build.gradle.kts` 中把 `versionCode` 增加 1，并同步更新 `versionName`。不要更换用于签名的电脑/Android Studio 用户配置，否则电视可能拒绝覆盖安装。
 3. 在项目根目录打开 PowerShell。下面命令按本机 ADB 路径编写；若 ADB 安装位置变了，先修改 `$adb`。
 
 ## 构建并推送

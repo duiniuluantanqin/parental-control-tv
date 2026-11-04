@@ -18,6 +18,7 @@ data class UsageWindow(
 data class ParentSettings(
     val weeklyDailyLimitMinutes: List<Int> = List(7) { 60 },
     val usageTimeWindows: List<List<UsageWindow>> = List(7) { emptyList() },
+    val disabledTimeWindows: List<List<UsageWindow>> = List(7) { emptyList() },
     val questionIntervalMinutes: Int = 10,
     val wrongLockMinutes: Int = 10,
     val syncIntervalMinutes: Int = 5,
@@ -32,6 +33,7 @@ object ControlState {
     private const val REMOTE_QUESTIONS_KEY = "remote_questions"
     private const val WEEKLY_LIMITS_KEY = "weekly_daily_limit_minutes"
     private const val USAGE_WINDOWS_KEY = "usage_time_windows"
+    private const val DISABLED_WINDOWS_KEY = "disabled_time_windows"
     private const val QUESTION_INTERVAL_KEY = "question_interval_minutes"
     private const val WRONG_LOCK_KEY = "wrong_lock_minutes"
     private const val SYNC_INTERVAL_KEY = "sync_interval_minutes"
@@ -49,9 +51,12 @@ object ControlState {
         val storedWindows = runCatching {
             JSONObject(preferences.getString(USAGE_WINDOWS_KEY, null) ?: "{}")
         }.getOrDefault(JSONObject())
+        val storedDisabledWindows = runCatching {
+            JSONObject(preferences.getString(DISABLED_WINDOWS_KEY, null) ?: "{}")
+        }.getOrDefault(JSONObject())
         val dailyLimits = (1..7).map { day -> weeklyLimits.optInt(day.toString(), 60).coerceIn(0, 1440) }
-        val usageWindows = (1..7).map { day ->
-            val windows = storedWindows.optJSONArray(day.toString()) ?: JSONArray()
+        fun readWindows(source: JSONObject) = (1..7).map { day ->
+            val windows = source.optJSONArray(day.toString()) ?: JSONArray()
             (0 until windows.length()).mapNotNull { index ->
                 windows.optJSONObject(index)?.let { window ->
                     UsageWindow(
@@ -63,7 +68,8 @@ object ControlState {
         }
         return ParentSettings(
             weeklyDailyLimitMinutes = dailyLimits,
-            usageTimeWindows = usageWindows,
+            usageTimeWindows = readWindows(storedWindows),
+            disabledTimeWindows = readWindows(storedDisabledWindows),
             questionIntervalMinutes = preferences.getInt(QUESTION_INTERVAL_KEY, 10).coerceIn(1, 240),
             wrongLockMinutes = preferences.getInt(WRONG_LOCK_KEY, 10).coerceIn(1, 1440),
             syncIntervalMinutes = preferences.getInt(SYNC_INTERVAL_KEY, 5).coerceIn(1, 60),
@@ -76,8 +82,8 @@ object ControlState {
                 put((index + 1).toString(), minutes.coerceIn(0, 1440))
             }
         }
-        val usageWindows = JSONObject().apply {
-            settings.usageTimeWindows.take(7).forEachIndexed { index, windows ->
+        fun writeWindows(dailyWindows: List<List<UsageWindow>>) = JSONObject().apply {
+            dailyWindows.take(7).forEachIndexed { index, windows ->
                 put((index + 1).toString(), JSONArray().apply {
                     windows.take(8).forEach { window ->
                         put(JSONObject().put("start", window.startMinute).put("end", window.endMinute))
@@ -85,9 +91,12 @@ object ControlState {
                 })
             }
         }
+        val usageWindows = writeWindows(settings.usageTimeWindows)
+        val disabledWindows = writeWindows(settings.disabledTimeWindows)
         prefs(context).edit()
             .putString(WEEKLY_LIMITS_KEY, weeklyLimits.toString())
             .putString(USAGE_WINDOWS_KEY, usageWindows.toString())
+            .putString(DISABLED_WINDOWS_KEY, disabledWindows.toString())
             .putInt(QUESTION_INTERVAL_KEY, settings.questionIntervalMinutes.coerceIn(1, 240))
             .putInt(WRONG_LOCK_KEY, settings.wrongLockMinutes.coerceIn(1, 1440))
             .putInt(SYNC_INTERVAL_KEY, settings.syncIntervalMinutes.coerceIn(1, 60))
@@ -173,24 +182,27 @@ object ControlState {
         val calendar = Calendar.getInstance().apply { timeInMillis = timeMillis }
         val dayIndex = weekdayIndex(calendar)
         val minute = calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
-        val todayWindows = settings.usageTimeWindows[dayIndex]
-        if (todayWindows.isEmpty()) return true
-        if (todayWindows.any { window ->
-                if (window.startMinute < window.endMinute) {
-                    minute >= window.startMinute && minute < window.endMinute
-                } else {
-                    minute >= window.startMinute
-                }
-            }) return true
-
-        val previousWindows = settings.usageTimeWindows[(dayIndex + 6) % 7]
-        return previousWindows.any { window ->
-            window.startMinute > window.endMinute && minute < window.endMinute
+        fun contains(windows: List<List<UsageWindow>>): Boolean {
+            val todayWindows = windows[dayIndex]
+            if (todayWindows.any { window ->
+                    if (window.startMinute < window.endMinute) {
+                        minute >= window.startMinute && minute < window.endMinute
+                    } else {
+                        minute >= window.startMinute
+                    }
+                }) return true
+            val previousWindows = windows[(dayIndex + 6) % 7]
+            return previousWindows.any { window ->
+                window.startMinute > window.endMinute && minute < window.endMinute
+            }
         }
+        if (contains(settings.disabledTimeWindows)) return false
+        if (settings.usageTimeWindows[dayIndex].isEmpty()) return true
+        return contains(settings.usageTimeWindows)
     }
 
     private fun nextUsageWindowTransition(settings: ParentSettings, now: Long): Long? {
-        if (settings.usageTimeWindows.all { it.isEmpty() }) return null
+        if (settings.usageTimeWindows.all { it.isEmpty() } && settings.disabledTimeWindows.all { it.isEmpty() }) return null
         val midnight = Calendar.getInstance().apply {
             timeInMillis = now
             set(Calendar.HOUR_OF_DAY, 0)
@@ -202,7 +214,7 @@ object ControlState {
         for (dayOffset in -1..8) {
             val day = (midnight.clone() as Calendar).apply { add(Calendar.DAY_OF_MONTH, dayOffset) }
             if (dayOffset > 0) candidates.add(day.timeInMillis)
-            for (window in settings.usageTimeWindows[weekdayIndex(day)]) {
+            for (window in settings.usageTimeWindows[weekdayIndex(day)] + settings.disabledTimeWindows[weekdayIndex(day)]) {
                 val start = (day.clone() as Calendar).apply {
                     set(Calendar.HOUR_OF_DAY, window.startMinute / 60)
                     set(Calendar.MINUTE, window.startMinute % 60)
@@ -260,9 +272,9 @@ object ControlState {
         val hours = totalSeconds / 3_600L
         val minutes = (totalSeconds % 3_600L) / 60L
         return if (hours > 0L) {
-            String.format(Locale.getDefault(), "%d小时%02d分", hours, minutes)
+            String.format(Locale.getDefault(), "%d hr %02d min", hours, minutes)
         } else {
-            String.format(Locale.getDefault(), "%d分", minutes)
+            String.format(Locale.getDefault(), "%d min", minutes)
         }
     }
 

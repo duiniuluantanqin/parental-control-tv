@@ -101,8 +101,8 @@ object QuestionBank {
                 prompt = item.getString("prompt"),
                 options = options,
                 answer = item.getString("answer"),
-                category = item.optString("category", "其他"),
-                difficulty = item.optString("difficulty", "初中"),
+                category = item.optString("category", "Other"),
+                difficulty = item.optString("difficulty", "Middle school"),
             )
             require(question.id.isNotBlank() && question.prompt.isNotBlank())
             require(question.options.size == 4 && question.options.distinct().size == 4)
@@ -118,4 +118,13 @@ object QuestionBank {
         .put("answer", question.answer)
         .put("category", question.category)
         .put("difficulty", question.difficulty)
+
+    fun displayCategory(category: String): String = when (category) {
+        "古诗词" -> "Classical poetry"
+        "数学" -> "Math"
+        "科学" -> "Science"
+        "地理历史" -> "Geography & history"
+        "其他" -> "Other"
+        else -> category
+    }
 }
