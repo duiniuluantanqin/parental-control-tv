@@ -1,8 +1,14 @@
 package com.example.tvparental
 
 import android.content.Context
+import android.content.BroadcastReceiver
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
 import android.widget.LinearLayout
@@ -16,6 +22,20 @@ class PasswordPad(
 ) : LinearLayout(context) {
     private val input = StringBuilder()
     private val slots = mutableListOf<TextView>()
+    private val syncHandler = Handler(Looper.getMainLooper())
+    private var resetReceiverRegistered = false
+    private val resetReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            reset()
+        }
+    }
+    private val syncWhileFocused = object : Runnable {
+        override fun run() {
+            if (!hasFocus()) return
+            RemoteSync.syncAsync(context) { }
+            syncHandler.postDelayed(this, PASSWORD_RESET_POLL_INTERVAL_MS)
+        }
+    }
     var inputEnabled = true
 
     init {
@@ -34,8 +54,39 @@ class PasswordPad(
                 LinearLayout.LayoutParams(dp(60), dp(68)).apply { setMargins(dp(7), 0, dp(7), 0) },
             )
         }
-        setOnFocusChangeListener { _, _ -> render() }
+        setOnFocusChangeListener { _, focused ->
+            render()
+            if (focused) startRemoteSync() else stopRemoteSync()
+        }
         render()
+    }
+
+    private fun startRemoteSync() {
+        if (!resetReceiverRegistered) {
+            val filter = IntentFilter(RemoteSync.ACTION_PASSWORD_RESET)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(resetReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("DEPRECATION")
+                context.registerReceiver(resetReceiver, filter)
+            }
+            resetReceiverRegistered = true
+        }
+        syncHandler.removeCallbacks(syncWhileFocused)
+        syncWhileFocused.run()
+    }
+
+    private fun stopRemoteSync() {
+        syncHandler.removeCallbacks(syncWhileFocused)
+        if (resetReceiverRegistered) {
+            context.unregisterReceiver(resetReceiver)
+            resetReceiverRegistered = false
+        }
+    }
+
+    override fun onDetachedFromWindow() {
+        stopRemoteSync()
+        super.onDetachedFromWindow()
     }
 
     fun reset() {
@@ -92,4 +143,8 @@ class PasswordPad(
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    companion object {
+        private const val PASSWORD_RESET_POLL_INTERVAL_MS = 30_000L
+    }
 }

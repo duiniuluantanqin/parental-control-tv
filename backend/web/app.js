@@ -505,6 +505,20 @@ async function initialize() {
 
 document.querySelector("#loginForm").addEventListener("submit", login);
 document.querySelector("#settingsForm").addEventListener("submit", saveSettings);
+document.querySelector("#resetDevicePin").addEventListener("click", async () => {
+  if (!window.confirm("确认将电视 PIN 重置为“上下左右上上”？电视下次同步后生效。")) return;
+  const button = document.querySelector("#resetDevicePin");
+  button.disabled = true;
+  try {
+    await api("/api/v1/admin/password/reset", { method: "POST", body: JSON.stringify({}) });
+    document.querySelector("#passwordResetStatus").textContent = "重置指令已发送，电视将在下次同步时应用。";
+    setNotice("电视 PIN 重置指令已排队");
+  } catch (error) {
+    handleError(error);
+  } finally {
+    button.disabled = false;
+  }
+});
 document.querySelector("#logoutButton").addEventListener("click", async () => {
   try {
     await api("/api/v1/admin/logout", { method: "POST" });

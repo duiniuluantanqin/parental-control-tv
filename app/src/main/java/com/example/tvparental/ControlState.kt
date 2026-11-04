@@ -287,8 +287,10 @@ object ControlState {
     }
 
     const val PASSWORD_LENGTH = 6
+    const val DEFAULT_REMOTE_PASSWORD = "UDLRUU"
     private const val PASSWORD_HASH_KEY = "unlock_password_hash"
     private const val PASSWORD_SALT_KEY = "unlock_password_salt"
+    private const val APPLIED_PASSWORD_RESET_ID_KEY = "applied_password_reset_id"
 
     fun hasUnlockPassword(context: Context): Boolean =
         prefs(context).getString(PASSWORD_HASH_KEY, null) != null
@@ -299,6 +301,19 @@ object ControlState {
         return prefs(context).edit()
             .putString(PASSWORD_SALT_KEY, salt)
             .putString(PASSWORD_HASH_KEY, hashPassword(salt, sequence))
+            .commit()
+    }
+
+    @Synchronized
+    fun applyRemotePasswordReset(context: Context, commandId: String): Boolean {
+        if (commandId.isBlank() || commandId.length > 64) return false
+        val preferences = prefs(context)
+        if (preferences.getString(APPLIED_PASSWORD_RESET_ID_KEY, null) == commandId) return false
+        val salt = java.util.UUID.randomUUID().toString()
+        return preferences.edit()
+            .putString(PASSWORD_SALT_KEY, salt)
+            .putString(PASSWORD_HASH_KEY, hashPassword(salt, DEFAULT_REMOTE_PASSWORD))
+            .putString(APPLIED_PASSWORD_RESET_ID_KEY, commandId)
             .commit()
     }
 
