@@ -4,13 +4,20 @@ import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import org.json.JSONArray
+import org.json.JSONObject
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
 
+data class UsageWindow(
+    val startMinute: Int,
+    val endMinute: Int,
+)
+
 data class ParentSettings(
-    val dailyLimitMinutes: Int = 60,
+    val weeklyDailyLimitMinutes: List<Int> = List(7) { 60 },
+    val usageTimeWindows: List<List<UsageWindow>> = List(7) { emptyList() },
     val questionIntervalMinutes: Int = 10,
     val wrongLockMinutes: Int = 10,
     val syncIntervalMinutes: Int = 5,
@@ -23,7 +30,8 @@ object ControlState {
     private const val USED_MILLIS_KEY = "used_millis"
     private const val LOCKOUT_UNTIL_KEY = "lockout_until"
     private const val REMOTE_QUESTIONS_KEY = "remote_questions"
-    private const val DAILY_LIMIT_KEY = "daily_limit_minutes"
+    private const val WEEKLY_LIMITS_KEY = "weekly_daily_limit_minutes"
+    private const val USAGE_WINDOWS_KEY = "usage_time_windows"
     private const val QUESTION_INTERVAL_KEY = "question_interval_minutes"
     private const val WRONG_LOCK_KEY = "wrong_lock_minutes"
     private const val SYNC_INTERVAL_KEY = "sync_interval_minutes"
@@ -33,8 +41,27 @@ object ControlState {
 
     fun settings(context: Context): ParentSettings {
         val preferences = prefs(context)
+        val weeklyLimits = runCatching {
+            JSONObject(preferences.getString(WEEKLY_LIMITS_KEY, null) ?: "{}")
+        }.getOrDefault(JSONObject())
+        val storedWindows = runCatching {
+            JSONObject(preferences.getString(USAGE_WINDOWS_KEY, null) ?: "{}")
+        }.getOrDefault(JSONObject())
+        val dailyLimits = (1..7).map { day -> weeklyLimits.optInt(day.toString(), 60).coerceIn(0, 1440) }
+        val usageWindows = (1..7).map { day ->
+            val windows = storedWindows.optJSONArray(day.toString()) ?: JSONArray()
+            (0 until windows.length()).mapNotNull { index ->
+                windows.optJSONObject(index)?.let { window ->
+                    UsageWindow(
+                        window.optInt("start").coerceIn(0, 1439),
+                        window.optInt("end").coerceIn(0, 1439),
+                    )
+                }
+            }
+        }
         return ParentSettings(
-            dailyLimitMinutes = preferences.getInt(DAILY_LIMIT_KEY, 60).coerceIn(1, 1440),
+            weeklyDailyLimitMinutes = dailyLimits,
+            usageTimeWindows = usageWindows,
             questionIntervalMinutes = preferences.getInt(QUESTION_INTERVAL_KEY, 10).coerceIn(1, 240),
             wrongLockMinutes = preferences.getInt(WRONG_LOCK_KEY, 10).coerceIn(1, 1440),
             syncIntervalMinutes = preferences.getInt(SYNC_INTERVAL_KEY, 5).coerceIn(1, 60),
@@ -42,8 +69,23 @@ object ControlState {
     }
 
     fun updateSettings(context: Context, settings: ParentSettings) {
+        val weeklyLimits = JSONObject().apply {
+            settings.weeklyDailyLimitMinutes.take(7).forEachIndexed { index, minutes ->
+                put((index + 1).toString(), minutes.coerceIn(0, 1440))
+            }
+        }
+        val usageWindows = JSONObject().apply {
+            settings.usageTimeWindows.take(7).forEachIndexed { index, windows ->
+                put((index + 1).toString(), JSONArray().apply {
+                    windows.take(8).forEach { window ->
+                        put(JSONObject().put("start", window.startMinute).put("end", window.endMinute))
+                    }
+                })
+            }
+        }
         prefs(context).edit()
-            .putInt(DAILY_LIMIT_KEY, settings.dailyLimitMinutes.coerceIn(1, 1440))
+            .putString(WEEKLY_LIMITS_KEY, weeklyLimits.toString())
+            .putString(USAGE_WINDOWS_KEY, usageWindows.toString())
             .putInt(QUESTION_INTERVAL_KEY, settings.questionIntervalMinutes.coerceIn(1, 240))
             .putInt(WRONG_LOCK_KEY, settings.wrongLockMinutes.coerceIn(1, 1440))
             .putInt(SYNC_INTERVAL_KEY, settings.syncIntervalMinutes.coerceIn(1, 60))
@@ -65,19 +107,35 @@ object ControlState {
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
-        val countedMillis = (now - maxOf(now - elapsedMillis, todayStart)).coerceAtLeast(0L)
+        val start = maxOf(now - elapsedMillis, todayStart)
+        val countedMillis = allowedUsageMillis(settings(context), start, now)
         if (countedMillis == 0L) return
         val current = prefs(context).getLong(USED_MILLIS_KEY, 0L).coerceAtLeast(0L)
-        val limit = settings(context).dailyLimitMinutes * MILLIS_PER_MINUTE + tempExtension(context)
+        val limit = todayDailyLimitMinutes(context) * MILLIS_PER_MINUTE + tempExtension(context)
         prefs(context).edit().putLong(USED_MILLIS_KEY, (current + countedMillis).coerceAtMost(limit)).apply()
     }
 
     fun isDailyLimitReached(context: Context): Boolean {
         val used = usedMillis(context)
-        val limit = settings(context).dailyLimitMinutes * MILLIS_PER_MINUTE
+        val limit = todayDailyLimitMinutes(context) * MILLIS_PER_MINUTE
         val extension = tempExtension(context)
         return used >= limit + extension
     }
+
+    fun todayDailyLimitMinutes(context: Context): Int =
+        settings(context).weeklyDailyLimitMinutes[weekdayIndex(Calendar.getInstance())]
+
+    fun isUsageWindowAllowed(context: Context): Boolean =
+        isUsageWindowAllowed(settings(context), System.currentTimeMillis())
+
+    fun millisUntilNextAllowedUsageWindow(context: Context): Long {
+        if (isUsageWindowAllowed(context)) return 0L
+        return nextUsageWindowTransition(settings(context), System.currentTimeMillis())
+            ?: millisUntilNextDay()
+    }
+
+    fun millisUntilNextUsageWindowBoundary(context: Context): Long? =
+        nextUsageWindowTransition(settings(context), System.currentTimeMillis())
 
     fun tempExtension(context: Context): Long {
         resetForNewDay(context)
@@ -90,6 +148,81 @@ object ControlState {
             .putLong(TEMP_EXTENSION_KEY, PASSWORD_EXTENSION_MINUTES * MILLIS_PER_MINUTE)
             .apply()
     }
+
+    private fun allowedUsageMillis(settings: ParentSettings, startMillis: Long, endMillis: Long): Long {
+        var cursor = startMillis
+        var total = 0L
+        while (cursor < endMillis) {
+            val nextMinute = Calendar.getInstance().apply {
+                timeInMillis = cursor
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+                add(Calendar.MINUTE, 1)
+            }.timeInMillis.coerceAtLeast(cursor + 1L)
+            val segmentEnd = minOf(endMillis, nextMinute)
+            if (isUsageWindowAllowed(settings, cursor)) total += segmentEnd - cursor
+            cursor = segmentEnd
+        }
+        return total
+    }
+
+    private fun isUsageWindowAllowed(settings: ParentSettings, timeMillis: Long): Boolean {
+        val calendar = Calendar.getInstance().apply { timeInMillis = timeMillis }
+        val dayIndex = weekdayIndex(calendar)
+        val minute = calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
+        val todayWindows = settings.usageTimeWindows[dayIndex]
+        if (todayWindows.isEmpty()) return true
+        if (todayWindows.any { window ->
+                if (window.startMinute < window.endMinute) {
+                    minute >= window.startMinute && minute < window.endMinute
+                } else {
+                    minute >= window.startMinute
+                }
+            }) return true
+
+        val previousWindows = settings.usageTimeWindows[(dayIndex + 6) % 7]
+        return previousWindows.any { window ->
+            window.startMinute > window.endMinute && minute < window.endMinute
+        }
+    }
+
+    private fun nextUsageWindowTransition(settings: ParentSettings, now: Long): Long? {
+        if (settings.usageTimeWindows.all { it.isEmpty() }) return null
+        val midnight = Calendar.getInstance().apply {
+            timeInMillis = now
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val candidates = sortedSetOf<Long>()
+        for (dayOffset in -1..8) {
+            val day = (midnight.clone() as Calendar).apply { add(Calendar.DAY_OF_MONTH, dayOffset) }
+            if (dayOffset > 0) candidates.add(day.timeInMillis)
+            for (window in settings.usageTimeWindows[weekdayIndex(day)]) {
+                val start = (day.clone() as Calendar).apply {
+                    set(Calendar.HOUR_OF_DAY, window.startMinute / 60)
+                    set(Calendar.MINUTE, window.startMinute % 60)
+                }
+                val end = (day.clone() as Calendar).apply {
+                    set(Calendar.HOUR_OF_DAY, window.endMinute / 60)
+                    set(Calendar.MINUTE, window.endMinute % 60)
+                    if (window.endMinute <= window.startMinute) add(Calendar.DAY_OF_MONTH, 1)
+                }
+                candidates.add(start.timeInMillis)
+                candidates.add(end.timeInMillis)
+            }
+        }
+        for (candidate in candidates) {
+            if (candidate <= now) continue
+            val allowedBefore = isUsageWindowAllowed(settings, candidate - 1L)
+            val allowedAfter = isUsageWindowAllowed(settings, candidate)
+            if (allowedBefore != allowedAfter) return candidate - now
+        }
+        return null
+    }
+
+    private fun weekdayIndex(calendar: Calendar): Int = (calendar.get(Calendar.DAY_OF_WEEK) + 5) % 7
 
     fun lockoutUntil(context: Context): Long = prefs(context).getLong(LOCKOUT_UNTIL_KEY, 0L)
 

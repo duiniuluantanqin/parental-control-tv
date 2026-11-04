@@ -50,8 +50,24 @@ object RemoteSync {
             val payload = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             val state = JSONObject(payload)
             val remoteSettings = state.getJSONObject("settings")
+            val weeklyLimitsJson = remoteSettings.getJSONObject("weeklyDailyLimitMinutes")
+            val weeklyLimits = (1..7).map { day ->
+                weeklyLimitsJson.getInt(day.toString()).coerceIn(0, 1440)
+            }
+            val windowsJson = remoteSettings.getJSONObject("usageTimeWindows")
+            val usageWindows = (1..7).map { day ->
+                val dayWindows = windowsJson.getJSONArray(day.toString())
+                (0 until dayWindows.length()).map { index ->
+                    val window = dayWindows.getJSONObject(index)
+                    UsageWindow(
+                        minuteOfDay(window.getString("start")),
+                        minuteOfDay(window.getString("end")),
+                    )
+                }
+            }
             val settings = ParentSettings(
-                dailyLimitMinutes = remoteSettings.getInt("dailyLimitMinutes").coerceIn(1, 1440),
+                weeklyDailyLimitMinutes = weeklyLimits,
+                usageTimeWindows = usageWindows,
                 questionIntervalMinutes = remoteSettings.getInt("questionIntervalMinutes").coerceIn(1, 240),
                 wrongLockMinutes = remoteSettings.getInt("wrongLockMinutes").coerceIn(1, 1440),
                 syncIntervalMinutes = remoteSettings.optInt("syncIntervalMinutes", 5).coerceIn(1, 60),
@@ -80,5 +96,14 @@ object RemoteSync {
             val result = sync(applicationContext)
             Handler(applicationContext.mainLooper).post { onComplete(result) }
         }.start()
+    }
+
+    private fun minuteOfDay(value: String): Int {
+        val parts = value.split(":")
+        require(parts.size == 2 && parts.all { it.length == 2 }) { "无效的使用时段" }
+        val hour = parts[0].toIntOrNull() ?: error("无效的使用时段")
+        val minute = parts[1].toIntOrNull() ?: error("无效的使用时段")
+        require(hour in 0..23 && minute in 0..59) { "无效的使用时段" }
+        return hour * 60 + minute
     }
 }

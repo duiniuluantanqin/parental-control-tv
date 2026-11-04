@@ -26,6 +26,11 @@ class QuestionAlarmReceiver : BroadcastReceiver() {
                 scheduleAfter(context, ControlState.lockoutUntil(context) - now)
             }
 
+            !ControlState.isUsageWindowAllowed(context) -> {
+                startOverlay(context, QuestionOverlayService.ACTION_USAGE_WINDOW)
+                scheduleAfter(context, ControlState.millisUntilNextAllowedUsageWindow(context))
+            }
+
             else -> startOverlay(context, QuestionOverlayService.ACTION_SHOW_QUESTION)
         }
     }
@@ -54,6 +59,7 @@ class QuestionAlarmReceiver : BroadcastReceiver() {
             when {
                 ControlState.isDailyLimitReached(context) -> scheduleAfter(context, ControlState.millisUntilNextDay())
                 ControlState.lockoutUntil(context) > now -> scheduleAfter(context, ControlState.lockoutUntil(context) - now)
+                !ControlState.isUsageWindowAllowed(context) -> scheduleAfter(context, ControlState.millisUntilNextAllowedUsageWindow(context))
                 else -> scheduleNext(context)
             }
         }

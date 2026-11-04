@@ -50,6 +50,7 @@ class QuestionOverlayService : Service() {
         when (intent?.action) {
             ACTION_DAILY_LIMIT -> showDailyLock()
             ACTION_LOCKOUT -> showLockout()
+            ACTION_USAGE_WINDOW -> showUsageWindowLock()
             ACTION_REFRESH_STATE -> refreshBlockingState()
             ACTION_HIDE -> hideOverlay()
             else -> showQuestion()
@@ -73,6 +74,7 @@ class QuestionOverlayService : Service() {
         when {
             ControlState.isDailyLimitReached(this) -> return showDailyLock()
             ControlState.lockoutUntil(this) > System.currentTimeMillis() -> return showLockout()
+            !ControlState.isUsageWindowAllowed(this) -> return showUsageWindowLock()
             currentMode == MODE_QUESTION && overlayView != null -> return
         }
         ControlState.clearWrongAnswerLock(this)
@@ -255,6 +257,18 @@ class QuestionOverlayService : Service() {
         renderLock(MODE_WRONG_LOCK)
     }
 
+    private fun showUsageWindowLock() {
+        if (!Settings.canDrawOverlays(this)) {
+            stopSelf()
+            return
+        }
+        if (ControlState.isDailyLimitReached(this)) return showDailyLock()
+        if (ControlState.lockoutUntil(this) > System.currentTimeMillis()) return showLockout()
+        if (ControlState.isUsageWindowAllowed(this)) return refreshBlockingState()
+        QuestionAlarmReceiver.scheduleForCurrentState(this)
+        renderLock(MODE_USAGE_WINDOW)
+    }
+
     private fun renderLock(mode: Int) {
         if (currentMode == mode && overlayView != null) {
             updateLockCountdown()
@@ -272,7 +286,11 @@ class QuestionOverlayService : Service() {
             setOnKeyListener { _, _, _ -> true }
         }
         val title = TextView(this).apply {
-            text = if (mode == MODE_DAILY_LOCK) "今日可用看电视时间已用完" else "本次答题错误"
+            text = when (mode) {
+                MODE_DAILY_LOCK -> "今日可用看电视时间已用完"
+                MODE_USAGE_WINDOW -> "当前不在允许使用时段"
+                else -> "本次答题错误"
+            }
             setTextColor(Color.rgb(220, 235, 222))
             textSize = 28f
             gravity = Gravity.CENTER
@@ -282,6 +300,8 @@ class QuestionOverlayService : Service() {
         val message = TextView(this).apply {
             text = if (mode == MODE_DAILY_LOCK) {
                 "今日额度已用完，明日恢复使用"
+            } else if (mode == MODE_USAGE_WINDOW) {
+                "请在家长设置的可用时段内观看"
             } else {
                 "本题只有一次作答机会，请等待解锁"
             }
@@ -298,7 +318,16 @@ class QuestionOverlayService : Service() {
             gravity = Gravity.CENTER
         }
         root.addView(lockCountdown, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(56)))
-        addUnlockPad(root, mode)
+        if (mode == MODE_USAGE_WINDOW) {
+            root.addView(TextView(this).apply {
+                text = "电视将在下一个可用时段自动恢复"
+                setTextColor(Color.rgb(150, 160, 152))
+                textSize = 18f
+                gravity = Gravity.CENTER
+            }, matchParams())
+        } else {
+            addUnlockPad(root, mode)
+        }
         attachOverlay(root)
         updateLockCountdown()
         unlockPad?.let { pad -> root.post { pad.requestFocus() } }
@@ -372,12 +401,25 @@ class QuestionOverlayService : Service() {
             renderLock(MODE_DAILY_LOCK)
             return
         }
+        if (!ControlState.isUsageWindowAllowed(this)) {
+            renderLock(MODE_USAGE_WINDOW)
+            return
+        }
         QuestionAlarmReceiver.scheduleNext(this)
         hideOverlay()
     }
 
     private fun updateLockCountdown() {
-        if (currentMode != MODE_DAILY_LOCK && currentMode != MODE_WRONG_LOCK) return
+        if (currentMode != MODE_DAILY_LOCK && currentMode != MODE_WRONG_LOCK && currentMode != MODE_USAGE_WINDOW) return
+        if (currentMode == MODE_USAGE_WINDOW) {
+            if (ControlState.isUsageWindowAllowed(this)) {
+                return refreshBlockingState()
+            }
+            lockCountdown?.text = "下个可用时段 · 还剩 ${formatRemaining(ControlState.millisUntilNextAllowedUsageWindow(this))}"
+            handler.removeCallbacks(lockTicker)
+            handler.postDelayed(lockTicker, 1_000L)
+            return
+        }
         if (currentMode == MODE_DAILY_LOCK && !ControlState.isDailyLimitReached(this)) {
             if (ControlState.lockoutUntil(this) > System.currentTimeMillis()) {
                 renderLock(MODE_WRONG_LOCK)
@@ -393,6 +435,8 @@ class QuestionOverlayService : Service() {
                 ControlState.clearWrongAnswerLock(this)
                 if (ControlState.isDailyLimitReached(this)) {
                     renderLock(MODE_DAILY_LOCK)
+                } else if (!ControlState.isUsageWindowAllowed(this)) {
+                    renderLock(MODE_USAGE_WINDOW)
                 } else {
                     QuestionAlarmReceiver.scheduleAfter(this, 1_000L)
                     hideOverlay()
@@ -411,7 +455,8 @@ class QuestionOverlayService : Service() {
         when {
             ControlState.isDailyLimitReached(this) -> showDailyLock()
             ControlState.lockoutUntil(this) > System.currentTimeMillis() -> showLockout()
-            currentMode == MODE_DAILY_LOCK || currentMode == MODE_WRONG_LOCK -> {
+            !ControlState.isUsageWindowAllowed(this) -> showUsageWindowLock()
+            currentMode == MODE_DAILY_LOCK || currentMode == MODE_WRONG_LOCK || currentMode == MODE_USAGE_WINDOW -> {
                 QuestionAlarmReceiver.scheduleNext(this)
                 hideOverlay()
             }
@@ -552,6 +597,7 @@ class QuestionOverlayService : Service() {
         const val ACTION_SHOW_QUESTION = "com.example.tvparental.action.SHOW_QUESTION"
         const val ACTION_DAILY_LIMIT = "com.example.tvparental.action.DAILY_LIMIT"
         const val ACTION_LOCKOUT = "com.example.tvparental.action.LOCKOUT"
+        const val ACTION_USAGE_WINDOW = "com.example.tvparental.action.USAGE_WINDOW"
         const val ACTION_REFRESH_STATE = "com.example.tvparental.action.REFRESH_STATE"
         const val ACTION_HIDE = "com.example.tvparental.action.HIDE"
 
@@ -561,6 +607,7 @@ class QuestionOverlayService : Service() {
         private const val MODE_QUESTION = 1
         private const val MODE_DAILY_LOCK = 2
         private const val MODE_WRONG_LOCK = 3
+        private const val MODE_USAGE_WINDOW = 4
         private const val MAX_PASSWORD_ATTEMPTS = 5
         private const val PASSWORD_COOLDOWN_MS = 30_000L
     }

@@ -41,12 +41,17 @@
 
     <section id="settingsPage" aria-labelledby="settingsTitle" hidden>
       <div class="section-heading">
-        <div><h1 id="settingsTitle">使用规则</h1><p>安排每天的可用时长与答题节奏。</p></div>
+        <div><h1 id="settingsTitle">使用规则</h1><p>分别设置每周额度与每天的可用时段。</p></div>
       </div>
       <form id="settingsForm" class="settings-panel">
-        <div class="daily-limit">
-          <div><label for="dailyLimit">每日可用时长</label><p>每天重新计算，额度用完后暂停至次日。</p></div>
-          <div class="limit-input"><input id="dailyLimit" type="number" min="1" max="1440" value="60" required><span>分钟 / 天</span></div>
+        <div class="weekly-heading">
+          <div><h2>每周使用额度</h2><p>时段留空表示全天可用；时长设为 0 表示当天不可使用。允许设置跨午夜时段。</p></div>
+        </div>
+        <div class="weekly-table-wrap">
+          <table class="weekly-table">
+            <thead><tr><th scope="col">星期</th><th scope="col">使用时长</th><th scope="col">允许使用时段</th></tr></thead>
+            <tbody id="weeklyRows"></tbody>
+          </table>
         </div>
         <div class="settings-grid">
           <label for="questionInterval">答题间隔 <span class="input-with-unit"><input id="questionInterval" type="number" min="1" max="240" value="10" required><span>分钟</span></span><small>使用多久后回答一道题</small></label>

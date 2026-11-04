@@ -166,7 +166,7 @@ class MainActivity : Activity() {
 
     private fun refreshStatus() {
         val settings = ControlState.settings(this)
-        usageStatus.text = "今日已使用 ${ControlState.todayUsageLabel(this)} / ${settings.dailyLimitMinutes} 分钟"
+        usageStatus.text = "今日已使用 ${ControlState.todayUsageLabel(this)} / ${ControlState.todayDailyLimitMinutes(this)} 分钟"
         settingsStatus.text = "每 ${settings.questionIntervalMinutes} 分钟答题 · 答错锁定 ${settings.wrongLockMinutes} 分钟 · 每 ${settings.syncIntervalMinutes} 分钟同步 · 题库 ${QuestionBank.all(this).size} 道"
         permissionStatus.text = if (canDrawOverlays()) "悬浮答题权限：已开启" else "悬浮答题权限：未开启（请在系统页面中允许）"
         passwordStatus.text = if (ControlState.hasUnlockPassword(this)) "解锁密码：已设置" else "解锁密码：未设置（锁定后将无法用密码解锁）"

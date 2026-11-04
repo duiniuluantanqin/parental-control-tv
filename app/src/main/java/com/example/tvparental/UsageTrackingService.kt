@@ -84,6 +84,7 @@ class UsageTrackingService : Service() {
         val action = when {
             ControlState.isDailyLimitReached(this) -> QuestionOverlayService.ACTION_DAILY_LIMIT
             ControlState.lockoutUntil(this) > System.currentTimeMillis() -> QuestionOverlayService.ACTION_LOCKOUT
+            !ControlState.isUsageWindowAllowed(this) -> QuestionOverlayService.ACTION_USAGE_WINDOW
             else -> null
         }
         if (action == lastEnforcementAction) return
@@ -96,9 +97,8 @@ class UsageTrackingService : Service() {
     }
 
     private fun updateNotification() {
-        val settings = ControlState.settings(this)
         val notification = buildNotification(
-            "今日已用 ${ControlState.todayUsageLabel(this)} / ${settings.dailyLimitMinutes} 分钟",
+            "今日已用 ${ControlState.todayUsageLabel(this)} / ${ControlState.todayDailyLimitMinutes(this)} 分钟",
         )
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification)
     }
@@ -107,9 +107,11 @@ class UsageTrackingService : Service() {
         if (!wasInteractive || ControlState.lockoutUntil(this) > System.currentTimeMillis()) {
             return SAMPLE_INTERVAL_MS
         }
-        val limitMillis = ControlState.settings(this).dailyLimitMinutes * 60_000L
+        val limitMillis = ControlState.todayDailyLimitMinutes(this) * 60_000L + ControlState.tempExtension(this)
         val remaining = limitMillis - ControlState.usedMillis(this)
-        return if (remaining > 0L) minOf(SAMPLE_INTERVAL_MS, remaining).coerceAtLeast(100L) else SAMPLE_INTERVAL_MS
+        val quotaDelay = if (remaining > 0L) remaining.coerceAtLeast(100L) else SAMPLE_INTERVAL_MS
+        val windowDelay = ControlState.millisUntilNextUsageWindowBoundary(this) ?: SAMPLE_INTERVAL_MS
+        return minOf(SAMPLE_INTERVAL_MS, quotaDelay, windowDelay.coerceAtLeast(100L))
     }
 
     private fun syncRemoteIfDue(force: Boolean = false) {

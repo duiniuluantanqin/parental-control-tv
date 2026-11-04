@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 import os
+from datetime import time as datetime_time
 import secrets
 import threading
 import time
@@ -30,24 +31,68 @@ MAX_BODY_BYTES = 64 * 1024
 SESSION_SECONDS = 12 * 60 * 60
 SESSION_COOKIE = "tvparental_session"
 
+WEEKDAYS = tuple(str(day) for day in range(1, 8))
 DEFAULT_SETTINGS = {
-    "dailyLimitMinutes": 60,
+    "weeklyDailyLimitMinutes": {day: 60 for day in WEEKDAYS},
+    "usageTimeWindows": {day: [] for day in WEEKDAYS},
     "questionIntervalMinutes": 10,
     "wrongLockMinutes": 10,
     "syncIntervalMinutes": 5,
 }
 
 
-def validate_settings(value: object) -> dict[str, int]:
+def validate_settings(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError("settings must be an object")
     limits = {
-        "dailyLimitMinutes": (1, 1440),
         "questionIntervalMinutes": (1, 240),
         "wrongLockMinutes": (1, 1440),
         "syncIntervalMinutes": (1, 60),
     }
-    result: dict[str, int] = {}
+    daily_limits = value.get("weeklyDailyLimitMinutes", DEFAULT_SETTINGS["weeklyDailyLimitMinutes"])
+    if not isinstance(daily_limits, dict) or set(daily_limits) != set(WEEKDAYS):
+        raise ValueError("weeklyDailyLimitMinutes must define all seven weekdays")
+    normalized_limits: dict[str, int] = {}
+    for day in WEEKDAYS:
+        number = daily_limits[day]
+        if isinstance(number, bool) or not isinstance(number, int) or not 0 <= number <= 1440:
+            raise ValueError(f"weeklyDailyLimitMinutes[{day}] must be an integer from 0 to 1440")
+        normalized_limits[day] = number
+
+    windows = value.get("usageTimeWindows", DEFAULT_SETTINGS["usageTimeWindows"])
+    if not isinstance(windows, dict) or set(windows) != set(WEEKDAYS):
+        raise ValueError("usageTimeWindows must define all seven weekdays")
+    normalized_windows: dict[str, list[dict[str, str]]] = {}
+    for day in WEEKDAYS:
+        day_windows = windows[day]
+        if not isinstance(day_windows, list) or len(day_windows) > 8:
+            raise ValueError(f"usageTimeWindows[{day}] must be a list of at most 8 time ranges")
+        normalized_day: list[dict[str, str]] = []
+        for window in day_windows:
+            if not isinstance(window, dict):
+                raise ValueError("each usage time range must be an object")
+            start = window.get("start")
+            end = window.get("end")
+            try:
+                start_time = datetime_time.fromisoformat(start) if isinstance(start, str) else None
+                end_time = datetime_time.fromisoformat(end) if isinstance(end, str) else None
+            except ValueError:
+                start_time = end_time = None
+            if (
+                start_time is None or end_time is None
+                or start_time.isoformat(timespec="minutes") != start
+                or end_time.isoformat(timespec="minutes") != end
+            ):
+                raise ValueError("time ranges must use HH:MM values")
+            if start == end:
+                raise ValueError("a time range start and end must differ")
+            normalized_day.append({"start": start, "end": end})
+        normalized_windows[day] = normalized_day
+
+    result: dict[str, object] = {
+        "weeklyDailyLimitMinutes": normalized_limits,
+        "usageTimeWindows": normalized_windows,
+    }
     for name, (minimum, maximum) in limits.items():
         number = value.get(name, DEFAULT_SETTINGS[name])
         if isinstance(number, bool) or not isinstance(number, int) or not minimum <= number <= maximum:

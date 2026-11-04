@@ -107,7 +107,6 @@ class AdminApiTests(unittest.TestCase):
         state = server.STORE.load()
         question = state["questions"][0]
         state["questions"] = [question]
-        state["settings"]["dailyLimitMinutes"] = 90
         server.STORE.save(state)
         with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("server.generate_random_questions", side_effect=self.random_batch) as generate:
             status, _ = self.request("/api/v1/device/answers", method="POST", authenticated=False,
@@ -121,7 +120,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(len({item["prompt"] for item in state["questions"]}), 50)
         self.assertEqual({item["category"] for item in state["questions"]}, {"古诗词", "数学", "科学", "地理历史"})
         self.assertEqual({item["difficulty"] for item in state["questions"]}, {"中"})
-        self.assertEqual(state["settings"]["dailyLimitMinutes"], 90)
+        self.assertEqual(state["settings"]["weeklyDailyLimitMinutes"]["1"], 60)
         self.assertNotIn(question["id"], [item["id"] for item in state["questions"]])
 
     def test_empty_bank_stays_empty_without_key_and_admin_can_delete_last_question(self) -> None:
@@ -236,7 +235,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(status, 401)
         status, _ = self.request(
             "/api/v1/admin/settings", method="POST", authenticated=False,
-            body={"dailyLimitMinutes": 100}, headers={"Authorization": "Bearer old-token"},
+            body={}, headers={"Authorization": "Bearer old-token"},
         )
         self.assertEqual(status, 401)
 
@@ -275,7 +274,7 @@ class AdminApiTests(unittest.TestCase):
 
     def test_cross_origin_writes_are_rejected(self) -> None:
         status, _ = self.request(
-            "/api/v1/admin/settings", method="POST", body={"dailyLimitMinutes": 100},
+            "/api/v1/admin/settings", method="POST", body={},
             headers={"Origin": "https://another-site.example"},
         )
         self.assertEqual(status, 403)
@@ -311,7 +310,12 @@ class AdminApiTests(unittest.TestCase):
 
     def test_admin_can_update_settings_and_add_questions(self) -> None:
         settings = {
-            "dailyLimitMinutes": 75,
+            "weeklyDailyLimitMinutes": {str(day): 75 + day for day in range(1, 8)},
+            "usageTimeWindows": {
+                "1": [{"start": "08:00", "end": "20:00"}],
+                "2": [{"start": "22:00", "end": "02:00"}],
+                "3": [], "4": [], "5": [], "6": [], "7": [],
+            },
             "questionIntervalMinutes": 12,
             "wrongLockMinutes": 10,
             "syncIntervalMinutes": 3,
@@ -319,6 +323,8 @@ class AdminApiTests(unittest.TestCase):
         status, body = self.request("/api/v1/admin/settings", method="POST", body=settings)
         self.assertEqual(status, 200)
         self.assertEqual(body["settings"], settings)
+        _, device_state = self.request("/api/v1/device/state", authenticated=False)
+        self.assertEqual(device_state["settings"], settings)
 
         question = {
             "category": "数学",
@@ -338,7 +344,13 @@ class AdminApiTests(unittest.TestCase):
         status, _ = self.request(
             "/api/v1/admin/settings",
             method="POST",
-            body={"dailyLimitMinutes": 0},
+            body={"weeklyDailyLimitMinutes": {**server.DEFAULT_SETTINGS["weeklyDailyLimitMinutes"], "1": -1}},
+        )
+        self.assertEqual(status, 400)
+        status, _ = self.request(
+            "/api/v1/admin/settings",
+            method="POST",
+            body={"usageTimeWindows": {**server.DEFAULT_SETTINGS["usageTimeWindows"], "1": [{"start": "08:00", "end": "08:00"}]}},
         )
         self.assertEqual(status, 400)
         status, _ = self.request(
