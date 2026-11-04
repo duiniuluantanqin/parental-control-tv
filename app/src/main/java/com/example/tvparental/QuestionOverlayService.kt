@@ -31,6 +31,8 @@ class QuestionOverlayService : Service() {
     private var currentMode = MODE_NONE
     private var lockCountdown: TextView? = null
     private var answerSubmitted = false
+    private var unlockPad: PasswordPad? = null
+    private var failedAttempts = 0
 
     private val lockTicker = object : Runnable {
         override fun run() {
@@ -117,7 +119,7 @@ class QuestionOverlayService : Service() {
         optionTexts.forEachIndexed { index, text ->
             val option = TextView(this).apply {
                 this.text = text
-                textSize = 24f
+                textSize = 22f
                 gravity = Gravity.CENTER
                 maxLines = 2
                 setPadding(dp(18), dp(12), dp(18), dp(12))
@@ -162,12 +164,18 @@ class QuestionOverlayService : Service() {
                     GridLayout.spec(index % 2, 1f),
                 ).apply {
                     width = 0
-                    height = 0
-                    setMargins(dp(10), dp(10), dp(10), dp(10))
+                    height = dp(84)
+                    setMargins(dp(8), dp(8), dp(8), dp(8))
                 },
             )
         }
-        root.addView(grid, weightedParams(2.2f))
+        root.addView(
+            grid,
+            LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { setMargins(dp(60), dp(4), dp(60), dp(12)) },
+        )
 
         val status = TextView(this).apply {
             text = "答错后将锁定电视一段时间"
@@ -260,7 +268,7 @@ class QuestionOverlayService : Service() {
         val root = createRoot().apply {
             gravity = Gravity.CENTER
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(100), dp(70), dp(100), dp(70))
+            setPadding(dp(48), dp(32), dp(48), dp(32))
             setOnKeyListener { _, _, _ -> true }
         }
         val title = TextView(this).apply {
@@ -289,9 +297,69 @@ class QuestionOverlayService : Service() {
             textSize = 28f
             gravity = Gravity.CENTER
         }
-        root.addView(lockCountdown, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(90)))
+        root.addView(lockCountdown, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(56)))
+        if (mode == MODE_WRONG_LOCK) addUnlockPad(root)
         attachOverlay(root)
         updateLockCountdown()
+        unlockPad?.let { pad -> root.post { pad.requestFocus() } }
+    }
+
+    private fun addUnlockPad(root: LinearLayout) {
+        failedAttempts = 0
+        if (!ControlState.hasUnlockPassword(this)) {
+            root.addView(TextView(this).apply {
+                text = "家长可在应用主页设置解锁密码"
+                setTextColor(Color.rgb(150, 160, 152))
+                textSize = 18f
+                gravity = Gravity.CENTER
+            }, matchParams())
+            return
+        }
+        val idleHint = "家长解锁：用方向键输入 6 位密码"
+        val hint = TextView(this).apply {
+            text = idleHint
+            setTextColor(Color.rgb(193, 203, 194))
+            textSize = 18f
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, dp(10))
+        }
+        root.addView(hint, matchParams())
+        val pad = PasswordPad(this, true) { entered ->
+            if (ControlState.verifyUnlockPassword(this, entered)) {
+                failedAttempts = 0
+                unlockWrongLock()
+            } else {
+                failedAttempts++
+                unlockPad?.reset()
+                if (failedAttempts >= MAX_PASSWORD_ATTEMPTS) {
+                    failedAttempts = 0
+                    unlockPad?.inputEnabled = false
+                    hint.text = "错误次数过多，30 秒后再试"
+                    handler.postDelayed({
+                        unlockPad?.inputEnabled = true
+                        unlockPad?.reset()
+                        hint.text = idleHint
+                    }, PASSWORD_COOLDOWN_MS)
+                } else {
+                    hint.text = "密码错误，还可尝试 ${MAX_PASSWORD_ATTEMPTS - failedAttempts} 次"
+                }
+            }
+        }
+        unlockPad = pad
+        root.addView(pad, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { gravity = Gravity.CENTER_HORIZONTAL })
+    }
+
+    private fun unlockWrongLock() {
+        ControlState.clearWrongAnswerLock(this)
+        if (ControlState.isDailyLimitReached(this)) {
+            renderLock(MODE_DAILY_LOCK)
+            return
+        }
+        QuestionAlarmReceiver.scheduleNext(this)
+        hideOverlay()
     }
 
     private fun updateLockCountdown() {
@@ -355,15 +423,14 @@ class QuestionOverlayService : Service() {
 
     private fun createRoot() = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(64), dp(28), dp(64), dp(28))
-        setBackgroundColor(Color.rgb(20, 24, 25))
+        setPadding(dp(48), dp(28), dp(48), dp(28))
+        background = GradientDrawable().apply {
+            setColor(Color.rgb(20, 24, 25))
+            setStroke(dp(2), Color.rgb(70, 84, 76))
+            cornerRadius = dp(24).toFloat()
+        }
         isFocusable = true
         isFocusableInTouchMode = true
-        systemUiVisibility = (
-            View.SYSTEM_UI_FLAG_FULLSCREEN or
-                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-            )
         setOnKeyListener { _, keyCode, _ -> keyCode == KeyEvent.KEYCODE_BACK }
     }
 
@@ -375,16 +442,15 @@ class QuestionOverlayService : Service() {
             WindowManager.LayoutParams.TYPE_PHONE
         }
         val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
+            (resources.displayMetrics.widthPixels * 0.86f).toInt(),
+            (resources.displayMetrics.heightPixels * 0.82f).toInt(),
             type,
-            WindowManager.LayoutParams.FLAG_FULLSCREEN or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                WindowManager.LayoutParams.FLAG_DIM_BEHIND,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.CENTER
+            dimAmount = 0.65f
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
         }
         windowManager?.addView(root, params)
@@ -407,6 +473,7 @@ class QuestionOverlayService : Service() {
         overlayView?.let { view -> runCatching { windowManager?.removeViewImmediate(view) } }
         overlayView = null
         lockCountdown = null
+        unlockPad = null
     }
 
     private fun hideOverlay() {
@@ -480,5 +547,7 @@ class QuestionOverlayService : Service() {
         private const val MODE_QUESTION = 1
         private const val MODE_DAILY_LOCK = 2
         private const val MODE_WRONG_LOCK = 3
+        private const val MAX_PASSWORD_ATTEMPTS = 5
+        private const val PASSWORD_COOLDOWN_MS = 30_000L
     }
 }

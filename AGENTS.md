@@ -4,7 +4,8 @@
 
 - Target device: Thunderbird (LeiNiao) Android TV, Android 9/API 28.
 - ADB endpoint: `10.0.0.44:5555`.
-- The app presents full-screen multiple-choice questions above the current TV app. D-pad moves the selection and OK submits it.
+- The app presents multiple-choice questions in a large centered floating window (about 86% x 82% of the screen, dimmed background) above the current TV app. D-pad moves the selection and OK submits it.
+- A parent sets a 6-key D-pad unlock password (up/down/left/right) on the launcher; it is stored only as a salted SHA-256 hash. On the wrong-answer lock screen the password ends the lockout early; 5 wrong attempts trigger a 30-second cooldown. The daily-quota lock cannot be unlocked by password.
 - Parents manage the question bank and usage rules through a Web admin page, initially hosted on a local computer and later deployable to Alibaba Cloud ECS.
 
 ## Development rules
@@ -33,4 +34,4 @@
 - ECS deployment uses host-level Caddy + a `tvparental` systemd service running as dedicated user `tvparental-deploy`, code at `/var/www/html/tvparental`. `backend/compose.yaml` remains as a Docker alternative. Keep `backend/.env` and `backend/data/` private.
 - `.github/workflows/deploy-ecs.yml` auto-deploys backend changes on `main` via rsync + SSH + `systemctl restart tvparental`; required secrets are documented in `docs/DEPLOY_ECS.md`.
 - Windows local Android builds use `gradlew.bat assembleDebug`; Gradle Wrapper is pinned to 9.1.0.
-- TCL MultiScreen Interaction installation and full-screen overlay over the launcher were verified previously. Video-app overlay behavior and reboot recovery should be rechecked after significant Android changes.
+- TCL MultiScreen Interaction installation and the floating overlay over the launcher were verified previously. The launcher opens the overlay permission page on first launch (Android offers no install-time prompt); the app never grants it silently. The API 28 Android TV emulator has no overlay settings page, so grant it with `appops` there. Video-app overlay behavior and reboot recovery should be rechecked after significant Android changes.

@@ -2,6 +2,7 @@ package com.example.tvparental
 
 import android.content.Context
 import org.json.JSONArray
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
@@ -108,6 +109,33 @@ object ControlState {
             String.format(Locale.getDefault(), "%d分", minutes)
         }
     }
+
+    const val PASSWORD_LENGTH = 6
+    private const val PASSWORD_HASH_KEY = "unlock_password_hash"
+    private const val PASSWORD_SALT_KEY = "unlock_password_salt"
+
+    fun hasUnlockPassword(context: Context): Boolean =
+        prefs(context).getString(PASSWORD_HASH_KEY, null) != null
+
+    fun setUnlockPassword(context: Context, sequence: String): Boolean {
+        if (sequence.length != PASSWORD_LENGTH || sequence.any { it !in "UDLR" }) return false
+        val salt = java.util.UUID.randomUUID().toString()
+        return prefs(context).edit()
+            .putString(PASSWORD_SALT_KEY, salt)
+            .putString(PASSWORD_HASH_KEY, hashPassword(salt, sequence))
+            .commit()
+    }
+
+    fun verifyUnlockPassword(context: Context, sequence: String): Boolean {
+        val preferences = prefs(context)
+        val salt = preferences.getString(PASSWORD_SALT_KEY, null) ?: return false
+        val hash = preferences.getString(PASSWORD_HASH_KEY, null) ?: return false
+        return MessageDigest.isEqual(hash.toByteArray(), hashPassword(salt, sequence).toByteArray())
+    }
+
+    private fun hashPassword(salt: String, sequence: String): String =
+        MessageDigest.getInstance("SHA-256").digest("$salt:$sequence".toByteArray())
+            .joinToString("") { "%02x".format(it) }
 
     private fun resetForNewDay(context: Context) {
         val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(System.currentTimeMillis())
