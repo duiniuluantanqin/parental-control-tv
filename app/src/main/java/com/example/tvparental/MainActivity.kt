@@ -2,6 +2,7 @@ package com.example.tvparental
 
 import android.app.Activity
 import android.app.Dialog
+import android.app.admin.DevicePolicyManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.Color
@@ -26,10 +27,15 @@ class MainActivity : Activity() {
     private lateinit var syncStatus: TextView
     private lateinit var permissionStatus: TextView
     private lateinit var passwordStatus: TextView
+    private lateinit var adminStatus: TextView
     private lateinit var permissionButton: Button
     private lateinit var testButton: Button
     private lateinit var syncButton: Button
     private var autoOpenedOverlaySettings = false
+
+    companion object {
+        private const val REQUEST_CODE_ENABLE_ADMIN = 1001
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -61,16 +67,18 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(dp(72), dp(40), dp(72), dp(40))
         }
-        content.addView(TextView(this).apply {
-            text = getString(R.string.app_name)
-            setTextColor(Color.WHITE)
-            textSize = 36f
-            gravity = Gravity.CENTER
-        }, centeredParams())
-
-        usageStatus = statusText(26f)
-        usageStatus.setPadding(0, dp(24), 0, dp(8))
+        usageStatus = statusText(32f)
+        usageStatus.setPadding(0, dp(16), 0, dp(24))
         content.addView(usageStatus, centeredParams())
+
+        val versionText = TextView(this).apply {
+            text = "版本 ${packageManager.getPackageInfo(packageName, 0).versionName}"
+            setTextColor(Color.rgb(150, 160, 152))
+            textSize = 16f
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, dp(8))
+        }
+        content.addView(versionText, centeredParams())
 
         settingsStatus = statusText(18f)
         content.addView(settingsStatus, centeredParams())
@@ -83,8 +91,12 @@ class MainActivity : Activity() {
         content.addView(permissionStatus, centeredParams())
 
         passwordStatus = statusText(18f)
-        passwordStatus.setPadding(0, 0, 0, dp(16))
+        passwordStatus.setPadding(0, 0, 0, dp(4))
         content.addView(passwordStatus, centeredParams())
+
+        adminStatus = statusText(18f)
+        adminStatus.setPadding(0, 0, 0, dp(16))
+        content.addView(adminStatus, centeredParams())
 
         permissionButton = menuButton("打开悬浮窗权限设置", 18f) { openOverlaySettings() }
         content.addView(permissionButton, buttonParams())
@@ -158,6 +170,11 @@ class MainActivity : Activity() {
         settingsStatus.text = "每 ${settings.questionIntervalMinutes} 分钟答题 · 答错锁定 ${settings.wrongLockMinutes} 分钟 · 每 ${settings.syncIntervalMinutes} 分钟同步 · 题库 ${QuestionBank.all(this).size} 道"
         permissionStatus.text = if (canDrawOverlays()) "悬浮答题权限：已开启" else "悬浮答题权限：未开启（请在系统页面中允许）"
         passwordStatus.text = if (ControlState.hasUnlockPassword(this)) "解锁密码：已设置" else "解锁密码：未设置（锁定后将无法用密码解锁）"
+        adminStatus.text = if (ControlState.isDeviceAdminActive(this)) {
+            "卸载保护：已启用（卸载前需输入密码）"
+        } else {
+            "卸载保护：未启用（设置密码后自动启用）"
+        }
         testButton.isEnabled = canDrawOverlays()
         testButton.alpha = if (canDrawOverlays()) 1f else 0.45f
     }
@@ -200,12 +217,41 @@ class MainActivity : Activity() {
                 if (second == first) {
                     ControlState.setUnlockPassword(this, first)
                     confirmDialog.dismiss()
-                    refreshStatus()
-                    Toast.makeText(this, "解锁密码已保存", Toast.LENGTH_LONG).show()
+                    activateDeviceAdmin()
                 } else {
                     hint.text = "两次输入不一致，请重新输入"
                     pad.reset()
                 }
+            }
+        }
+    }
+
+    private fun activateDeviceAdmin() {
+        if (!ControlState.isDeviceAdminActive(this)) {
+            val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, ControlState.getDeviceAdminComponent(this@MainActivity))
+                putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "启用设备管理器后，卸载应用前需要先输入家长密码停用管理器")
+            }
+            try {
+                startActivityForResult(intent, REQUEST_CODE_ENABLE_ADMIN)
+            } catch (e: Exception) {
+                refreshStatus()
+                Toast.makeText(this, "解锁密码已保存", Toast.LENGTH_LONG).show()
+            }
+        } else {
+            refreshStatus()
+            Toast.makeText(this, "解锁密码已保存", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_CODE_ENABLE_ADMIN) {
+            refreshStatus()
+            if (resultCode == RESULT_OK) {
+                Toast.makeText(this, "解锁密码和卸载保护已启用", Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(this, "解锁密码已保存，但卸载保护未启用", Toast.LENGTH_LONG).show()
             }
         }
     }

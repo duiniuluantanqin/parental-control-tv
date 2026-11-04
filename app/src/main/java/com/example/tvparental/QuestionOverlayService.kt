@@ -298,13 +298,13 @@ class QuestionOverlayService : Service() {
             gravity = Gravity.CENTER
         }
         root.addView(lockCountdown, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(56)))
-        if (mode == MODE_WRONG_LOCK) addUnlockPad(root)
+        addUnlockPad(root, mode)
         attachOverlay(root)
         updateLockCountdown()
         unlockPad?.let { pad -> root.post { pad.requestFocus() } }
     }
 
-    private fun addUnlockPad(root: LinearLayout) {
+    private fun addUnlockPad(root: LinearLayout, mode: Int) {
         failedAttempts = 0
         if (!ControlState.hasUnlockPassword(this)) {
             root.addView(TextView(this).apply {
@@ -315,7 +315,11 @@ class QuestionOverlayService : Service() {
             }, matchParams())
             return
         }
-        val idleHint = "家长解锁：用方向键输入 6 位密码"
+        val idleHint = if (mode == MODE_DAILY_LOCK) {
+            "家长解锁：输入密码可延长 15 分钟"
+        } else {
+            "家长解锁：用方向键输入 6 位密码"
+        }
         val hint = TextView(this).apply {
             text = idleHint
             setTextColor(Color.rgb(193, 203, 194))
@@ -327,7 +331,11 @@ class QuestionOverlayService : Service() {
         val pad = PasswordPad(this, true) { entered ->
             if (ControlState.verifyUnlockPassword(this, entered)) {
                 failedAttempts = 0
-                unlockWrongLock()
+                if (mode == MODE_DAILY_LOCK) {
+                    unlockDailyLimit()
+                } else {
+                    unlockWrongLock()
+                }
             } else {
                 failedAttempts++
                 unlockPad?.reset()
@@ -350,6 +358,12 @@ class QuestionOverlayService : Service() {
             LinearLayout.LayoutParams.WRAP_CONTENT,
             LinearLayout.LayoutParams.WRAP_CONTENT,
         ).apply { gravity = Gravity.CENTER_HORIZONTAL })
+    }
+
+    private fun unlockDailyLimit() {
+        ControlState.grantPasswordExtension(this)
+        QuestionAlarmReceiver.scheduleNext(this)
+        hideOverlay()
     }
 
     private fun unlockWrongLock() {

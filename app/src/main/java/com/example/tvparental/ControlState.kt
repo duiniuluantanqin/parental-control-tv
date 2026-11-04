@@ -1,5 +1,7 @@
 package com.example.tvparental
 
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Context
 import org.json.JSONArray
 import java.security.MessageDigest
@@ -26,6 +28,8 @@ object ControlState {
     private const val WRONG_LOCK_KEY = "wrong_lock_minutes"
     private const val SYNC_INTERVAL_KEY = "sync_interval_minutes"
     private const val MILLIS_PER_MINUTE = 60_000L
+    private const val TEMP_EXTENSION_KEY = "temp_extension_millis"
+    const val PASSWORD_EXTENSION_MINUTES = 15
 
     fun settings(context: Context): ParentSettings {
         val preferences = prefs(context)
@@ -64,12 +68,28 @@ object ControlState {
         val countedMillis = (now - maxOf(now - elapsedMillis, todayStart)).coerceAtLeast(0L)
         if (countedMillis == 0L) return
         val current = prefs(context).getLong(USED_MILLIS_KEY, 0L).coerceAtLeast(0L)
-        val limit = settings(context).dailyLimitMinutes * MILLIS_PER_MINUTE
+        val limit = settings(context).dailyLimitMinutes * MILLIS_PER_MINUTE + tempExtension(context)
         prefs(context).edit().putLong(USED_MILLIS_KEY, (current + countedMillis).coerceAtMost(limit)).apply()
     }
 
-    fun isDailyLimitReached(context: Context): Boolean =
-        usedMillis(context) >= settings(context).dailyLimitMinutes * MILLIS_PER_MINUTE
+    fun isDailyLimitReached(context: Context): Boolean {
+        val used = usedMillis(context)
+        val limit = settings(context).dailyLimitMinutes * MILLIS_PER_MINUTE
+        val extension = tempExtension(context)
+        return used >= limit + extension
+    }
+
+    fun tempExtension(context: Context): Long {
+        resetForNewDay(context)
+        return prefs(context).getLong(TEMP_EXTENSION_KEY, 0L).coerceAtLeast(0L)
+    }
+
+    fun grantPasswordExtension(context: Context) {
+        resetForNewDay(context)
+        prefs(context).edit()
+            .putLong(TEMP_EXTENSION_KEY, PASSWORD_EXTENSION_MINUTES * MILLIS_PER_MINUTE)
+            .apply()
+    }
 
     fun lockoutUntil(context: Context): Long = prefs(context).getLong(LOCKOUT_UNTIL_KEY, 0L)
 
@@ -137,11 +157,24 @@ object ControlState {
         MessageDigest.getInstance("SHA-256").digest("$salt:$sequence".toByteArray())
             .joinToString("") { "%02x".format(it) }
 
+    fun isDeviceAdminActive(context: Context): Boolean {
+        val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        val adminComponent = ComponentName(context, ParentalDeviceAdminReceiver::class.java)
+        return dpm.isAdminActive(adminComponent)
+    }
+
+    fun getDeviceAdminComponent(context: Context): ComponentName =
+        ComponentName(context, ParentalDeviceAdminReceiver::class.java)
+
     private fun resetForNewDay(context: Context) {
         val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(System.currentTimeMillis())
         val preferences = prefs(context)
         if (preferences.getString(DAY_KEY, null) != today) {
-            preferences.edit().putString(DAY_KEY, today).putLong(USED_MILLIS_KEY, 0L).apply()
+            preferences.edit()
+                .putString(DAY_KEY, today)
+                .putLong(USED_MILLIS_KEY, 0L)
+                .putLong(TEMP_EXTENSION_KEY, 0L)
+                .apply()
         }
     }
 
