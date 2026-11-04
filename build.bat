@@ -67,7 +67,7 @@ echo ================================
 echo.
 echo APK 文件位置：
 
-set APK_FILE=app\build\outputs\apk\debug\app-debug.apk
+set APK_FILE=app\build\outputs\parental\Parental-TV.apk
 if exist "%APK_FILE%" (
     echo %cd%\%APK_FILE%
     echo.

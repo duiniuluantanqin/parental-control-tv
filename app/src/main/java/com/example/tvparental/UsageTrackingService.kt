@@ -9,12 +9,19 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
+import android.provider.Settings
+import android.view.Gravity
+import android.view.WindowManager
+import android.widget.TextView
 
 class UsageTrackingService : Service() {
     private val handler = Handler(Looper.getMainLooper())
@@ -23,12 +30,15 @@ class UsageTrackingService : Service() {
     private var wasInteractive = false
     private var receiverRegistered = false
     private var lastEnforcementAction: String? = null
+    private var reminderView: TextView? = null
+    private var reminderWindowManager: WindowManager? = null
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             accountElapsedTime()
             wasInteractive = intent?.action == Intent.ACTION_SCREEN_ON
             updateEnforcement()
+            maybeShowUsageReminder()
         }
     }
 
@@ -37,6 +47,7 @@ class UsageTrackingService : Service() {
             accountElapsedTime()
             wasInteractive = powerManager().isInteractive
             updateEnforcement()
+            maybeShowUsageReminder()
             updateNotification()
             syncRemoteIfDue()
             handler.postDelayed(this, nextSampleDelay())
@@ -65,6 +76,7 @@ class UsageTrackingService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(ticker)
+        hideUsageReminder()
         if (receiverRegistered) unregisterReceiver(screenReceiver)
         super.onDestroy()
     }
@@ -89,6 +101,7 @@ class UsageTrackingService : Service() {
         }
         if (action == lastEnforcementAction) return
         if (action != null) {
+            hideUsageReminder()
             startQuestionService(action)
         } else if (lastEnforcementAction != null) {
             startQuestionService(QuestionOverlayService.ACTION_REFRESH_STATE)
@@ -107,12 +120,92 @@ class UsageTrackingService : Service() {
         if (!wasInteractive || ControlState.lockoutUntil(this) > System.currentTimeMillis()) {
             return SAMPLE_INTERVAL_MS
         }
-        val limitMillis = ControlState.todayDailyLimitMinutes(this) * 60_000L + ControlState.tempExtension(this)
-        val remaining = limitMillis - ControlState.usedMillis(this)
+        val remaining = ControlState.remainingDailyMillis(this)
         val quotaDelay = if (remaining > 0L) remaining.coerceAtLeast(100L) else SAMPLE_INTERVAL_MS
         val windowDelay = ControlState.millisUntilNextUsageWindowBoundary(this) ?: SAMPLE_INTERVAL_MS
-        return minOf(SAMPLE_INTERVAL_MS, quotaDelay, windowDelay.coerceAtLeast(100L))
+        val reminderDelay = if (canShowUsageReminder()) {
+            when {
+                remaining > TEN_MINUTE_THRESHOLD_MS -> remaining - TEN_MINUTE_THRESHOLD_MS
+                remaining <= ONE_MINUTE_THRESHOLD_MS -> ONE_SECOND_MS
+                else -> {
+                    val displayedMinutes = (remaining + MILLIS_PER_MINUTE - 1L) / MILLIS_PER_MINUTE
+                    remaining - (displayedMinutes - 1L) * MILLIS_PER_MINUTE
+                }
+            }.coerceAtLeast(100L)
+        } else {
+            SAMPLE_INTERVAL_MS
+        }
+        return minOf(SAMPLE_INTERVAL_MS, quotaDelay, windowDelay.coerceAtLeast(100L), reminderDelay)
     }
+
+    private fun maybeShowUsageReminder() {
+        val remaining = ControlState.remainingDailyMillis(this)
+        if (!canShowUsageReminder() || remaining > TEN_MINUTE_THRESHOLD_MS) {
+            hideUsageReminder()
+            return
+        }
+
+        val view = reminderView ?: createUsageReminder().also { reminder ->
+            val manager = getSystemService(WINDOW_SERVICE) as WindowManager
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                } else {
+                    @Suppress("DEPRECATION")
+                    WindowManager.LayoutParams.TYPE_PHONE
+                },
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                PixelFormat.TRANSLUCENT,
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = dp(28)
+                y = dp(28)
+            }
+            runCatching { manager.addView(reminder, params) }.onSuccess {
+                reminderView = reminder
+                reminderWindowManager = manager
+            }
+            reminder
+        }
+        if (reminderView !== view) return
+        val text = if (remaining <= ONE_MINUTE_THRESHOLD_MS) {
+            val seconds = (remaining + ONE_SECOND_MS - 1L) / ONE_SECOND_MS
+            "今日可用时间还剩 $seconds 秒"
+        } else {
+            val minutes = (remaining + MILLIS_PER_MINUTE - 1L) / MILLIS_PER_MINUTE
+            "今日可用时间还剩 $minutes 分钟"
+        }
+        view.text = text
+    }
+
+    private fun canShowUsageReminder(): Boolean =
+        wasInteractive && !ControlState.isDailyLimitReached(this) &&
+            ControlState.lockoutUntil(this) <= System.currentTimeMillis() &&
+            ControlState.isUsageWindowAllowed(this) &&
+            (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this))
+
+    private fun createUsageReminder() = TextView(this).apply {
+        setTextColor(Color.WHITE)
+        textSize = 20f
+        setPadding(dp(20), dp(14), dp(20), dp(14))
+        background = GradientDrawable().apply {
+            setColor(Color.argb(205, 22, 30, 31))
+            setStroke(dp(1), Color.argb(210, 210, 239, 111))
+            cornerRadius = dp(8).toFloat()
+        }
+    }
+
+    private fun hideUsageReminder() {
+        reminderView?.let { view -> runCatching { reminderWindowManager?.removeViewImmediate(view) } }
+        reminderView = null
+        reminderWindowManager = null
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private fun syncRemoteIfDue(force: Boolean = false) {
         val now = SystemClock.elapsedRealtime()
@@ -183,5 +276,9 @@ class UsageTrackingService : Service() {
         private const val CHANNEL_ID = "usage_tracking"
         private const val NOTIFICATION_ID = 1002
         private const val SAMPLE_INTERVAL_MS = 30_000L
+        private const val TEN_MINUTE_THRESHOLD_MS = ControlState.TEN_MINUTE_REMINDER_MINUTES * 60_000L
+        private const val ONE_MINUTE_THRESHOLD_MS = ControlState.ONE_MINUTE_REMINDER_MINUTES * 60_000L
+        private const val MILLIS_PER_MINUTE = 60_000L
+        private const val ONE_SECOND_MS = 1_000L
     }
 }

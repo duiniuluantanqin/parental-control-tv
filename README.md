@@ -16,7 +16,7 @@ Windows 命令行构建：
 .\gradlew.bat assembleDebug
 ```
 
-APK 位于 `app\build\outputs\apk\debug\app-debug.apk`。应用自动从 `https://tvparental.mediainsight360.com` 同步题目和规则，无需在电视配置地址或登录；首页可手动同步并查看今日已用时间。首次使用需要在电视确认系统悬浮窗权限；应用不能静默授予 Android 特殊权限。
+APK 位于 `app\build\outputs\parental\Parental-TV.apk`。应用自动从 `https://tvparental.mediainsight360.com` 同步题目和规则，无需在电视配置地址或登录；首页可手动同步并查看今日已用时间。首次使用需要在电视确认系统悬浮窗权限；应用不能静默授予 Android 特殊权限。
 
 屏幕亮起时长按 30 秒采样，额度临近耗尽时会缩短采样间隔。后台服务在开机后恢复；TCL 固件还需要通过 ADB 放行 `APP_AUTO_START` 与 `APP_ASSOC_START`。完整安装升级步骤见 [docs/INSTALL_TCL.md](docs/INSTALL_TCL.md)。
 

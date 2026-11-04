@@ -44,7 +44,7 @@ echo 开始编译...
 call gradlew.bat assembleDebug
 if %ERRORLEVEL% EQU 0 (
     echo 编译成功！
-    echo APK位置: app\build\outputs\apk\debug\app-debug.apk
+    echo APK位置: app\build\outputs\parental\Parental-TV.apk
 ) else (
     echo 编译失败
 )

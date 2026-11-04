@@ -11,7 +11,7 @@ build.bat
 
 编译成功后，APK 文件位置：
 ```
-D:\work\study\app\build\outputs\apk\debug\app-debug.apk
+D:\work\study\app\build\outputs\parental\Parental-TV.apk
 ```
 
 ### 2. 安装到设备
@@ -151,7 +151,7 @@ adb connect 10.0.0.44:5555
 - `build.bat` - 编译脚本
 - `install_emulator.bat` - 安装到模拟器脚本
 - `install_device.bat` - 安装到真机/TV脚本
-- `app/build/outputs/apk/debug/app-debug.apk` - 生成的 APK 文件
+- `app/build/outputs/parental/Parental-TV.apk` - 生成的 APK 文件
 
 ---
 

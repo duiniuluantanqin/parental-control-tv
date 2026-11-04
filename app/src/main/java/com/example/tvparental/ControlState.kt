@@ -37,6 +37,8 @@ object ControlState {
     private const val SYNC_INTERVAL_KEY = "sync_interval_minutes"
     private const val MILLIS_PER_MINUTE = 60_000L
     private const val TEMP_EXTENSION_KEY = "temp_extension_millis"
+    const val TEN_MINUTE_REMINDER_MINUTES = 10
+    const val ONE_MINUTE_REMINDER_MINUTES = 1
     const val PASSWORD_EXTENSION_MINUTES = 15
 
     fun settings(context: Context): ParentSettings {
@@ -116,11 +118,12 @@ object ControlState {
     }
 
     fun isDailyLimitReached(context: Context): Boolean {
-        val used = usedMillis(context)
-        val limit = todayDailyLimitMinutes(context) * MILLIS_PER_MINUTE
-        val extension = tempExtension(context)
-        return used >= limit + extension
+        return remainingDailyMillis(context) <= 0L
     }
+
+    fun remainingDailyMillis(context: Context): Long =
+        (todayDailyLimitMinutes(context) * MILLIS_PER_MINUTE + tempExtension(context) - usedMillis(context))
+            .coerceAtLeast(0L)
 
     fun todayDailyLimitMinutes(context: Context): Int =
         settings(context).weeklyDailyLimitMinutes[weekdayIndex(Calendar.getInstance())]

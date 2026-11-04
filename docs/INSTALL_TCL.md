@@ -5,7 +5,7 @@
 ## 升级前
 
 1. 电视开机，并与电脑连接同一网络。
-2. 保持包名 `com.example.tvparental` 不变。当前版本为 `0.5.0`（`versionCode` 6）；以后每次发布升级时，在 `app/build.gradle.kts` 中把 `versionCode` 增加 1，并同步更新 `versionName`。不要更换用于签名的电脑/Android Studio 用户配置，否则电视可能拒绝覆盖安装。
+2. 保持包名 `com.example.tvparental` 不变。当前版本为 `0.8.1`（`versionCode` 11）；每次改动都在 `app/build.gradle.kts` 中把 `versionCode` 增加 1，并同步更新 `versionName`。不要更换用于签名的电脑/Android Studio 用户配置，否则电视可能拒绝覆盖安装。
 3. 在项目根目录打开 PowerShell。下面命令按本机 ADB 路径编写；若 ADB 安装位置变了，先修改 `$adb`。
 
 ## 构建并推送
@@ -26,7 +26,7 @@ if (Test-Path $localGradle) {
     .\gradlew.bat assembleDebug
 }
 New-Item -ItemType Directory -Force -Path $pushDir | Out-Null
-Copy-Item '.\app\build\outputs\apk\debug\app-debug.apk' (Join-Path $pushDir 'TvParental.apk') -Force
+Copy-Item '.\app\build\outputs\parental\Parental-TV.apk' (Join-Path $pushDir 'TvParental.apk') -Force
 Invoke-WebRequest -Uri 'https://aerial.qust.me/tools/tcast-push.py' -UseBasicParsing -OutFile (Join-Path $pushDir 'tcast-push.py')
 
 & $adb version
@@ -60,7 +60,7 @@ try {
 }
 ```
 
-脚本运行后，看电视右上角的“多屏互动”提示：用遥控器按“右”选中“同意”，再按 OK。等待电脑端输出 `Installed.`。如果希望测试纯 ADB 覆盖安装，可先运行 `& $adb -s $adbTarget install -r '.\app\build\outputs\apk\debug\app-debug.apk'`；当前电视固件返回 `install apk has be disabled from pm by system default!`，所以应继续使用 TCL 推送流程。若超时且电视没有出现提示，可重新执行推送命令；先确认 HTTP 服务和 ADB reverse 仍正常。
+脚本运行后，看电视右上角的“多屏互动”提示：用遥控器按“右”选中“同意”，再按 OK。等待电脑端输出 `Installed.`。如果希望测试纯 ADB 覆盖安装，可先运行 `& $adb -s $adbTarget install -r '.\app\build\outputs\parental\Parental-TV.apk'`；当前电视固件返回 `install apk has be disabled from pm by system default!`，所以应继续使用 TCL 推送流程。若超时且电视没有出现提示，可重新执行推送命令；先确认 HTTP 服务和 ADB reverse 仍正常。
 
 ## 验证
 

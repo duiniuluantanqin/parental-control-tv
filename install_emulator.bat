@@ -8,7 +8,7 @@ echo ================================
 echo.
 
 rem 检查 APK 是否存在
-set APK_FILE=app\build\outputs\apk\debug\app-debug.apk
+set APK_FILE=app\build\outputs\parental\Parental-TV.apk
 if not exist "%APK_FILE%" (
     echo ❌ 错误: 找不到 APK 文件
     echo.

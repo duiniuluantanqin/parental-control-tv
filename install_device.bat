@@ -8,7 +8,7 @@ echo ================================
 echo.
 
 rem 检查 APK 是否存在
-set APK_FILE=app\build\outputs\apk\debug\app-debug.apk
+set APK_FILE=app\build\outputs\parental\Parental-TV.apk
 if not exist "%APK_FILE%" (
     echo ❌ 错误: 找不到 APK 文件
     echo.
@@ -53,7 +53,7 @@ if %DEVICE_COUNT% GTR 1 (
     echo ⚠ 发现多个设备，请手动指定
     echo.
     echo 使用方法：
-    echo   adb -s [设备ID] install app\build\outputs\apk\debug\app-debug.apk
+    echo   adb -s [设备ID] install app\build\outputs\parental\Parental-TV.apk
     pause
     exit /b 1
 )
