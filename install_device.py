@@ -192,6 +192,13 @@ def main():
         if f"versionCode={version_code} " not in installed:
             raise RuntimeError(f"Installed versionCode {version_code} could not be verified on the TV.")
         print(f"Verified {PACKAGE} versionCode={version_code}.")
+
+        for operation in ("SYSTEM_ALERT_WINDOW", "APP_AUTO_START", "APP_ASSOC_START"):
+            run_adb(adb, "-s", TV_ADB, "shell", "appops", "set", PACKAGE, operation, "allow")
+            mode = run_adb(adb, "-s", TV_ADB, "shell", "appops", "get", PACKAGE, operation)
+            if "allow" not in mode:
+                raise RuntimeError(f"Could not enable {operation}; appops reported: {mode}")
+            print(f"Enabled {operation}: {mode}")
     finally:
         if server is not None:
             server.shutdown()

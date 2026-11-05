@@ -36,7 +36,8 @@ PORT = int(os.environ.get("PORT", "8765"))
 MAX_BODY_BYTES = 64 * 1024
 SESSION_SECONDS = 12 * 60 * 60
 SESSION_COOKIE = "tvparental_session"
-BACKEND_VERSION = "1.0.8"
+BACKEND_VERSION = "1.0.9"
+DEVICE_ONLINE_SECONDS = 180
 
 WEEKDAYS = tuple(str(day) for day in range(1, 8))
 DEFAULT_SETTINGS = {
@@ -194,6 +195,7 @@ def default_state() -> dict[str, object]:
         "passwordReset": None,
         "dailyUsage": [],
         "answerRecords": [],
+        "devices": {},
     }
 
 
@@ -221,6 +223,7 @@ class StateStore:
                 "passwordReset": validate_password_reset(state.get("passwordReset")),
                 "dailyUsage": state.get("dailyUsage", []),
                 "answerRecords": state.get("answerRecords", []),
+                "devices": state.get("devices", {}),
             }
 
     def queue_password_reset(self) -> dict[str, str]:
@@ -383,6 +386,16 @@ AUTH = AdminAuth(ADMIN_FILE)
 class RequestHandler(BaseHTTPRequestHandler):
     server_version = f"TvParentalAdmin/{BACKEND_VERSION}"
 
+    @staticmethod
+    def device_summary(device_id: str, device: dict[str, object]) -> dict[str, object]:
+        last_seen = device.get("lastSeen", 0)
+        return {
+            "deviceId": device_id,
+            "name": device.get("name") or device_id,
+            "lastSeen": last_seen,
+            "online": isinstance(last_seen, int) and int(time.time() * 1000) - last_seen <= DEVICE_ONLINE_SECONDS * 1000,
+        }
+
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
         if path == "/api/v1/device/state":
@@ -403,12 +416,16 @@ class RequestHandler(BaseHTTPRequestHandler):
                     return
                 with STORE.lock:
                     state = STORE.load()
-                    devices = sorted({
+                    device_ids = sorted({
                         item["deviceId"]
                         for key in ("dailyUsage", "answerRecords")
                         for item in state[key]
                         if isinstance(item.get("deviceId"), str)
-                    })
+                    } | set(state["devices"]))
+                    device_details = [
+                        self.device_summary(device_id, state["devices"].get(device_id, {}))
+                        for device_id in device_ids
+                    ]
                     usage = [
                         item for item in state["dailyUsage"]
                         if item.get("date") == record_date and (not device_id or item.get("deviceId") == device_id)
@@ -419,14 +436,36 @@ class RequestHandler(BaseHTTPRequestHandler):
                     ]
                 self.send_json(200, {
                     "date": record_date,
-                    "devices": devices,
+                    "devices": device_ids,
+                    "deviceDetails": device_details,
                     "usage": sorted(usage, key=lambda item: item["deviceId"]),
                     "answers": [
-                        {key: value for key, value in item.items() if key != "correctAnswer"}
+                        {
+                            **{key: value for key, value in item.items() if key != "correctAnswer"},
+                            "deviceName": state["devices"].get(item.get("deviceId"), {}).get("name", item["deviceId"]),
+                        }
                         for item in sorted(answers, key=lambda item: item["answeredAt"], reverse=True)
                     ],
                 })
-        elif path in ("/", "/index.html", "/login", "/settings", "/questions", "/records"):
+        elif path == "/api/v1/admin/devices":
+            if self.require_admin():
+                with STORE.lock:
+                    state = STORE.load()
+                    devices = state["devices"]
+                    known_ids = set(devices)
+                    known_ids.update(
+                        item["deviceId"]
+                        for key in ("dailyUsage", "answerRecords")
+                        for item in state[key]
+                        if isinstance(item.get("deviceId"), str)
+                    )
+                self.send_json(200, {
+                    "devices": [
+                        self.device_summary(device_id, devices.get(device_id, {}))
+                        for device_id in sorted(known_ids)
+                    ]
+                })
+        elif path in ("/", "/index.html", "/login", "/settings", "/questions", "/records", "/devices"):
             self.send_static("index.html", "text/html; charset=utf-8")
         elif path == "/app.js":
             self.send_static("app.js", "text/javascript; charset=utf-8")
@@ -453,6 +492,31 @@ class RequestHandler(BaseHTTPRequestHandler):
                     state = STORE.load()
                     usage = state["dailyUsage"]
                     record = next((item for item in usage if item["deviceId"] == device_id and item["date"] == record_date), None)
+                    now_ms = int(time.time() * 1000)
+                    devices = state["devices"]
+                    device = devices.get(device_id, {"name": device_id, "lastSeen": 0, "lastUsageMillis": 0, "lastUsageAt": 0})
+                    name = payload.get("deviceName")
+                    if isinstance(name, str) and 1 <= len(name.strip()) <= 100:
+                        device["name"] = name.strip()
+                    previous_total = device.get("lastUsageMillis", 0)
+                    previous_at = device.get("lastUsageAt", 0)
+                    delta = max(0, usage_millis - previous_total)
+                    elapsed = now_ms - previous_at if isinstance(previous_at, int) and previous_at else 0
+                    if delta and elapsed > 0:
+                        interval_ms = min(delta, elapsed, 120_000)
+                        interval = {"start": now_ms - interval_ms, "end": now_ms}
+                        if record is None:
+                            record = {"deviceId": device_id, "date": record_date, "usageMillis": 0, "intervals": []}
+                            usage.append(record)
+                        intervals = record.setdefault("intervals", [])
+                        if not intervals or interval["start"] > intervals[-1]["end"]:
+                            intervals.append(interval)
+                        else:
+                            intervals[-1]["end"] = max(intervals[-1]["end"], interval["end"])
+                    device["lastSeen"] = now_ms
+                    device["lastUsageAt"] = now_ms
+                    device["lastUsageMillis"] = usage_millis
+                    devices[device_id] = device
                     if record is None:
                         record = {"deviceId": device_id, "date": record_date, "usageMillis": usage_millis}
                         usage.append(record)

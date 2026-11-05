@@ -10,7 +10,7 @@
   <header class="topbar">
     <a class="brand" href="/settings">
       <span class="brand-mark" aria-hidden="true">TV</span>
-      <span><strong>健康使用</strong><small>家长管理</small><small id="backendVersion">后台 v1.0.7</small></span>
+      <span><strong>健康使用</strong><small>家长管理</small><small id="backendVersion">后台 v1.0.9</small></span>
     </a>
     <button id="logoutButton" class="button topbar-button" type="button" hidden>退出登录</button>
   </header>
@@ -37,6 +37,7 @@
       <a href="/settings" data-page="settings">使用规则</a>
       <a href="/questions" data-page="questions">题库管理</a>
       <a href="/records" data-page="records">使用记录</a>
+      <a href="/devices" data-page="devices">设备</a>
     </nav>
     <p id="notice" class="notice" role="status" aria-live="polite"></p>
 
@@ -67,6 +68,19 @@
         </div>
         <div class="settings-footer"><p id="passwordResetStatus">重置指令仅在管理员确认后发送。</p><button id="resetDevicePin" class="button secondary" type="button">重置电视 PIN</button></div>
       </section>
+    </section>
+
+    <section id="devicesPage" aria-labelledby="devicesTitle" hidden>
+      <div class="section-heading records-heading">
+        <div><h1 id="devicesTitle">设备</h1><p id="devicesSummary">查看已上报设备及最近在线状态。</p></div>
+        <button id="refreshDevices" class="button secondary" type="button">刷新</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>设备名称</th><th>状态</th><th>最近上报</th><th>设备 ID</th></tr></thead>
+          <tbody id="deviceRows"></tbody>
+        </table>
+      </div>
     </section>
 
     <section id="questionsPage" aria-labelledby="questionsTitle" hidden>
@@ -100,7 +114,7 @@
         <div class="records-section-heading"><h2 id="usageRecordsTitle">每日使用时长</h2></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>日期</th><th>设备</th><th>使用时长</th></tr></thead>
+            <thead><tr><th>日期</th><th>设备</th><th>使用时长</th><th>详情</th></tr></thead>
             <tbody id="usageRows"></tbody>
           </table>
         </div>
@@ -116,6 +130,11 @@
       </section>
     </section>
   </main>
+
+  <dialog id="usageDetailDialog" aria-labelledby="usageDetailTitle">
+    <div class="form-heading"><div><h2 id="usageDetailTitle">在线时间</h2><p id="usageDetailSubtitle" class="muted"></p></div><button id="closeUsageDetail" class="icon-button" type="button" aria-label="关闭在线时间详情">×</button></div>
+    <div class="table-wrap"><table><thead><tr><th>开始</th><th>结束</th><th>时长</th></tr></thead><tbody id="usageIntervalRows"></tbody></table></div>
+  </dialog>
 
   <dialog id="questionDialog" aria-labelledby="questionDialogTitle">
     <form id="questionForm" class="question-form">

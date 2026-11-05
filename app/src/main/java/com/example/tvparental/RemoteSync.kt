@@ -2,6 +2,7 @@ package com.example.tvparental
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Handler
 import org.json.JSONArray
 import org.json.JSONObject
@@ -167,6 +168,7 @@ object RemoteSync {
             val now = System.currentTimeMillis()
             val body = JSONObject()
                 .put("deviceId", deviceId(context))
+                .put("deviceName", deviceName())
                 .put("date", SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(now)))
                 .put("usageMillis", ControlState.usedMillis(context))
                 .toString().toByteArray(Charsets.UTF_8)
@@ -187,6 +189,16 @@ object RemoteSync {
         val minute = parts[1].toIntOrNull() ?: error("Invalid usage time window.")
         require(hour in 0..23 && minute in 0..59) { "Invalid usage time window." }
         return hour * 60 + minute
+    }
+
+    private fun deviceName(): String {
+        val manufacturer = Build.MANUFACTURER.trim().replaceFirstChar { it.uppercase(Locale.ROOT) }
+        val model = Build.MODEL.trim()
+        return when {
+            model.isBlank() -> manufacturer.ifBlank { "Android TV" }
+            manufacturer.isBlank() || model.startsWith(manufacturer, ignoreCase = true) -> model
+            else -> "$manufacturer $model"
+        }
     }
 
     const val ACTION_SYNC_COMPLETED = "com.example.tvparental.action.SYNC_COMPLETED"

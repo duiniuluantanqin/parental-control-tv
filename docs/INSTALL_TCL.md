@@ -5,7 +5,7 @@
 ## 升级前
 
 1. 电视开机，并与电脑连接同一网络。
-2. 保持包名 `com.example.tvparental` 不变。当前版本为 `0.9.8`（`versionCode` 28）；每次改动都在 `app/build.gradle.kts` 中把 `versionCode` 增加 1，并同步更新 `versionName`。不要更换用于签名的电脑/Android Studio 用户配置，否则电视可能拒绝覆盖安装。
+2. 保持包名 `com.example.tvparental` 不变。当前版本为 `0.9.10`（`versionCode` 30）；每次改动都在 `app/build.gradle.kts` 中把 `versionCode` 增加 1，并同步更新 `versionName`。不要更换用于签名的电脑/Android Studio 用户配置，否则电视可能拒绝覆盖安装。
 3. 在项目根目录打开 PowerShell。以下命令优先使用 PATH 中的 ADB；如果未加入 PATH，可将 `$adb` 设置为当前电脑 Android SDK `platform-tools` 目录下的 `adb.exe`。仓库安装器 `install_device.bat` 会自动从 Android SDK 环境变量、`local.properties` 或 PATH 定位 ADB。
 
 ## 构建并推送
@@ -69,15 +69,10 @@ try {
 & $adb -s $adbTarget shell appops get com.example.tvparental APP_ASSOC_START
 ```
 
-首次安装后若权限不是 `allow`，执行一次：
+通过 `install_device.bat` 安装时，安装器会在电视确认安装且版本校验通过后，自动把悬浮窗权限 `SYSTEM_ALERT_WINDOW` 以及 TCL 自启动权限 `APP_AUTO_START`、`APP_ASSOC_START` 设为 `allow` 并回读核验。若应用是通过其他方式安装或重新安装后相关权限失效，可手动执行：
 
 ```powershell
 & $adb -s $adbTarget shell appops set com.example.tvparental SYSTEM_ALERT_WINDOW allow
-```
-
-雷鸟/TCL 固件还会单独限制应用自启动。若 `APP_AUTO_START` 或 `APP_ASSOC_START` 显示 `ignore`，按 aerial-tv 的设备安装做法通过 ADB 放行这两个厂商 app-op：
-
-```powershell
 & $adb -s $adbTarget shell appops set com.example.tvparental APP_AUTO_START allow
 & $adb -s $adbTarget shell appops set com.example.tvparental APP_ASSOC_START allow
 ```
@@ -86,7 +81,7 @@ try {
 
 应用启动后自动从 `https://tvparental.mediainsight360.com` 获取题库和规则，无需在电视配置地址、用户名或密码。升级后也固定使用该域名，不再读取旧版保存的后台地址。可在首页选择“立即同步题目和规则”进行验证。管理页面和部署方式见项目根目录的 `README.md`。设备默认每 5 分钟同步一次，同步间隔可在后台调整为 1–60 分钟。
 
-应用首次启动时如果没有悬浮窗权限，会自动打开系统授权页；开机时如果权限缺失，也会自动打开该页面。仍需在电视上确认开启，Android 不允许普通应用静默授予此权限。已有 `allow` 授权会保留到升级和重启之后。应用会在 `LOCKED_BOOT_COMPLETED` 与 `BOOT_COMPLETED` 时恢复 10 分钟答题闹钟和时长统计服务；TCL 自启动 app-op 也必须为 `allow`。今日使用时长按屏幕亮起时间估算，午夜按电视本地日期清零；错误锁定期间不累计时长。待机唤醒不一定会发送启动广播，请通过电视完整重启验证冷启动行为。
+通过 `install_device.bat` 安装时，ADB 会设置悬浮窗和自启动权限；若通过其他方式安装且悬浮窗权限缺失，首次启动可能会打开系统授权页。应用会在 `LOCKED_BOOT_COMPLETED` 与 `BOOT_COMPLETED` 时恢复 10 分钟答题闹钟和时长统计服务。今日使用时长按屏幕亮起时间估算，午夜按电视本地日期清零；错误锁定期间不累计时长。待机唤醒不一定会发送启动广播，请通过电视完整重启验证冷启动行为。
 
 ## 收尾
 

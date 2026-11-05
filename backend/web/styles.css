@@ -100,6 +100,10 @@ td:nth-child(3) { color: #39675b; width: 200px; }
 .records-device, .records-date { display: flex; align-items: center; gap: 10px; color: #3e514c; font-size: 14px; }
 .records-device select { min-width: 190px; }
 .records-date input { min-width: 170px; }
+.text-button { padding: 0; color: #176d5c; background: transparent; border: 0; text-decoration: underline; text-underline-offset: 3px; }
+.text-button:hover { color: #124b41; }
+.device-online { color: #18734e; font-weight: 650; }
+.device-offline { color: #8b5145; font-weight: 650; }
 .records-section + .records-section { margin-top: 28px; }
 .records-section-heading { margin-bottom: 12px; }
 .records-section-heading h2 { color: #244a42; font-size: 17px; }

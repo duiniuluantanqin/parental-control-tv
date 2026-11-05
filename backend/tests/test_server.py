@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from http.cookiejar import CookieJar
@@ -91,9 +92,33 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(status, 401)
         status, records = self.request("/api/v1/admin/records?date=2026-11-05")
         self.assertEqual(status, 200)
-        self.assertEqual(records["usage"], [{
-            "deviceId": "tv-01", "date": "2026-11-05", "usageMillis": 120_000,
-        }])
+        self.assertEqual(records["usage"][0]["deviceId"], "tv-01")
+        self.assertEqual(records["usage"][0]["usageMillis"], 120_000)
+        self.assertTrue(records["usage"][0]["intervals"])
+
+    def test_device_registry_includes_name_and_online_status(self) -> None:
+        payload = {
+            "deviceId": "device-uuid-123", "deviceName": "TCL Thunderbird TV",
+            "date": "2026-11-05", "usageMillis": 60_000,
+        }
+        status, _ = self.request("/api/v1/device/usage", method="POST", authenticated=False, body=payload)
+        self.assertEqual(status, 200)
+        status, result = self.request("/api/v1/admin/devices")
+        self.assertEqual(status, 200)
+        self.assertEqual(result["devices"][0]["name"], "TCL Thunderbird TV")
+        self.assertTrue(result["devices"][0]["online"])
+        self.assertEqual(result["devices"][0]["deviceId"], "device-uuid-123")
+
+    def test_usage_detail_groups_incremental_reports_into_time_intervals(self) -> None:
+        payload = {"deviceId": "tv-01", "deviceName": "Family TV", "date": "2026-11-05", "usageMillis": 60_000}
+        self.request("/api/v1/device/usage", method="POST", authenticated=False, body=payload)
+        time.sleep(0.02)
+        payload["usageMillis"] = 120_000
+        self.request("/api/v1/device/usage", method="POST", authenticated=False, body=payload)
+        _, records = self.request("/api/v1/admin/records?date=2026-11-05")
+        interval = records["usage"][0]["intervals"][0]
+        self.assertGreater(interval["end"], interval["start"])
+        self.assertEqual(records["deviceDetails"][0]["name"], "Family TV")
 
     def test_answer_attempts_record_correctness_and_retry_without_duplicates(self) -> None:
         question = server.STORE.load()["questions"][0]

@@ -122,7 +122,6 @@ class QuestionOverlayService : Service() {
             setPadding(dp(36), dp(18), dp(36), dp(18))
         }
         addRemainingTimeLabel(root, 28)
-        addLockCountdown(root, 36, 22f)
         val title = TextView(this).apply {
             text = "Answer to continue · Question ${QuestionBank.challengeAnsweredCount(this@QuestionOverlayService) + 1}/${QuestionBank.CHALLENGE_QUESTION_COUNT} · Correct ${QuestionBank.challengeCorrectCount(this@QuestionOverlayService)}/${QuestionBank.CHALLENGE_REQUIRED_CORRECT} · ${QuestionBank.displayCategory(question.category)}"
             setTextColor(Color.rgb(193, 203, 194))
@@ -213,12 +212,14 @@ class QuestionOverlayService : Service() {
         )
 
         val status = TextView(this).apply {
-            text = "Answer at least ${QuestionBank.CHALLENGE_REQUIRED_CORRECT} of ${QuestionBank.CHALLENGE_QUESTION_COUNT} questions correctly to continue."
             setTextColor(Color.rgb(205, 214, 206))
             textSize = 18f
             gravity = Gravity.CENTER
+            maxLines = 2
+            setAutoSizeTextTypeUniformWithConfiguration(14, 18, 1, TypedValue.COMPLEX_UNIT_SP)
         }
-        root.addView(status, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44)))
+        root.addView(status, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52)))
+        lockCountdown = status
 
         moveFocus = { index, keyCode ->
             val nextIndex = when (keyCode) {
@@ -571,7 +572,7 @@ class QuestionOverlayService : Service() {
                 currentQuestion?.let(::handleQuestionTimeout)
                 return
             }
-            lockCountdown?.text = "Answer within ${formatRemaining(remaining)}"
+            lockCountdown?.text = "Answer at least ${QuestionBank.CHALLENGE_REQUIRED_CORRECT} of ${QuestionBank.CHALLENGE_QUESTION_COUNT} questions correctly to continue · ${formatRemaining(remaining)}"
             handler.removeCallbacks(lockTicker)
             handler.postDelayed(lockTicker, 1_000L)
             return

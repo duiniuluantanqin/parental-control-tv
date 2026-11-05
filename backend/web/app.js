@@ -13,8 +13,8 @@ const poemTitleInput = document.querySelector("#poemTitleInput");
 const poemTitleField = document.querySelector("#poemTitleField");
 const loginView = document.querySelector("#loginView");
 const adminView = document.querySelector("#adminView");
-const page = location.pathname === "/questions" ? "questions" : location.pathname === "/records" ? "records" : "settings";
-const isLoginPage = !["/settings", "/questions", "/records"].includes(location.pathname);
+const page = location.pathname === "/questions" ? "questions" : location.pathname === "/records" ? "records" : location.pathname === "/devices" ? "devices" : "settings";
+const isLoginPage = !["/settings", "/questions", "/records", "/devices"].includes(location.pathname);
 const weekdays = [
   ["1", "周一"], ["2", "周二"], ["3", "周三"], ["4", "周四"],
   ["5", "周五"], ["6", "周六"], ["7", "周日"],
@@ -33,7 +33,7 @@ function setNotice(message, isError = false) {
 }
 
 function loginAddress() {
-  return `/login?next=${encodeURIComponent(["/questions", "/records"].includes(location.pathname) ? location.pathname : "/settings")}`;
+  return `/login?next=${encodeURIComponent(["/questions", "/records", "/devices"].includes(location.pathname) ? location.pathname : "/settings")}`;
 }
 
 function handleError(error, target = notice) {
@@ -279,25 +279,34 @@ function renderRecords(records) {
   usageRows.replaceChildren();
   answerRows.replaceChildren();
   const deviceId = document.querySelector("#recordsDevice").value;
-  document.querySelector("#recordsSummary").textContent = `${deviceId || "所有设备"} · ${records.usage.length} 条使用记录，${records.answers.length} 条答题记录`;
+  const deviceNames = new Map((records.deviceDetails || []).map((device) => [device.deviceId, device.name]));
+  document.querySelector("#recordsSummary").textContent = `${deviceNames.get(deviceId) || "所有设备"} · ${records.usage.length} 条使用记录，${records.answers.length} 条答题记录`;
 
   for (const record of records.usage) {
     const row = document.createElement("tr");
-    for (const value of [record.date, record.deviceId, `${(record.usageMillis / 60_000).toFixed(1)} 分钟`]) {
+    for (const value of [record.date, deviceNames.get(record.deviceId) || record.deviceId, `${(record.usageMillis / 60_000).toFixed(1)} 分钟`]) {
       const cell = document.createElement("td");
       cell.textContent = value;
       row.append(cell);
     }
+    const detailCell = document.createElement("td");
+    const detailButton = document.createElement("button");
+    detailButton.className = "text-button";
+    detailButton.type = "button";
+    detailButton.textContent = "查看详情";
+    detailButton.addEventListener("click", () => showUsageDetails(record, deviceNames.get(record.deviceId) || record.deviceId));
+    detailCell.append(detailButton);
+    row.append(detailCell);
     usageRows.append(row);
   }
-  if (!records.usage.length) setEmptyRow(usageRows, 3, "当天暂无使用时长记录");
+  if (!records.usage.length) setEmptyRow(usageRows, 4, "当天暂无使用时长记录");
 
   for (const record of records.answers) {
     const row = document.createElement("tr");
     const time = document.createElement("td");
     time.textContent = new Date(record.answeredAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     const device = document.createElement("td");
-    device.textContent = record.deviceId;
+    device.textContent = record.deviceName || deviceNames.get(record.deviceId) || record.deviceId;
     const prompt = document.createElement("td");
     prompt.textContent = record.prompt;
     const answer = document.createElement("td");
@@ -310,6 +319,32 @@ function renderRecords(records) {
   if (!records.answers.length) setEmptyRow(answerRows, 5, "当天暂无答题记录");
 }
 
+function showUsageDetails(record, deviceName) {
+  const dialog = document.querySelector("#usageDetailDialog");
+  const rows = document.querySelector("#usageIntervalRows");
+  rows.replaceChildren();
+  document.querySelector("#usageDetailTitle").textContent = `${deviceName} · 在线时间`;
+  document.querySelector("#usageDetailSubtitle").textContent = `${record.date} · ${(record.usageMillis / 60_000).toFixed(1)} 分钟累计使用`;
+  for (const interval of record.intervals || []) {
+    const start = new Date(interval.start);
+    const end = new Date(interval.end);
+    const durationMinutes = (interval.end - interval.start) / 60_000;
+    const row = document.createElement("tr");
+    for (const value of [
+      start.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+      end.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+      `${durationMinutes.toFixed(1)} 分钟`,
+    ]) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.append(cell);
+    }
+    rows.append(row);
+  }
+  if (!rows.children.length) setEmptyRow(rows, 3, "暂无可还原的在线时间段；设备需完成至少两次时长上报后才会生成明细");
+  dialog.showModal();
+}
+
 async function loadRecords() {
   const date = document.querySelector("#recordsDate").value;
   if (!date) return;
@@ -319,13 +354,14 @@ async function loadRecords() {
   if (previousDevice) query.set("deviceId", previousDevice);
   const records = await api(`/api/v1/admin/records?${query}`);
   const devices = records.devices || [];
+  const deviceNames = new Map((records.deviceDetails || []).map((device) => [device.deviceId, device.name]));
   const currentDevices = Array.from(deviceSelect.options).slice(1).map((option) => option.value);
   const selectedDevice = !recordsDeviceInitialized || (previousDevice && !devices.includes(previousDevice))
     ? (devices[0] || "")
     : previousDevice;
   if (JSON.stringify(currentDevices) !== JSON.stringify(devices)) {
     deviceSelect.replaceChildren(new Option("所有设备", ""));
-    for (const device of devices) deviceSelect.add(new Option(device, device));
+    for (const device of devices) deviceSelect.add(new Option(deviceNames.get(device) || device, device));
     deviceSelect.value = devices.includes(selectedDevice) ? selectedDevice : "";
   }
   recordsDeviceInitialized = true;
@@ -333,6 +369,28 @@ async function loadRecords() {
     return loadRecords();
   }
   renderRecords(records);
+}
+
+async function loadDevices() {
+  const result = await api("/api/v1/admin/devices");
+  const rows = document.querySelector("#deviceRows");
+  rows.replaceChildren();
+  document.querySelector("#devicesSummary").textContent = `${result.devices.length} 台设备 · 在线状态每分钟更新`;
+  for (const device of result.devices) {
+    const row = document.createElement("tr");
+    const name = document.createElement("td");
+    name.textContent = device.name;
+    const status = document.createElement("td");
+    status.textContent = device.online ? "在线" : "离线";
+    status.className = device.online ? "device-online" : "device-offline";
+    const lastSeen = document.createElement("td");
+    lastSeen.textContent = device.lastSeen ? new Date(device.lastSeen).toLocaleString("zh-CN") : "尚无上报";
+    const id = document.createElement("td");
+    id.textContent = device.deviceId;
+    row.append(name, status, lastSeen, id);
+    rows.append(row);
+  }
+  if (!result.devices.length) setEmptyRow(rows, 4, "设备首次上报使用时长后会显示在这里");
 }
 
 async function login(event) {
@@ -348,7 +406,7 @@ async function login(event) {
     });
     document.querySelector("#passwordInput").value = "";
     const next = new URLSearchParams(location.search).get("next");
-    location.replace(["/settings", "/questions", "/records"].includes(next) ? next : "/settings");
+    location.replace(["/settings", "/questions", "/records", "/devices"].includes(next) ? next : "/settings");
   } catch (error) {
     handleError(error, loginNotice);
   } finally {
@@ -587,7 +645,8 @@ async function initialize() {
       }
       await loadRecords();
     }
-    document.title = `${page === "questions" ? "题库管理" : page === "records" ? "使用记录" : "使用规则"} · 健康使用`;
+    if (page === "devices") await loadDevices();
+    document.title = `${page === "questions" ? "题库管理" : page === "records" ? "使用记录" : page === "devices" ? "设备" : "使用规则"} · 健康使用`;
   } catch (error) {
     if (error.status === 401 && !isLoginPage) {
       location.replace(loginAddress());
@@ -606,6 +665,9 @@ document.querySelector("#settingsForm").addEventListener("submit", saveSettings)
 document.querySelector("#recordsDate").addEventListener("change", () => loadRecords().catch(handleError));
 document.querySelector("#recordsDevice").addEventListener("change", () => loadRecords().catch(handleError));
 document.querySelector("#refreshRecords").addEventListener("click", () => loadRecords().catch(handleError));
+document.querySelector("#refreshDevices").addEventListener("click", () => loadDevices().catch(handleError));
+document.querySelector("#closeUsageDetail").addEventListener("click", () => document.querySelector("#usageDetailDialog").close());
+if (page === "devices") window.setInterval(() => loadDevices().catch(handleError), 30_000);
 document.querySelector("#resetDevicePin").addEventListener("click", async () => {
   if (!window.confirm("确认将电视 PIN 重置为“上下左右上上”？电视下次同步后生效。")) return;
   const button = document.querySelector("#resetDevicePin");
