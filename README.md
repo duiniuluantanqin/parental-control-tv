@@ -1,11 +1,3 @@
-# 看电视前答题
-
-面向雷鸟/TCL Android 9 电视的 Kotlin 家长控制原型。电视每隔 10 分钟显示一道居中的大悬浮框四选一题（覆盖约 86%×82% 的屏幕）；方向键选项、OK 键提交。每题只有一次作答机会，答错后锁定 10 分钟。家长可在应用主页设置 6 位方向键密码（如 上下上下左右），答错锁定时输入正确密码可提前解锁；连续输错 5 次需等待 30 秒。默认每日可用 60 分钟，额度用完后到次日恢复。设备屏幕亮起时计入使用时长，锁定期间不计入。
-
-应用自带 50 道中等难度题目，覆盖古诗词、数学、科学、地理和历史。题库与每日限额、答题间隔、答错锁定时长、同步间隔可以从家长 Web 后台远程管理。设备启动时全量同步一次，之后按同步间隔（默认 5 分钟，1–60 分钟可配）轮询；后台规则也可在电视应用主页手动同步。
-
-答对的题会立即从电视本地抽题范围移除，并上报后台；后台核对答案后删除该题，答错则保留。断网时保存待上报记录，恢复连接后自动补报。题库清空后，后台通过 DeepSeek 自动补入 50 道中等难度综合题，覆盖古诗词、数学、科学、地理历史；需要配置 `DEEPSEEK_API_KEY`。该功能需要同时更新后台和电视 APK（0.7.0 / versionCode 8），旧版 APK 不会上报答题结果。
-
 ## Android 应用
 
 在 Android Studio 中打开项目目录，等待 Gradle 同步。项目使用 Kotlin、Android Gradle Plugin 9.0.0、`compileSdk 37`、`minSdk 28`，Gradle Wrapper 固定为 9.1.0。若 SDK Platform 37 缺失，请在 SDK Manager 中安装。
@@ -17,6 +9,31 @@ Windows 命令行构建：
 ```
 
 APK 位于 `app\build\outputs\parental\Parental-TV.apk`。应用自动从 `https://tvparental.mediainsight360.com` 同步题目和规则，无需在电视配置地址或登录；首页可手动同步并查看今日已用时间。首次使用需要在电视确认系统悬浮窗权限；应用不能静默授予 Android 特殊权限。
+
+### 启动 Android 模拟器
+
+在 Android Studio 打开 Device Manager，找到已创建的虚拟设备并点击启动按钮。也可以在 PowerShell 中列出并启动 AVD：
+
+```powershell
+emulator -list-avds
+emulator -avd "AVD_NAME"
+```
+
+如果列表为空，在 Device Manager 点击“Create Device”，选择设备型号和系统镜像，完成创建后再启动。
+
+将 `AVD_NAME` 替换为列表中的设备名称。如果 PowerShell 找不到 `emulator` 命令，可在 Android Studio 的 SDK Manager 查看 SDK 路径，然后使用该目录下的 `emulator\emulator.exe`：
+
+```powershell
+$androidSdk = "$env:LOCALAPPDATA\Android\Sdk"
+& "$androidSdk\emulator\emulator.exe" -avd "AVD_NAME"
+```
+
+等待模拟器启动后确认 ADB 已连接，再安装当前调试版本：
+
+```powershell
+adb devices
+.\gradlew.bat installDebug
+```
 
 屏幕亮起时长按 30 秒采样，额度临近耗尽时会缩短采样间隔。后台服务在开机后恢复；TCL 固件还需要通过 ADB 放行 `APP_AUTO_START` 与 `APP_ASSOC_START`。完整安装升级步骤见 [docs/INSTALL_TCL.md](docs/INSTALL_TCL.md)。
 
@@ -37,7 +54,17 @@ python backend/server.py
 
 浏览器打开 `http://127.0.0.1:8765/questions`，使用上一步设置的用户名和密码登录（用户名默认 `admin`，密码至少 10 个字符）。后台分为“使用规则”和“题库管理”两个页面：添加题目时从下拉框选择类别，包含内置类别与题库已有的自定义类别；点击列表中的题目可打开详情，查看类别、难度、四个选项和正确答案。
 
-本地账号以密码散列保存到 `backend/data/admin.json`，忘记密码时重新运行 `--set-admin`；本地题库与规则默认保存到 `backend/data.json`。本机预览使用本地数据；电视正式版本固定连接线上域名。修改 `backend/web/` 后刷新浏览器即可看到变化，无需重启 Python；按 `Ctrl+C` 停止预览。
+如果 8765 端口已被占用，可在启动服务前改用其他端口，例如：
+
+```powershell
+$env:HOST = "127.0.0.1"
+$env:PORT = "8766"
+python backend/server.py
+```
+
+此时打开 `http://127.0.0.1:8766/settings`。停止服务时在运行它的 PowerShell 窗口按 `Ctrl+C`。
+
+本地账号以密码散列保存到 `backend/data/admin.json`，忘记密码时重新运行 `--set-admin`；本地题库与规则默认保存到 `backend/data.json`。本机预览使用本地数据。启动本地后台只会让浏览器管理页面使用本地数据；app 当前仍固定连接线上域名 `https://tvparental.mediainsight360.com`，不会因为启动本地后台而自动切换。修改 `backend/web/` 后刷新浏览器即可看到变化，无需重启 Python。
 
 题库支持 DeepSeek AI 出题：在“AI 出题”中输入一首古诗词的名称（可附作者）、数量和难度，一次生成 1–10 道四选一题目，预览并勾选后批量入库。AI 与手动出题的难度统一为“低、中、高”，默认“中”；已有题库的“小学、初中、高中”读取时分别对应“低、中、高”。需要在服务环境中配置 `DEEPSEEK_API_KEY`；Key 配置和使用步骤见[部署文档](docs/DEPLOY_ECS.md#deepseek-ai-古诗词出题)。
 
