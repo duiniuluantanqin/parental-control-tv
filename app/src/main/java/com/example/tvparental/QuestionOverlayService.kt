@@ -118,9 +118,11 @@ class QuestionOverlayService : Service() {
         var selectedIndex = 0
         lateinit var moveFocus: (Int, Int) -> Unit
 
-        val root = createRoot()
-        addRemainingTimeLabel(root)
-        addLockCountdown(root)
+        val root = createRoot().apply {
+            setPadding(dp(36), dp(18), dp(36), dp(18))
+        }
+        addRemainingTimeLabel(root, 28)
+        addLockCountdown(root, 36, 22f)
         val title = TextView(this).apply {
             text = "Answer to continue · Question ${QuestionBank.challengeAnsweredCount(this@QuestionOverlayService) + 1}/${QuestionBank.CHALLENGE_QUESTION_COUNT} · Correct ${QuestionBank.challengeCorrectCount(this@QuestionOverlayService)}/${QuestionBank.CHALLENGE_REQUIRED_CORRECT} · ${QuestionBank.displayCategory(question.category)}"
             setTextColor(Color.rgb(193, 203, 194))
@@ -133,15 +135,15 @@ class QuestionOverlayService : Service() {
             text = question.prompt
             setTextColor(Color.WHITE)
             textSize = 34f
-            maxLines = 3
+            maxLines = 4
             setAutoSizeTextTypeUniformWithConfiguration(
-                24,
-                34,
+                20,
+                32,
                 2,
                 TypedValue.COMPLEX_UNIT_SP,
             )
             gravity = Gravity.CENTER
-            setPadding(dp(24), dp(20), dp(24), dp(24))
+            setPadding(dp(24), dp(8), dp(24), dp(8))
         }
         root.addView(prompt, weightedParams(1f))
 
@@ -197,8 +199,8 @@ class QuestionOverlayService : Service() {
                     GridLayout.spec(index % 2, 1f),
                 ).apply {
                     width = 0
-                    height = dp(72)
-                    setMargins(dp(8), dp(8), dp(8), dp(8))
+                    height = dp(60)
+                    setMargins(dp(8), dp(5), dp(8), dp(5))
                 },
             )
         }
@@ -207,7 +209,7 @@ class QuestionOverlayService : Service() {
             LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { setMargins(dp(60), dp(4), dp(60), dp(12)) },
+            ).apply { setMargins(dp(60), dp(2), dp(60), dp(6)) },
         )
 
         val status = TextView(this).apply {
@@ -216,7 +218,7 @@ class QuestionOverlayService : Service() {
             textSize = 18f
             gravity = Gravity.CENTER
         }
-        root.addView(status, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(60)))
+        root.addView(status, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(44)))
 
         moveFocus = { index, keyCode ->
             val nextIndex = when (keyCode) {
@@ -383,16 +385,16 @@ class QuestionOverlayService : Service() {
         unlockButton?.let { button -> root.post { button.requestFocus() } }
     }
 
-    private fun addLockCountdown(root: LinearLayout) {
+    private fun addLockCountdown(root: LinearLayout, heightDp: Int = 56, textSizeSp: Float = 28f) {
         lockCountdown = TextView(this).apply {
             setTextColor(Color.rgb(210, 239, 111))
-            textSize = 28f
+            textSize = textSizeSp
             gravity = Gravity.CENTER
         }
-        root.addView(lockCountdown, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(56)))
+        root.addView(lockCountdown, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(heightDp)))
     }
 
-    private fun addRemainingTimeLabel(root: LinearLayout) {
+    private fun addRemainingTimeLabel(root: LinearLayout, heightDp: Int = 34) {
         remainingTimeLabel = TextView(this).apply {
             setTextColor(Color.rgb(193, 203, 194))
             textSize = 16f
@@ -400,7 +402,7 @@ class QuestionOverlayService : Service() {
         }
         root.addView(remainingTimeLabel, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
-            dp(34),
+            dp(heightDp),
         ))
         updateRemainingTimeLabel()
     }
