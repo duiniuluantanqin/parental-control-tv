@@ -95,6 +95,13 @@ td:nth-child(3) { color: #39675b; width: 200px; }
 .question-link { padding: 0; border: 0; color: #183d38; background: transparent; text-align: left; line-height: inherit; overflow-wrap: anywhere; text-decoration: underline; text-decoration-color: #b6c5bf; text-underline-offset: 4px; }
 .question-link:hover { color: #267467; text-decoration-color: currentColor; }
 .empty { padding: 40px; color: #71817c; text-align: center; }
+.records-heading { align-items: center; }
+.records-controls { display: flex; align-items: center; gap: 12px; }
+.records-date { display: flex; align-items: center; gap: 10px; color: #3e514c; font-size: 14px; }
+.records-date input { min-width: 170px; }
+.records-section + .records-section { margin-top: 28px; }
+.records-section-heading { margin-bottom: 12px; }
+.records-section-heading h2 { color: #244a42; font-size: 17px; }
 .delete-button { padding: 5px 9px; color: #984b3f; background: transparent; border: 1px solid #d9b2aa; border-radius: 4px; font-size: 12px; }
 .delete-button:hover { background: #f9e9e5; }
 .loading { margin: 64px auto; text-align: center; color: #61746c; }
@@ -143,6 +150,8 @@ dialog::backdrop { background: #102c296b; backdrop-filter: blur(3px); }
   .topbar { padding: 0 16px; }
   main { padding: 0 16px 32px; }
   .section-heading { align-items: flex-start; flex-direction: column; }
+  .records-controls { width: 100%; justify-content: space-between; }
+  .records-date input { width: min(220px, 65%); min-width: 0; }
   .weekly-heading { padding: 16px 16px 12px; }
   .settings-grid { grid-template-columns: 1fr; gap: 24px; padding: 24px; }
   .settings-footer { align-items: flex-start; flex-direction: column; padding: 20px 24px; }

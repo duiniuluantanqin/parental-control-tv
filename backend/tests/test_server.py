@@ -76,6 +76,54 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(state["settings"], server.DEFAULT_SETTINGS)
         self.assertIsNone(state["passwordReset"])
 
+    def test_device_usage_reports_are_daily_cumulative_and_admin_only(self) -> None:
+        payload = {"deviceId": "tv-01", "date": "2026-11-05", "usageMillis": 60_000}
+        for amount in (60_000, 120_000, 90_000):
+            payload["usageMillis"] = amount
+            status, result = self.request("/api/v1/device/usage", method="POST", authenticated=False, body=payload)
+            self.assertEqual(status, 200)
+            self.assertEqual(result["usageMillis"], max(amount, 120_000) if amount == 90_000 else amount)
+        _, device_state = self.request("/api/v1/device/state", authenticated=False)
+        self.assertNotIn("dailyUsage", device_state)
+        self.assertNotIn("answerRecords", device_state)
+
+        status, _ = self.request("/api/v1/admin/records?date=2026-11-05", authenticated=False)
+        self.assertEqual(status, 401)
+        status, records = self.request("/api/v1/admin/records?date=2026-11-05")
+        self.assertEqual(status, 200)
+        self.assertEqual(records["usage"], [{
+            "deviceId": "tv-01", "date": "2026-11-05", "usageMillis": 120_000,
+        }])
+
+    def test_answer_attempts_record_correctness_and_retry_without_duplicates(self) -> None:
+        question = server.STORE.load()["questions"][0]
+        payload = {
+            "attemptId": "attempt-wrong-1", "deviceId": "tv-01", "date": "2026-11-05",
+            "answeredAt": 1793836800000, "questionId": question["id"],
+            "selectedAnswer": next(option for option in question["options"] if option != question["answer"]),
+        }
+        invalid_payload = {**payload, "attemptId": "attempt-invalid", "selectedAnswer": "not an option"}
+        status, _ = self.request("/api/v1/device/answers", method="POST", authenticated=False, body=invalid_payload)
+        self.assertEqual(status, 400)
+        for _ in range(2):
+            status, result = self.request("/api/v1/device/answers", method="POST", authenticated=False, body=payload)
+            self.assertEqual(status, 200)
+            self.assertFalse(result["correct"])
+        self.assertEqual(len(server.STORE.load()["questions"]), 50)
+
+        payload["attemptId"] = "attempt-correct-1"
+        payload["answeredAt"] += 1000
+        payload["selectedAnswer"] = question["answer"]
+        status, result = self.request("/api/v1/device/answers", method="POST", authenticated=False, body=payload)
+        self.assertEqual(status, 200)
+        self.assertTrue(result["correct"])
+        self.assertTrue(result["removed"])
+
+        _, records = self.request("/api/v1/admin/records?date=2026-11-05")
+        self.assertEqual(len(records["answers"]), 2)
+        self.assertEqual([item["correct"] for item in records["answers"]], [True, False])
+        self.assertEqual(len(server.STORE.load()["questions"]), 49)
+
     def test_password_reset_command_requires_admin_and_survives_device_sync(self) -> None:
         status, _ = self.request(
             "/api/v1/admin/password/reset", method="POST", authenticated=False, body={},

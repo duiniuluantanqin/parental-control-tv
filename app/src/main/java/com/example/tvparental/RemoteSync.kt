@@ -7,6 +7,10 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.UUID
 
 data class SyncResult(
     val success: Boolean,
@@ -21,7 +25,37 @@ object RemoteSync {
         var connection: HttpURLConnection? = null
         return try {
             val acknowledged = mutableSetOf<String>()
-            for (question in QuestionBank.pendingCorrectAnswers(context)) {
+            val acknowledgedAttempts = mutableSetOf<String>()
+            for (attempt in QuestionBank.pendingAnswerAttempts(context)) {
+                val report = URL("${ControlState.BACKEND_URL}/api/v1/device/answers").openConnection() as HttpURLConnection
+                try {
+                    report.requestMethod = "POST"
+                    report.connectTimeout = 5_000
+                    report.readTimeout = 5_000
+                    report.doOutput = true
+                    report.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    val body = JSONObject()
+                        .put("attemptId", attempt.attemptId)
+                        .put("deviceId", deviceId(context))
+                        .put("date", attempt.date)
+                        .put("answeredAt", attempt.answeredAt)
+                        .put("questionId", attempt.question.id)
+                        .put("selectedAnswer", attempt.selectedAnswer)
+                        .toString().toByteArray(Charsets.UTF_8)
+                    report.setFixedLengthStreamingMode(body.size)
+                    report.outputStream.use { it.write(body) }
+                    val code = report.responseCode
+                    if (code !in 200..299) return SyncResult(false, "Answer report failed (HTTP $code). It will retry later.")
+                    val result = JSONObject(report.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
+                    if (result.getBoolean("accepted")) {
+                        acknowledgedAttempts.add(attempt.attemptId)
+                        if (result.optBoolean("correct")) acknowledged.add(attempt.question.id)
+                    }
+                } finally {
+                    report.disconnect()
+                }
+            }
+            for (question in QuestionBank.pendingCorrectAnswers(context).filterNot { it.id in acknowledged }) {
                 val report = URL("${ControlState.BACKEND_URL}/api/v1/device/answers").openConnection() as HttpURLConnection
                 try {
                     report.requestMethod = "POST"
@@ -91,6 +125,7 @@ object RemoteSync {
                     }
                 }
             // Keep the local exclusion until the replacement bank has been saved successfully.
+            QuestionBank.acknowledgeAnswerAttempts(context, acknowledgedAttempts)
             QuestionBank.acknowledgeCorrectAnswers(context, acknowledged)
             val message = if (parsed.isEmpty()) "Question bank is empty. Waiting for the server to refill it." else "Synced ${parsed.size} questions."
             SyncResult(true, message, parsed.size, settingsChanged)
@@ -108,6 +143,40 @@ object RemoteSync {
             val result = sync(applicationContext)
             Handler(applicationContext.mainLooper).post { onComplete(result) }
         }.start()
+    }
+
+    @Synchronized
+    fun deviceId(context: Context): String {
+        val preferences = context.getSharedPreferences("remote_sync", Context.MODE_PRIVATE)
+        preferences.getString("device_id", null)?.let { return it }
+        val id = UUID.randomUUID().toString()
+        check(preferences.edit().putString("device_id", id).commit()) { "Could not save the device ID." }
+        return id
+    }
+
+    fun reportUsage(context: Context): Boolean {
+        var connection: HttpURLConnection? = null
+        return try {
+            connection = URL("${ControlState.BACKEND_URL}/api/v1/device/usage").openConnection() as HttpURLConnection
+            connection.requestMethod = "POST"
+            connection.connectTimeout = 5_000
+            connection.readTimeout = 5_000
+            connection.doOutput = true
+            connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            val now = System.currentTimeMillis()
+            val body = JSONObject()
+                .put("deviceId", deviceId(context))
+                .put("date", SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(now)))
+                .put("usageMillis", ControlState.usedMillis(context))
+                .toString().toByteArray(Charsets.UTF_8)
+            connection.setFixedLengthStreamingMode(body.size)
+            connection.outputStream.use { it.write(body) }
+            connection.responseCode in 200..299
+        } catch (_: Exception) {
+            false
+        } finally {
+            connection?.disconnect()
+        }
     }
 
     private fun minuteOfDay(value: String): Int {

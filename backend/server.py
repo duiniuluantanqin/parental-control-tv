@@ -9,7 +9,7 @@ import hashlib
 import hmac
 import json
 import os
-from datetime import time as datetime_time
+from datetime import date, datetime, time as datetime_time
 import secrets
 import threading
 import time
@@ -17,7 +17,7 @@ import uuid
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from deepseek import (
     RANDOM_QUESTION_CATEGORIES,
@@ -36,7 +36,7 @@ PORT = int(os.environ.get("PORT", "8765"))
 MAX_BODY_BYTES = 64 * 1024
 SESSION_SECONDS = 12 * 60 * 60
 SESSION_COOKIE = "tvparental_session"
-BACKEND_VERSION = "1.0.7"
+BACKEND_VERSION = "1.0.8"
 
 WEEKDAYS = tuple(str(day) for day in range(1, 8))
 DEFAULT_SETTINGS = {
@@ -192,6 +192,8 @@ def default_state() -> dict[str, object]:
         "settings": dict(DEFAULT_SETTINGS),
         "questions": normalized,
         "passwordReset": None,
+        "dailyUsage": [],
+        "answerRecords": [],
     }
 
 
@@ -217,6 +219,8 @@ class StateStore:
                 "settings": validate_settings(state.get("settings", DEFAULT_SETTINGS)),
                 "questions": [validate_question(item) for item in state["questions"]],
                 "passwordReset": validate_password_reset(state.get("passwordReset")),
+                "dailyUsage": state.get("dailyUsage", []),
+                "answerRecords": state.get("answerRecords", []),
             }
 
     def queue_password_reset(self) -> dict[str, str]:
@@ -243,7 +247,9 @@ class StateStore:
             if not state["questions"]:
                 self.ensure_refill()
             return {
-                **state,
+                "settings": state["settings"],
+                "questions": state["questions"],
+                "passwordReset": state["passwordReset"],
                 "version": BACKEND_VERSION,
                 "refill": {"running": self.refill_running, "error": self.refill_error},
             }
@@ -384,7 +390,26 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/v1/admin/state":
             if self.require_admin():
                 self.send_json(200, STORE.snapshot())
-        elif path in ("/", "/index.html", "/login", "/settings", "/questions"):
+        elif path == "/api/v1/admin/records":
+            if self.require_admin():
+                params = parse_qs(urlsplit(self.path).query)
+                record_date = params.get("date", [datetime.now().astimezone().date().isoformat()])[0]
+                try:
+                    if date.fromisoformat(record_date).isoformat() != record_date:
+                        raise ValueError
+                except ValueError:
+                    self.send_json(400, {"error": "日期格式必须为 YYYY-MM-DD"})
+                    return
+                with STORE.lock:
+                    state = STORE.load()
+                    usage = [item for item in state["dailyUsage"] if item.get("date") == record_date]
+                    answers = [item for item in state["answerRecords"] if item.get("date") == record_date]
+                self.send_json(200, {
+                    "date": record_date,
+                    "usage": sorted(usage, key=lambda item: item["deviceId"]),
+                    "answers": sorted(answers, key=lambda item: item["answeredAt"], reverse=True),
+                })
+        elif path in ("/", "/index.html", "/login", "/settings", "/questions", "/records"):
             self.send_static("index.html", "text/html; charset=utf-8")
         elif path == "/app.js":
             self.send_static("app.js", "text/javascript; charset=utf-8")
@@ -395,11 +420,85 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlsplit(self.path).path
+        if path == "/api/v1/device/usage":
+            if not self.same_origin():
+                return
+            try:
+                payload = self.read_json()
+                device_id, record_date, usage_millis = payload.get("deviceId"), payload.get("date"), payload.get("usageMillis")
+                if not isinstance(device_id, str) or not 1 <= len(device_id) <= 80:
+                    raise ValueError("无效的设备 ID")
+                if not isinstance(record_date, str) or date.fromisoformat(record_date).isoformat() != record_date:
+                    raise ValueError("日期格式必须为 YYYY-MM-DD")
+                if isinstance(usage_millis, bool) or not isinstance(usage_millis, int) or not 0 <= usage_millis <= 172_800_000:
+                    raise ValueError("使用时长无效")
+                with STORE.lock:
+                    state = STORE.load()
+                    usage = state["dailyUsage"]
+                    record = next((item for item in usage if item["deviceId"] == device_id and item["date"] == record_date), None)
+                    if record is None:
+                        record = {"deviceId": device_id, "date": record_date, "usageMillis": usage_millis}
+                        usage.append(record)
+                    else:
+                        record["usageMillis"] = max(record["usageMillis"], usage_millis)
+                    STORE.save(state)
+                self.send_json(200, {"accepted": True, "usageMillis": record["usageMillis"]})
+            except (ValueError, TypeError) as error:
+                self.send_json(400, {"error": str(error) or "使用时长上报格式无效"})
+            return
         if path == "/api/v1/device/answers":
             if not self.same_origin():
                 return
             try:
                 payload = self.read_json()
+                if "attemptId" in payload:
+                    attempt_id, device_id = payload.get("attemptId"), payload.get("deviceId")
+                    record_date, answered_at = payload.get("date"), payload.get("answeredAt")
+                    question_id, selected_answer = payload.get("questionId"), payload.get("selectedAnswer")
+                    if not isinstance(attempt_id, str) or not 1 <= len(attempt_id) <= 80:
+                        raise ValueError("无效的答题记录 ID")
+                    if not isinstance(device_id, str) or not 1 <= len(device_id) <= 80:
+                        raise ValueError("无效的设备 ID")
+                    if not isinstance(record_date, str) or date.fromisoformat(record_date).isoformat() != record_date:
+                        raise ValueError("日期格式必须为 YYYY-MM-DD")
+                    if isinstance(answered_at, bool) or not isinstance(answered_at, int) or answered_at < 0:
+                        raise ValueError("答题时间无效")
+                    if not isinstance(question_id, str) or not 1 <= len(question_id) <= 80:
+                        raise ValueError("无效的题目 ID")
+                    if not isinstance(selected_answer, str) or not 1 <= len(selected_answer) <= 120:
+                        raise ValueError("无效的作答内容")
+                    with STORE.lock:
+                        state = STORE.load()
+                        records = state["answerRecords"]
+                        existing = next((item for item in records if item["deviceId"] == device_id and item["attemptId"] == attempt_id), None)
+                        if existing is not None:
+                            self.send_json(200, {"accepted": True, "correct": existing["correct"], "removed": False})
+                            return
+                        question = next((item for item in state["questions"] if item["id"] == question_id), None)
+                        if question is None:
+                            self.send_json(404, {"error": "题目不存在或已被使用"})
+                            return
+                        if selected_answer not in question["options"]:
+                            raise ValueError("作答内容不属于该题选项")
+                        correct = selected_answer == question["answer"]
+                        records.append({
+                            "attemptId": attempt_id,
+                            "deviceId": device_id,
+                            "date": record_date,
+                            "answeredAt": answered_at,
+                            "questionId": question_id,
+                            "prompt": question["prompt"],
+                            "selectedAnswer": selected_answer,
+                            "correctAnswer": question["answer"],
+                            "correct": correct,
+                        })
+                        if correct:
+                            state["questions"] = [item for item in state["questions"] if item["id"] != question_id]
+                        STORE.save(state)
+                    if correct:
+                        STORE.ensure_refill()
+                    self.send_json(200, {"accepted": True, "correct": correct, "removed": correct})
+                    return
                 question_id, answer = payload.get("questionId"), payload.get("answer")
                 if not isinstance(question_id, str) or not 1 <= len(question_id) <= 80 or not isinstance(answer, str) or not 1 <= len(answer) <= 120:
                     raise ValueError("请输入有效的题目 ID 和答案")

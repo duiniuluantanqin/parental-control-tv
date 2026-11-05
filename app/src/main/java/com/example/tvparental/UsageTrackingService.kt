@@ -28,7 +28,9 @@ class UsageTrackingService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var lastSample = 0L
     private var lastRemoteSync = 0L
+    private var lastUsageReport = 0L
     private var remoteSyncInProgress = false
+    private var usageReportInProgress = false
     private var wasInteractive = false
     private var receiverRegistered = false
     private var lastEnforcementAction: String? = null
@@ -47,6 +49,7 @@ class UsageTrackingService : Service() {
             wasInteractive = intent?.action == Intent.ACTION_SCREEN_ON
             updateEnforcement()
             maybeShowUsageReminder()
+            reportUsageIfDue()
         }
     }
 
@@ -58,6 +61,7 @@ class UsageTrackingService : Service() {
             maybeShowUsageReminder()
             updateNotification()
             syncRemoteIfDue()
+            reportUsageIfDue()
             handler.postDelayed(this, nextSampleDelay())
         }
     }
@@ -262,6 +266,18 @@ class UsageTrackingService : Service() {
         }.start()
     }
 
+    private fun reportUsageIfDue() {
+        if (usageReportInProgress) return
+        val now = SystemClock.elapsedRealtime()
+        if (lastUsageReport != 0L && now - lastUsageReport < USAGE_REPORT_INTERVAL_MS) return
+        lastUsageReport = now.coerceAtLeast(1L)
+        usageReportInProgress = true
+        Thread {
+            RemoteSync.reportUsage(applicationContext)
+            handler.post { usageReportInProgress = false }
+        }.start()
+    }
+
     private fun startQuestionService(action: String) {
         val intent = Intent(this, QuestionOverlayService::class.java).setAction(action)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
@@ -317,6 +333,7 @@ class UsageTrackingService : Service() {
         private const val CHANNEL_ID = "usage_tracking"
         private const val NOTIFICATION_ID = 1002
         private const val SAMPLE_INTERVAL_MS = 30_000L
+        private const val USAGE_REPORT_INTERVAL_MS = 60_000L
         private const val TEN_MINUTE_THRESHOLD_MS = ControlState.TEN_MINUTE_REMINDER_MINUTES * 60_000L
         private const val ONE_MINUTE_THRESHOLD_MS = ControlState.ONE_MINUTE_REMINDER_MINUTES * 60_000L
         private const val MILLIS_PER_MINUTE = 60_000L

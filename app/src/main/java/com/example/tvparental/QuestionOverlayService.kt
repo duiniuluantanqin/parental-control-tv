@@ -99,7 +99,7 @@ class QuestionOverlayService : Service() {
 
         val root = createRoot()
         val title = TextView(this).apply {
-            text = "Answer to continue · Question ${QuestionBank.challengeCorrectCount(this@QuestionOverlayService) + 1}/${QuestionBank.CHALLENGE_QUESTION_COUNT} · ${QuestionBank.displayCategory(question.category)}"
+            text = "Answer to continue · Question ${QuestionBank.challengeAnsweredCount(this@QuestionOverlayService) + 1}/${QuestionBank.CHALLENGE_QUESTION_COUNT} · Correct ${QuestionBank.challengeCorrectCount(this@QuestionOverlayService)}/${QuestionBank.CHALLENGE_REQUIRED_CORRECT} · ${QuestionBank.displayCategory(question.category)}"
             setTextColor(Color.rgb(193, 203, 194))
             textSize = 20f
             gravity = Gravity.START or Gravity.CENTER_VERTICAL
@@ -181,7 +181,7 @@ class QuestionOverlayService : Service() {
         )
 
         val status = TextView(this).apply {
-            text = "All ${QuestionBank.CHALLENGE_QUESTION_COUNT} answers must be correct."
+            text = "Answer at least ${QuestionBank.CHALLENGE_REQUIRED_CORRECT} of ${QuestionBank.CHALLENGE_QUESTION_COUNT} questions correctly to continue."
             setTextColor(Color.rgb(205, 214, 206))
             textSize = 18f
             gravity = Gravity.CENTER
@@ -208,45 +208,43 @@ class QuestionOverlayService : Service() {
     private fun submitAnswer(question: TvQuestion, selected: String, root: View) {
         if (answerSubmitted) return
         answerSubmitted = true
-        if (selected == question.answer) {
-            val correctCount = QuestionBank.markCorrect(this, question)
-            if (correctCount == QuestionBank.CHALLENGE_QUESTION_COUNT) {
-                QuestionBank.finishChallenge(this)
-            }
-            RemoteSync.syncAsync(applicationContext) { result ->
-                if (result.settingsChanged) QuestionAlarmReceiver.scheduleForCurrentState(applicationContext)
-            }
-            if (ControlState.isDailyLimitReached(this)) {
-                showDailyLock()
-                return
-            }
-            (root as? LinearLayout)?.let { layout ->
-                (layout.getChildAt(layout.childCount - 1) as? TextView)?.apply {
-                    text = if (correctCount == QuestionBank.CHALLENGE_QUESTION_COUNT) {
-                        "All answers correct"
-                    } else {
-                        "Correct answer · $correctCount/${QuestionBank.CHALLENGE_QUESTION_COUNT}"
-                    }
-                    setTextColor(Color.rgb(185, 222, 119))
-                }
-            }
-            root.postDelayed({
-                if (ControlState.isDailyLimitReached(this)) {
-                    showDailyLock()
-                } else if (correctCount < QuestionBank.CHALLENGE_QUESTION_COUNT) {
-                    showQuestion()
-                } else {
-                    ControlState.clearWrongAnswerLock(this)
-                    QuestionAlarmReceiver.scheduleNext(this)
-                    hideOverlay()
-                }
-            }, 450)
-        } else {
+        val progress = QuestionBank.recordAnswer(this, question, selected)
+        RemoteSync.syncAsync(applicationContext) { result ->
+            if (result.settingsChanged) QuestionAlarmReceiver.scheduleForCurrentState(applicationContext)
+        }
+        if (ControlState.isDailyLimitReached(this)) {
+            showDailyLock()
+            return
+        }
+        if (progress.complete && !progress.passed) {
             val until = ControlState.startWrongAnswerLock(this)
             QuestionBank.restartChallenge(this)
             QuestionAlarmReceiver.scheduleAfter(this, until - System.currentTimeMillis())
             showLockout()
+            return
         }
+        if (progress.passed) QuestionBank.finishChallenge(this)
+        (root as? LinearLayout)?.let { layout ->
+            (layout.getChildAt(layout.childCount - 1) as? TextView)?.apply {
+                text = when {
+                    progress.passed -> "${progress.correctCount}/${QuestionBank.CHALLENGE_QUESTION_COUNT} correct - access unlocked"
+                    selected == question.answer -> "Correct answer - ${progress.correctCount}/${QuestionBank.CHALLENGE_REQUIRED_CORRECT} needed"
+                    else -> "Incorrect answer - ${progress.correctCount}/${QuestionBank.CHALLENGE_REQUIRED_CORRECT} needed"
+                }
+                setTextColor(if (selected == question.answer) Color.rgb(185, 222, 119) else Color.rgb(238, 154, 131))
+            }
+        }
+        root.postDelayed({
+            if (ControlState.isDailyLimitReached(this)) {
+                showDailyLock()
+            } else if (progress.passed) {
+                ControlState.clearWrongAnswerLock(this)
+                QuestionAlarmReceiver.scheduleNext(this)
+                hideOverlay()
+            } else {
+                showQuestion()
+            }
+        }, 450)
     }
 
     private fun showDailyLock() {

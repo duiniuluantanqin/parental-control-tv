@@ -4,6 +4,10 @@ import android.content.Context
 import android.content.SharedPreferences
 import org.json.JSONArray
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.UUID
 
 data class TvQuestion(
     val id: String,
@@ -14,14 +18,33 @@ data class TvQuestion(
     val difficulty: String,
 )
 
+data class ChallengeProgress(
+    val answeredCount: Int,
+    val correctCount: Int,
+) {
+    val complete: Boolean get() = answeredCount == QuestionBank.CHALLENGE_QUESTION_COUNT
+    val passed: Boolean get() = complete && correctCount >= QuestionBank.CHALLENGE_REQUIRED_CORRECT
+}
+
+data class PendingAnswer(
+    val attemptId: String,
+    val question: TvQuestion,
+    val selectedAnswer: String,
+    val answeredAt: Long,
+    val date: String,
+)
+
 object QuestionBank {
     const val CHALLENGE_QUESTION_COUNT = 5
+    const val CHALLENGE_REQUIRED_CORRECT = 4
     private const val PREFERENCES = "question_state"
     private const val LAST_QUESTION_ID = "last_question_id"
     private const val CURRENT_QUESTION_ID = "current_question_id"
     private const val PENDING_CORRECT_ANSWERS = "pending_correct_answers"
     private const val CHALLENGE_ACTIVE = "challenge_active"
+    private const val CHALLENGE_ANSWER_COUNT = "challenge_answer_count"
     private const val CHALLENGE_CORRECT_COUNT = "challenge_correct_count"
+    private const val PENDING_ANSWER_ATTEMPTS = "pending_answer_attempts"
 
     fun all(context: Context): List<TvQuestion> {
         val answered = pendingCorrectAnswers(context).map { it.id }.toSet()
@@ -78,10 +101,17 @@ object QuestionBank {
             .getInt(CHALLENGE_CORRECT_COUNT, 0)
             .coerceIn(0, CHALLENGE_QUESTION_COUNT)
 
+    fun challengeAnsweredCount(context: Context): Int {
+        val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        return preferences.getInt(CHALLENGE_ANSWER_COUNT, preferences.getInt(CHALLENGE_CORRECT_COUNT, 0))
+            .coerceIn(0, CHALLENGE_QUESTION_COUNT)
+    }
+
     fun restartChallenge(context: Context) {
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(CHALLENGE_ACTIVE, true)
+            .putInt(CHALLENGE_ANSWER_COUNT, 0)
             .putInt(CHALLENGE_CORRECT_COUNT, 0)
             .remove(CURRENT_QUESTION_ID)
             .apply()
@@ -91,22 +121,71 @@ object QuestionBank {
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(CHALLENGE_ACTIVE, false)
+            .putInt(CHALLENGE_ANSWER_COUNT, 0)
             .putInt(CHALLENGE_CORRECT_COUNT, 0)
             .remove(CURRENT_QUESTION_ID)
             .apply()
     }
 
     @Synchronized
-    fun markCorrect(context: Context, question: TvQuestion): Int {
-        val pending = pendingCorrectAnswers(context).filterNot { it.id == question.id } + question
-        val correctCount = (challengeCorrectCount(context) + 1).coerceAtMost(CHALLENGE_QUESTION_COUNT)
-        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
-            .putString(PENDING_CORRECT_ANSWERS, JSONArray(pending.map { toJsonObject(it) }).toString())
+    fun recordAnswer(context: Context, question: TvQuestion, selectedAnswer: String): ChallengeProgress {
+        val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        val correct = selectedAnswer == question.answer
+        val answeredCount = (challengeAnsweredCount(context) + 1).coerceAtMost(CHALLENGE_QUESTION_COUNT)
+        val correctCount = (challengeCorrectCount(context) + if (correct) 1 else 0)
+            .coerceAtMost(CHALLENGE_QUESTION_COUNT)
+        val answeredAt = System.currentTimeMillis()
+        val pendingAnswers = pendingAnswerAttempts(context) + PendingAnswer(
+            attemptId = UUID.randomUUID().toString(),
+            question = question,
+            selectedAnswer = selectedAnswer,
+            answeredAt = answeredAt,
+            date = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(answeredAt)),
+        )
+        val editor = preferences.edit()
+            .putString(PENDING_ANSWER_ATTEMPTS, JSONArray(pendingAnswers.map { pendingAnswerToJson(it) }).toString())
+            .putInt(CHALLENGE_ANSWER_COUNT, answeredCount)
             .putInt(CHALLENGE_CORRECT_COUNT, correctCount)
             .remove(CURRENT_QUESTION_ID)
-            .apply()
-        return correctCount
+        if (correct) {
+            val pendingCorrect = pendingCorrectAnswers(context).filterNot { it.id == question.id } + question
+            editor.putString(PENDING_CORRECT_ANSWERS, JSONArray(pendingCorrect.map { toJsonObject(it) }).toString())
+        }
+        editor.apply()
+        return ChallengeProgress(answeredCount, correctCount)
     }
+
+    @Synchronized
+    fun pendingAnswerAttempts(context: Context): List<PendingAnswer> {
+        val json = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getString(PENDING_ANSWER_ATTEMPTS, "[]") ?: "[]"
+        val array = JSONArray(json)
+        return (0 until array.length()).map { index ->
+            val item = array.getJSONObject(index)
+            PendingAnswer(
+                attemptId = item.getString("attemptId"),
+                question = parseQuestions(JSONArray().put(item.getJSONObject("question")).toString()).single(),
+                selectedAnswer = item.getString("selectedAnswer"),
+                answeredAt = item.getLong("answeredAt"),
+                date = item.getString("date"),
+            )
+        }
+    }
+
+    @Synchronized
+    fun acknowledgeAnswerAttempts(context: Context, ids: Set<String>) {
+        val remaining = pendingAnswerAttempts(context).filterNot { it.attemptId in ids }
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
+            .putString(PENDING_ANSWER_ATTEMPTS, JSONArray(remaining.map { pendingAnswerToJson(it) }).toString())
+            .apply()
+    }
+
+    private fun pendingAnswerToJson(answer: PendingAnswer) = JSONObject()
+        .put("attemptId", answer.attemptId)
+        .put("question", toJsonObject(answer.question))
+        .put("selectedAnswer", answer.selectedAnswer)
+        .put("answeredAt", answer.answeredAt)
+        .put("date", answer.date)
 
     @Synchronized
     fun pendingCorrectAnswers(context: Context): List<TvQuestion> {

@@ -13,8 +13,8 @@ const poemTitleInput = document.querySelector("#poemTitleInput");
 const poemTitleField = document.querySelector("#poemTitleField");
 const loginView = document.querySelector("#loginView");
 const adminView = document.querySelector("#adminView");
-const page = location.pathname === "/questions" ? "questions" : "settings";
-const isLoginPage = !["/settings", "/questions"].includes(location.pathname);
+const page = location.pathname === "/questions" ? "questions" : location.pathname === "/records" ? "records" : "settings";
+const isLoginPage = !["/settings", "/questions", "/records"].includes(location.pathname);
 const weekdays = [
   ["1", "周一"], ["2", "周二"], ["3", "周三"], ["4", "周四"],
   ["5", "周五"], ["6", "周六"], ["7", "周日"],
@@ -32,7 +32,7 @@ function setNotice(message, isError = false) {
 }
 
 function loginAddress() {
-  return `/login?next=${encodeURIComponent(location.pathname === "/questions" ? "/questions" : "/settings")}`;
+  return `/login?next=${encodeURIComponent(["/questions", "/records"].includes(location.pathname) ? location.pathname : "/settings")}`;
 }
 
 function handleError(error, target = notice) {
@@ -262,6 +262,57 @@ async function loadState() {
   }
 }
 
+function setEmptyRow(container, columnCount, message) {
+  const row = document.createElement("tr");
+  const cell = document.createElement("td");
+  cell.colSpan = columnCount;
+  cell.className = "empty";
+  cell.textContent = message;
+  row.append(cell);
+  container.append(row);
+}
+
+function renderRecords(records) {
+  const usageRows = document.querySelector("#usageRows");
+  const answerRows = document.querySelector("#answerRows");
+  usageRows.replaceChildren();
+  answerRows.replaceChildren();
+  document.querySelector("#recordsSummary").textContent = `共 ${records.usage.length} 台设备，${records.answers.length} 条答题记录`;
+
+  for (const record of records.usage) {
+    const row = document.createElement("tr");
+    for (const value of [record.date, record.deviceId, `${(record.usageMillis / 60_000).toFixed(1)} 分钟`]) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.append(cell);
+    }
+    usageRows.append(row);
+  }
+  if (!records.usage.length) setEmptyRow(usageRows, 3, "当天暂无使用时长记录");
+
+  for (const record of records.answers) {
+    const row = document.createElement("tr");
+    const time = document.createElement("td");
+    time.textContent = new Date(record.answeredAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const prompt = document.createElement("td");
+    prompt.textContent = record.prompt;
+    const answer = document.createElement("td");
+    answer.textContent = record.selectedAnswer;
+    const result = document.createElement("td");
+    result.textContent = record.correct ? "答对" : `答错，正确答案：${record.correctAnswer}`;
+    row.append(time, prompt, answer, result);
+    answerRows.append(row);
+  }
+  if (!records.answers.length) setEmptyRow(answerRows, 4, "当天暂无答题记录");
+}
+
+async function loadRecords() {
+  const date = document.querySelector("#recordsDate").value;
+  if (!date) return;
+  const records = await api(`/api/v1/admin/records?date=${encodeURIComponent(date)}`);
+  renderRecords(records);
+}
+
 async function login(event) {
   event.preventDefault();
   const button = document.querySelector("#loginButton");
@@ -275,7 +326,7 @@ async function login(event) {
     });
     document.querySelector("#passwordInput").value = "";
     const next = new URLSearchParams(location.search).get("next");
-    location.replace(["/settings", "/questions"].includes(next) ? next : "/settings");
+    location.replace(["/settings", "/questions", "/records"].includes(next) ? next : "/settings");
   } catch (error) {
     handleError(error, loginNotice);
   } finally {
@@ -506,7 +557,15 @@ async function initialize() {
     document.querySelector("#logoutButton").hidden = false;
     document.querySelector(`#${page}Page`).hidden = false;
     document.querySelector(`[data-page="${page}"]`).setAttribute("aria-current", "page");
-    document.title = `${page === "questions" ? "题库管理" : "使用规则"} · 健康使用`;
+    if (page === "records") {
+      const dateInput = document.querySelector("#recordsDate");
+      if (!dateInput.value) {
+        const today = new Date();
+        dateInput.value = [today.getFullYear(), String(today.getMonth() + 1).padStart(2, "0"), String(today.getDate()).padStart(2, "0")].join("-");
+      }
+      await loadRecords();
+    }
+    document.title = `${page === "questions" ? "题库管理" : page === "records" ? "使用记录" : "使用规则"} · 健康使用`;
   } catch (error) {
     if (error.status === 401 && !isLoginPage) {
       location.replace(loginAddress());
@@ -522,6 +581,8 @@ async function initialize() {
 
 document.querySelector("#loginForm").addEventListener("submit", login);
 document.querySelector("#settingsForm").addEventListener("submit", saveSettings);
+document.querySelector("#recordsDate").addEventListener("change", () => loadRecords().catch(handleError));
+document.querySelector("#refreshRecords").addEventListener("click", () => loadRecords().catch(handleError));
 document.querySelector("#resetDevicePin").addEventListener("click", async () => {
   if (!window.confirm("确认将电视 PIN 重置为“上下左右上上”？电视下次同步后生效。")) return;
   const button = document.querySelector("#resetDevicePin");

@@ -36,6 +36,7 @@
     <nav class="page-nav" aria-label="管理导航">
       <a href="/settings" data-page="settings">使用规则</a>
       <a href="/questions" data-page="questions">题库管理</a>
+      <a href="/records" data-page="records">使用记录</a>
     </nav>
     <p id="notice" class="notice" role="status" aria-live="polite"></p>
 
@@ -84,6 +85,34 @@
           <tbody id="questionRows"></tbody>
         </table>
       </div>
+    </section>
+
+    <section id="recordsPage" aria-labelledby="recordsTitle" hidden>
+      <div class="section-heading records-heading">
+        <div><h1 id="recordsTitle">使用记录</h1><p id="recordsSummary">查看每日使用时长和答题记录。</p></div>
+        <div class="records-controls">
+          <label class="records-date" for="recordsDate">日期<input id="recordsDate" type="date"></label>
+          <button id="refreshRecords" class="button secondary" type="button">刷新</button>
+        </div>
+      </div>
+      <section class="records-section" aria-labelledby="usageRecordsTitle">
+        <div class="records-section-heading"><h2 id="usageRecordsTitle">每日使用时长</h2></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>日期</th><th>设备</th><th>使用时长</th></tr></thead>
+            <tbody id="usageRows"></tbody>
+          </table>
+        </div>
+      </section>
+      <section class="records-section" aria-labelledby="answerRecordsTitle">
+        <div class="records-section-heading"><h2 id="answerRecordsTitle">答题记录</h2></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>时间</th><th>题目</th><th>作答</th><th>结果</th></tr></thead>
+            <tbody id="answerRows"></tbody>
+          </table>
+        </div>
+      </section>
     </section>
   </main>
 
