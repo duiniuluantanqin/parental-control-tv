@@ -18,6 +18,7 @@ import android.widget.TextView
 class PasswordPad(
     context: Context,
     private val masked: Boolean,
+    private val onBack: (() -> Unit)? = null,
     private val onComplete: (String) -> Unit,
 ) : LinearLayout(context) {
     private val input = StringBuilder()
@@ -95,6 +96,10 @@ class PasswordPad(
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_BACK && onBack != null) {
+            if (event.action == KeyEvent.ACTION_DOWN) onBack.invoke()
+            return true
+        }
         val symbol = when (keyCode) {
             KeyEvent.KEYCODE_DPAD_UP -> 'U'
             KeyEvent.KEYCODE_DPAD_DOWN -> 'D'

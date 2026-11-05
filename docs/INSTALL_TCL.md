@@ -5,7 +5,7 @@
 ## 升级前
 
 1. 电视开机，并与电脑连接同一网络。
-2. 保持包名 `com.example.tvparental` 不变。当前版本为 `0.9.5`（`versionCode` 25）；每次改动都在 `app/build.gradle.kts` 中把 `versionCode` 增加 1，并同步更新 `versionName`。不要更换用于签名的电脑/Android Studio 用户配置，否则电视可能拒绝覆盖安装。
+2. 保持包名 `com.example.tvparental` 不变。当前版本为 `0.9.8`（`versionCode` 28）；每次改动都在 `app/build.gradle.kts` 中把 `versionCode` 增加 1，并同步更新 `versionName`。不要更换用于签名的电脑/Android Studio 用户配置，否则电视可能拒绝覆盖安装。
 3. 在项目根目录打开 PowerShell。以下命令优先使用 PATH 中的 ADB；如果未加入 PATH，可将 `$adb` 设置为当前电脑 Android SDK `platform-tools` 目录下的 `adb.exe`。仓库安装器 `install_device.bat` 会自动从 Android SDK 环境变量、`local.properties` 或 PATH 定位 ADB。
 
 ## 构建并推送

@@ -91,6 +91,7 @@
       <div class="section-heading records-heading">
         <div><h1 id="recordsTitle">使用记录</h1><p id="recordsSummary">查看每日使用时长和答题记录。</p></div>
         <div class="records-controls">
+          <label class="records-device" for="recordsDevice">设备<select id="recordsDevice"><option value="">所有设备</option></select></label>
           <label class="records-date" for="recordsDate">日期<input id="recordsDate" type="date"></label>
           <button id="refreshRecords" class="button secondary" type="button">刷新</button>
         </div>
@@ -108,7 +109,7 @@
         <div class="records-section-heading"><h2 id="answerRecordsTitle">答题记录</h2></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>时间</th><th>题目</th><th>作答</th><th>结果</th></tr></thead>
+            <thead><tr><th>时间</th><th>设备</th><th>题目</th><th>作答</th><th>结果</th></tr></thead>
             <tbody id="answerRows"></tbody>
           </table>
         </div>

@@ -32,6 +32,7 @@ data class PendingAnswer(
     val selectedAnswer: String,
     val answeredAt: Long,
     val date: String,
+    val answered: Boolean = true,
 )
 
 object QuestionBank {
@@ -141,6 +142,7 @@ object QuestionBank {
             selectedAnswer = selectedAnswer,
             answeredAt = answeredAt,
             date = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(answeredAt)),
+            answered = true,
         )
         val editor = preferences.edit()
             .putString(PENDING_ANSWER_ATTEMPTS, JSONArray(pendingAnswers.map { pendingAnswerToJson(it) }).toString())
@@ -156,6 +158,24 @@ object QuestionBank {
     }
 
     @Synchronized
+    fun recordUnanswered(context: Context, question: TvQuestion) {
+        val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        val answeredAt = System.currentTimeMillis()
+        val pendingAnswers = pendingAnswerAttempts(context) + PendingAnswer(
+            attemptId = UUID.randomUUID().toString(),
+            question = question,
+            selectedAnswer = "",
+            answeredAt = answeredAt,
+            date = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(answeredAt)),
+            answered = false,
+        )
+        preferences.edit()
+            .putString(PENDING_ANSWER_ATTEMPTS, JSONArray(pendingAnswers.map { pendingAnswerToJson(it) }).toString())
+            .remove(CURRENT_QUESTION_ID)
+            .apply()
+    }
+
+    @Synchronized
     fun pendingAnswerAttempts(context: Context): List<PendingAnswer> {
         val json = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             .getString(PENDING_ANSWER_ATTEMPTS, "[]") ?: "[]"
@@ -168,6 +188,7 @@ object QuestionBank {
                 selectedAnswer = item.getString("selectedAnswer"),
                 answeredAt = item.getLong("answeredAt"),
                 date = item.getString("date"),
+                answered = item.optBoolean("answered", true),
             )
         }
     }
@@ -186,6 +207,7 @@ object QuestionBank {
         .put("selectedAnswer", answer.selectedAnswer)
         .put("answeredAt", answer.answeredAt)
         .put("date", answer.date)
+        .put("answered", answer.answered)
 
     @Synchronized
     fun pendingCorrectAnswers(context: Context): List<TvQuestion> {

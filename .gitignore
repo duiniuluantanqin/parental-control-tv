@@ -9,3 +9,4 @@ backend/data/
 backend/.env
 backend/__pycache__/
 *.py[cod]
+.kotlin/

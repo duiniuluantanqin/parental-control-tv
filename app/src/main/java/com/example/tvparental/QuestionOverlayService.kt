@@ -14,6 +14,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
@@ -30,9 +31,22 @@ class QuestionOverlayService : Service() {
     private var overlayView: View? = null
     private var currentMode = MODE_NONE
     private var lockCountdown: TextView? = null
+    private var remainingTimeLabel: TextView? = null
     private var answerSubmitted = false
     private var unlockPad: PasswordPad? = null
+    private var unlockButton: TextView? = null
+    private var pinHint: TextView? = null
+    private var pinEntryActive = false
+    private var currentQuestion: TvQuestion? = null
     private var failedAttempts = 0
+    private var pinCooldownUntil = 0L
+
+    private val pinCooldown = Runnable {
+        pinCooldownUntil = 0L
+        unlockPad?.inputEnabled = true
+        unlockPad?.reset()
+        pinHint?.text = "Enter your 6-direction PIN."
+    }
 
     private val lockTicker = object : Runnable {
         override fun run() {
@@ -60,7 +74,9 @@ class QuestionOverlayService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(lockTicker)
+        handler.removeCallbacks(pinCooldown)
         removeOverlay()
+        setUsagePaused(false)
         super.onDestroy()
     }
 
@@ -91,6 +107,11 @@ class QuestionOverlayService : Service() {
             hideOverlay()
             return
         }
+        currentQuestion = question
+        if (ControlState.ensureQuestionTimeout(this) <= System.currentTimeMillis()) {
+            handleQuestionTimeout(question)
+            return
+        }
         QuestionBank.beginChallenge(this)
         val optionTexts = question.options.shuffled()
         val optionViews = mutableListOf<TextView>()
@@ -98,6 +119,8 @@ class QuestionOverlayService : Service() {
         lateinit var moveFocus: (Int, Int) -> Unit
 
         val root = createRoot()
+        addRemainingTimeLabel(root)
+        addLockCountdown(root)
         val title = TextView(this).apply {
             text = "Answer to continue · Question ${QuestionBank.challengeAnsweredCount(this@QuestionOverlayService) + 1}/${QuestionBank.CHALLENGE_QUESTION_COUNT} · Correct ${QuestionBank.challengeCorrectCount(this@QuestionOverlayService)}/${QuestionBank.CHALLENGE_REQUIRED_CORRECT} · ${QuestionBank.displayCategory(question.category)}"
             setTextColor(Color.rgb(193, 203, 194))
@@ -110,6 +133,13 @@ class QuestionOverlayService : Service() {
             text = question.prompt
             setTextColor(Color.WHITE)
             textSize = 34f
+            maxLines = 3
+            setAutoSizeTextTypeUniformWithConfiguration(
+                24,
+                34,
+                2,
+                TypedValue.COMPLEX_UNIT_SP,
+            )
             gravity = Gravity.CENTER
             setPadding(dp(24), dp(20), dp(24), dp(24))
         }
@@ -122,10 +152,10 @@ class QuestionOverlayService : Service() {
         optionTexts.forEachIndexed { index, text ->
             val option = TextView(this).apply {
                 this.text = text
-                textSize = 22f
+                textSize = 18f
                 gravity = Gravity.CENTER
                 maxLines = 2
-                setPadding(dp(18), dp(12), dp(18), dp(12))
+                setPadding(dp(14), dp(8), dp(14), dp(8))
                 isFocusable = true
                 isFocusableInTouchMode = true
                 setOnFocusChangeListener { _, hasFocus ->
@@ -167,7 +197,7 @@ class QuestionOverlayService : Service() {
                     GridLayout.spec(index % 2, 1f),
                 ).apply {
                     width = 0
-                    height = dp(84)
+                    height = dp(72)
                     setMargins(dp(8), dp(8), dp(8), dp(8))
                 },
             )
@@ -202,12 +232,21 @@ class QuestionOverlayService : Service() {
         }
         renderOptionSelection(optionViews, selectedIndex)
         attachOverlay(root)
+        updateLockCountdown()
         root.post { optionViews.first().requestFocus() }
     }
 
     private fun submitAnswer(question: TvQuestion, selected: String, root: View) {
         if (answerSubmitted) return
+        if (ControlState.questionTimeoutAt(this) <= System.currentTimeMillis()) {
+            handleQuestionTimeout(question)
+            return
+        }
         answerSubmitted = true
+        ControlState.clearQuestionTimeout(this)
+        handler.removeCallbacks(lockTicker)
+        lockCountdown?.text = ""
+        currentQuestion = null
         val progress = QuestionBank.recordAnswer(this, question, selected)
         RemoteSync.syncAsync(applicationContext) { result ->
             if (result.settingsChanged) QuestionAlarmReceiver.scheduleForCurrentState(applicationContext)
@@ -277,15 +316,22 @@ class QuestionOverlayService : Service() {
         renderLock(MODE_USAGE_WINDOW)
     }
 
-    private fun renderLock(mode: Int) {
-        if (currentMode == mode && overlayView != null) {
+    private fun renderLock(mode: Int, force: Boolean = false) {
+        if (!force && currentMode == mode && overlayView != null) {
             updateLockCountdown()
             return
         }
         handler.removeCallbacks(lockTicker)
+        handler.removeCallbacks(pinCooldown)
         removeOverlay()
+        if (currentMode != mode) failedAttempts = 0
         currentMode = mode
         answerSubmitted = true
+        pinEntryActive = false
+        if (mode == MODE_DAILY_LOCK || mode == MODE_USAGE_WINDOW) {
+            ControlState.clearQuestionTimeout(this)
+            currentQuestion = null
+        }
 
         val root = createRoot().apply {
             gravity = Gravity.CENTER
@@ -293,6 +339,7 @@ class QuestionOverlayService : Service() {
             setPadding(dp(48), dp(32), dp(48), dp(32))
             setOnKeyListener { _, _, _ -> true }
         }
+        addRemainingTimeLabel(root)
         val title = TextView(this).apply {
             text = when (mode) {
                 MODE_DAILY_LOCK -> "Today's screen-time limit has been reached"
@@ -320,12 +367,7 @@ class QuestionOverlayService : Service() {
         }
         root.addView(message, weightedParams(1f))
 
-        lockCountdown = TextView(this).apply {
-            setTextColor(Color.rgb(210, 239, 111))
-            textSize = 28f
-            gravity = Gravity.CENTER
-        }
-        root.addView(lockCountdown, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(56)))
+        addLockCountdown(root)
         if (mode == MODE_USAGE_WINDOW) {
             root.addView(TextView(this).apply {
                 text = "TV access resumes at the next allowed time."
@@ -334,15 +376,65 @@ class QuestionOverlayService : Service() {
                 gravity = Gravity.CENTER
             }, matchParams())
         } else {
-            addUnlockPad(root, mode)
+            addUnlockButton(root, mode)
         }
         attachOverlay(root)
         updateLockCountdown()
-        unlockPad?.let { pad -> root.post { pad.requestFocus() } }
+        unlockButton?.let { button -> root.post { button.requestFocus() } }
     }
 
-    private fun addUnlockPad(root: LinearLayout, mode: Int) {
-        failedAttempts = 0
+    private fun addLockCountdown(root: LinearLayout) {
+        lockCountdown = TextView(this).apply {
+            setTextColor(Color.rgb(210, 239, 111))
+            textSize = 28f
+            gravity = Gravity.CENTER
+        }
+        root.addView(lockCountdown, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(56)))
+    }
+
+    private fun addRemainingTimeLabel(root: LinearLayout) {
+        remainingTimeLabel = TextView(this).apply {
+            setTextColor(Color.rgb(193, 203, 194))
+            textSize = 16f
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        }
+        root.addView(remainingTimeLabel, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(34),
+        ))
+        updateRemainingTimeLabel()
+    }
+
+    private fun updateRemainingTimeLabel() {
+        val minutes = (ControlState.remainingDailyMillis(this) + 59_999L) / 60_000L
+        remainingTimeLabel?.text = "Time remaining today · ${minutes} min"
+    }
+
+    private fun handleQuestionTimeout(question: TvQuestion) {
+        if (answerSubmitted || currentMode != MODE_QUESTION) return
+        answerSubmitted = true
+        QuestionBank.recordUnanswered(this, question)
+        ControlState.clearQuestionTimeout(this)
+        currentQuestion = null
+        QuestionBank.restartChallenge(this)
+        RemoteSync.syncAsync(applicationContext) { result ->
+            if (result.settingsChanged) QuestionAlarmReceiver.scheduleForCurrentState(applicationContext)
+        }
+        ControlState.clearWrongAnswerLock(this)
+        QuestionAlarmReceiver.scheduleNext(this)
+        hideOverlay()
+    }
+
+    private fun setUsagePaused(paused: Boolean) {
+        if (ControlState.isQuestionOverlayActive(this) == paused) return
+        ControlState.setQuestionOverlayActive(this, paused)
+        val intent = Intent(this, UsageTrackingService::class.java)
+            .setAction(UsageTrackingService.ACTION_SET_OVERLAY_PAUSED)
+            .putExtra(UsageTrackingService.EXTRA_OVERLAY_PAUSED, paused)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+    }
+
+    private fun addUnlockButton(root: LinearLayout, mode: Int) {
         if (!ControlState.hasUnlockPassword(this)) {
             root.addView(TextView(this).apply {
                 text = "Set a parent PIN on the home screen."
@@ -352,52 +444,102 @@ class QuestionOverlayService : Service() {
             }, matchParams())
             return
         }
-        val idleHint = if (mode == MODE_DAILY_LOCK) {
-            "Parent unlock · Enter your PIN to add 15 minutes"
-        } else {
-            "Parent unlock · Enter your 6-direction PIN"
-        }
-        val hint = TextView(this).apply {
-            text = idleHint
-            setTextColor(Color.rgb(193, 203, 194))
+        val button = TextView(this).apply {
+            text = "Enter Parent PIN"
+            setTextColor(Color.rgb(24, 31, 25))
             textSize = 18f
             gravity = Gravity.CENTER
-            setPadding(0, 0, 0, dp(10))
+            isFocusable = true
+            isFocusableInTouchMode = true
+            isClickable = true
+            background = lockActionBackground(false)
+            setOnFocusChangeListener { _, hasFocus -> background = lockActionBackground(hasFocus) }
+            setOnClickListener { showPasswordEntry(mode) }
         }
-        root.addView(hint, matchParams())
-        val pad = PasswordPad(this, true) { entered ->
+        unlockButton = button
+        root.addView(button, LinearLayout.LayoutParams(dp(240), dp(58)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            topMargin = dp(12)
+        })
+    }
+
+    private fun showPasswordEntry(mode: Int) {
+        if (currentMode != mode || pinEntryActive) return
+        pinEntryActive = true
+        handler.removeCallbacks(pinCooldown)
+        removeOverlay()
+        val root = createRoot().apply {
+            gravity = Gravity.CENTER
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(48), dp(32), dp(48), dp(32))
+        }
+        addRemainingTimeLabel(root)
+        root.addView(TextView(this).apply {
+            text = "Enter Parent PIN"
+            setTextColor(Color.rgb(220, 235, 222))
+            textSize = 28f
+            gravity = Gravity.CENTER
+        }, matchParams())
+        addLockCountdown(root)
+        val pad = PasswordPad(this, true, onBack = {
+            pinEntryActive = false
+            renderLock(mode, force = true)
+        }, onComplete = { entered ->
             if (ControlState.verifyUnlockPassword(this, entered)) {
                 failedAttempts = 0
-                if (mode == MODE_DAILY_LOCK) {
-                    unlockDailyLimit()
-                } else {
-                    unlockWrongLock()
-                }
+                pinCooldownUntil = 0L
+                if (mode == MODE_DAILY_LOCK) unlockDailyLimit() else unlockWrongLock()
             } else {
                 failedAttempts++
                 unlockPad?.reset()
                 if (failedAttempts >= MAX_PASSWORD_ATTEMPTS) {
                     failedAttempts = 0
                     unlockPad?.inputEnabled = false
-                    hint.text = "Too many attempts. Try again in 30 seconds."
-                    handler.postDelayed({
-                        unlockPad?.inputEnabled = true
-                        unlockPad?.reset()
-                        hint.text = idleHint
-                    }, PASSWORD_COOLDOWN_MS)
+                    pinCooldownUntil = System.currentTimeMillis() + PASSWORD_COOLDOWN_MS
+                    pinHint?.text = "Too many attempts. Try again in 30 seconds."
+                    handler.postDelayed(pinCooldown, PASSWORD_COOLDOWN_MS)
                 } else {
-                    hint.text = "Incorrect PIN. ${MAX_PASSWORD_ATTEMPTS - failedAttempts} attempts left."
+                    pinHint?.text = "Incorrect PIN. ${MAX_PASSWORD_ATTEMPTS - failedAttempts} attempts left."
                 }
             }
+        }).apply {
+            isFocusable = true
+            isFocusableInTouchMode = true
         }
         unlockPad = pad
         root.addView(pad, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
             LinearLayout.LayoutParams.WRAP_CONTENT,
-        ).apply { gravity = Gravity.CENTER_HORIZONTAL })
+        ).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            topMargin = dp(20)
+        })
+        pinHint = TextView(this).apply {
+            text = "Enter your 6-direction PIN."
+            setTextColor(Color.rgb(193, 203, 194))
+            textSize = 16f
+            gravity = Gravity.CENTER
+        }
+        root.addView(pinHint, matchParams())
+        root.addView(TextView(this).apply {
+            text = "Press Back to return to the lock screen."
+            setTextColor(Color.rgb(193, 203, 194))
+            textSize = 16f
+            gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52)))
+        if (pinCooldownUntil > System.currentTimeMillis()) {
+            pad.inputEnabled = false
+            pinHint?.text = "Too many attempts. Try again in ${ceil((pinCooldownUntil - System.currentTimeMillis()) / 1_000.0).toLong()} seconds."
+            handler.postDelayed(pinCooldown, pinCooldownUntil - System.currentTimeMillis())
+        }
+        attachOverlay(root)
+        updateLockCountdown()
+        root.post { pad.requestFocus() }
     }
 
     private fun unlockDailyLimit() {
+        ControlState.clearQuestionTimeout(this)
+        currentQuestion = null
         QuestionBank.finishChallenge(this)
         ControlState.grantPasswordExtension(this)
         QuestionAlarmReceiver.scheduleNext(this)
@@ -420,6 +562,18 @@ class QuestionOverlayService : Service() {
     }
 
     private fun updateLockCountdown() {
+        updateRemainingTimeLabel()
+        if (currentMode == MODE_QUESTION) {
+            val remaining = ControlState.questionTimeoutAt(this) - System.currentTimeMillis()
+            if (remaining <= 0L) {
+                currentQuestion?.let(::handleQuestionTimeout)
+                return
+            }
+            lockCountdown?.text = "Answer within ${formatRemaining(remaining)}"
+            handler.removeCallbacks(lockTicker)
+            handler.postDelayed(lockTicker, 1_000L)
+            return
+        }
         if (currentMode != MODE_DAILY_LOCK && currentMode != MODE_WRONG_LOCK && currentMode != MODE_USAGE_WINDOW) return
         if (currentMode == MODE_USAGE_WINDOW) {
             if (ControlState.isUsageWindowAllowed(this)) {
@@ -470,6 +624,7 @@ class QuestionOverlayService : Service() {
             ControlState.isDailyLimitReached(this) -> showDailyLock()
             ControlState.lockoutUntil(this) > System.currentTimeMillis() -> showLockout()
             !ControlState.isUsageWindowAllowed(this) -> showUsageWindowLock()
+            currentMode == MODE_QUESTION && overlayView != null -> Unit
             currentMode == MODE_DAILY_LOCK || currentMode == MODE_WRONG_LOCK || currentMode == MODE_USAGE_WINDOW -> {
                 if (QuestionBank.isChallengeActive(this)) {
                     showQuestion()
@@ -496,6 +651,12 @@ class QuestionOverlayService : Service() {
         } else {
             String.format("%02d:%02d", minutes, seconds)
         }
+    }
+
+    private fun lockActionBackground(focused: Boolean) = GradientDrawable().apply {
+        setColor(if (focused) Color.rgb(210, 239, 111) else Color.rgb(244, 246, 240))
+        setStroke(dp(if (focused) 3 else 1), if (focused) Color.rgb(90, 160, 40) else Color.rgb(174, 184, 174))
+        cornerRadius = dp(6).toFloat()
     }
 
     private fun createRoot() = LinearLayout(this).apply {
@@ -532,6 +693,7 @@ class QuestionOverlayService : Service() {
         }
         windowManager?.addView(root, params)
         overlayView = root
+        setUsagePaused(true)
     }
 
     private fun renderOptionSelection(options: List<TextView>, selectedIndex: Int) {
@@ -550,13 +712,21 @@ class QuestionOverlayService : Service() {
         overlayView?.let { view -> runCatching { windowManager?.removeViewImmediate(view) } }
         overlayView = null
         lockCountdown = null
+        remainingTimeLabel = null
         unlockPad = null
+        unlockButton = null
+        pinHint = null
     }
 
     private fun hideOverlay() {
         handler.removeCallbacks(lockTicker)
+        handler.removeCallbacks(pinCooldown)
         removeOverlay()
+        pinEntryActive = false
         currentMode = MODE_NONE
+        currentQuestion = null
+        ControlState.clearQuestionTimeout(this)
+        setUsagePaused(false)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }

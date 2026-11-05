@@ -47,7 +47,11 @@ echo [1/4] 检查已连接的设备...
 echo.
 
 rem 查找模拟器
-for /f "tokens=1" %%i in ('"%ADB_CMD%" devices ^| findstr "emulator"') do set EMULATOR=%%i
+set "EMULATOR="
+for /f "skip=1 tokens=1,2" %%i in ('"%ADB_CMD%" devices') do (
+    set "DEVICE=%%i"
+    if /i "%%j"=="device" if /i "!DEVICE:~0,9!"=="emulator-" set "EMULATOR=!DEVICE!"
+)
 
 if "%EMULATOR%"=="" (
     echo ❌ 未找到运行中的模拟器

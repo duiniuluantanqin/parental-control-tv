@@ -122,7 +122,54 @@ class AdminApiTests(unittest.TestCase):
         _, records = self.request("/api/v1/admin/records?date=2026-11-05")
         self.assertEqual(len(records["answers"]), 2)
         self.assertEqual([item["correct"] for item in records["answers"]], [True, False])
+        self.assertTrue(all("correctAnswer" not in item for item in records["answers"]))
         self.assertEqual(len(server.STORE.load()["questions"]), 49)
+
+    def test_admin_records_filter_usage_and_answers_by_device(self) -> None:
+        question = server.STORE.load()["questions"][0]
+        wrong_answer = next(option for option in question["options"] if option != question["answer"])
+        for device_id in ("tv-01", "tv-02"):
+            self.request(
+                "/api/v1/device/usage", method="POST", authenticated=False,
+                body={"deviceId": device_id, "date": "2026-11-05", "usageMillis": 60_000},
+            )
+            status, _ = self.request(
+                "/api/v1/device/answers", method="POST", authenticated=False,
+                body={
+                    "attemptId": f"attempt-{device_id}", "deviceId": device_id,
+                    "date": "2026-11-05", "answeredAt": 1793836800000,
+                    "questionId": question["id"], "selectedAnswer": wrong_answer,
+                },
+            )
+            self.assertEqual(status, 200)
+
+        status, all_devices = self.request("/api/v1/admin/records?date=2026-11-05")
+        self.assertEqual(status, 200)
+        self.assertEqual(all_devices["devices"], ["tv-01", "tv-02"])
+        for device_id in ("tv-01", "tv-02"):
+            status, records = self.request(
+                f"/api/v1/admin/records?date=2026-11-05&deviceId={device_id}",
+            )
+            self.assertEqual(status, 200)
+            self.assertEqual({item["deviceId"] for item in records["usage"]}, {device_id})
+            self.assertEqual({item["deviceId"] for item in records["answers"]}, {device_id})
+
+    def test_unanswered_attempt_is_recorded_as_incorrect_without_consuming_question(self) -> None:
+        question = server.STORE.load()["questions"][0]
+        status, result = self.request(
+            "/api/v1/device/answers", method="POST", authenticated=False,
+            body={
+                "attemptId": "attempt-unanswered", "deviceId": "tv-01",
+                "date": "2026-11-05", "answeredAt": 1793836800000,
+                "questionId": question["id"], "selectedAnswer": "", "answered": False,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(result["correct"])
+        self.assertEqual(len(server.STORE.load()["questions"]), 50)
+        _, records = self.request("/api/v1/admin/records?date=2026-11-05&deviceId=tv-01")
+        self.assertFalse(records["answers"][0]["answered"])
+        self.assertFalse(records["answers"][0]["correct"])
 
     def test_password_reset_command_requires_admin_and_survives_device_sync(self) -> None:
         status, _ = self.request(

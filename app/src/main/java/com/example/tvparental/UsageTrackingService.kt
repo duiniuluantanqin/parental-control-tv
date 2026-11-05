@@ -32,6 +32,7 @@ class UsageTrackingService : Service() {
     private var remoteSyncInProgress = false
     private var usageReportInProgress = false
     private var wasInteractive = false
+    private var overlayPaused = false
     private var receiverRegistered = false
     private var lastEnforcementAction: String? = null
     private var reminderView: LinearLayout? = null
@@ -71,6 +72,7 @@ class UsageTrackingService : Service() {
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification())
         wasInteractive = powerManager().isInteractive
+        overlayPaused = ControlState.isQuestionOverlayActive(this)
         lastSample = SystemClock.elapsedRealtime()
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
@@ -85,7 +87,11 @@ class UsageTrackingService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_REFRESH_DISPLAY) {
+        if (intent?.action == ACTION_SET_OVERLAY_PAUSED) {
+            accountElapsedTime()
+            overlayPaused = intent.getBooleanExtra(EXTRA_OVERLAY_PAUSED, false)
+            refreshTrackedState()
+        } else if (intent?.action == ACTION_REFRESH_DISPLAY) {
             wasInteractive = powerManager().isInteractive
             refreshTrackedState()
         } else {
@@ -106,7 +112,12 @@ class UsageTrackingService : Service() {
     private fun accountElapsedTime() {
         val now = SystemClock.elapsedRealtime()
         val elapsed = (now - lastSample).coerceAtLeast(0L)
-        if (wasInteractive && ControlState.lockoutUntil(this) <= System.currentTimeMillis()) {
+        if (wasInteractive &&
+            !overlayPaused &&
+            ControlState.lockoutUntil(this) <= System.currentTimeMillis() &&
+            !ControlState.isDailyLimitReached(this) &&
+            ControlState.isUsageWindowAllowed(this)
+        ) {
             ControlState.addScreenTime(this, elapsed)
         }
         lastSample = now
@@ -121,7 +132,7 @@ class UsageTrackingService : Service() {
         }
         if (action == lastEnforcementAction) return
         if (action != null) {
-            hideUsageReminder()
+            if (action != QuestionOverlayService.ACTION_LOCKOUT) hideUsageReminder()
             startQuestionService(action)
         } else if (lastEnforcementAction != null) {
             startQuestionService(QuestionOverlayService.ACTION_REFRESH_STATE)
@@ -161,7 +172,7 @@ class UsageTrackingService : Service() {
     private fun maybeShowUsageReminder() {
         val remaining = ControlState.remainingDailyMillis(this)
         if (!canShowUsageReminder() ||
-            (!ControlState.alwaysShowRemainingTime(this) && remaining > TEN_MINUTE_THRESHOLD_MS)
+            (!ControlState.alwaysShowRemainingTime(this) && remaining > TEN_MINUTE_THRESHOLD_MS && !overlayPaused)
         ) {
             hideUsageReminder()
             return
@@ -205,9 +216,8 @@ class UsageTrackingService : Service() {
     }
 
     private fun canShowUsageReminder(): Boolean =
-        wasInteractive && !ControlState.isDailyLimitReached(this) &&
-            ControlState.lockoutUntil(this) <= System.currentTimeMillis() &&
-            ControlState.isUsageWindowAllowed(this) &&
+        wasInteractive && (overlayPaused ||
+            (!ControlState.isDailyLimitReached(this) && ControlState.isUsageWindowAllowed(this))) &&
             (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this))
 
     private fun createUsageReminder() = LinearLayout(this).apply {
@@ -330,6 +340,8 @@ class UsageTrackingService : Service() {
     companion object {
         const val ACTION_START = "com.example.tvparental.action.START_USAGE_TRACKING"
         const val ACTION_REFRESH_DISPLAY = "com.example.tvparental.action.REFRESH_USAGE_DISPLAY"
+        const val ACTION_SET_OVERLAY_PAUSED = "com.example.tvparental.action.SET_OVERLAY_PAUSED"
+        const val EXTRA_OVERLAY_PAUSED = "overlay_paused"
         private const val CHANNEL_ID = "usage_tracking"
         private const val NOTIFICATION_ID = 1002
         private const val SAMPLE_INTERVAL_MS = 30_000L

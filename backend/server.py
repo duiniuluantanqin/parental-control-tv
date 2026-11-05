@@ -394,6 +394,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             if self.require_admin():
                 params = parse_qs(urlsplit(self.path).query)
                 record_date = params.get("date", [datetime.now().astimezone().date().isoformat()])[0]
+                device_id = params.get("deviceId", [""])[0]
                 try:
                     if date.fromisoformat(record_date).isoformat() != record_date:
                         raise ValueError
@@ -402,12 +403,28 @@ class RequestHandler(BaseHTTPRequestHandler):
                     return
                 with STORE.lock:
                     state = STORE.load()
-                    usage = [item for item in state["dailyUsage"] if item.get("date") == record_date]
-                    answers = [item for item in state["answerRecords"] if item.get("date") == record_date]
+                    devices = sorted({
+                        item["deviceId"]
+                        for key in ("dailyUsage", "answerRecords")
+                        for item in state[key]
+                        if isinstance(item.get("deviceId"), str)
+                    })
+                    usage = [
+                        item for item in state["dailyUsage"]
+                        if item.get("date") == record_date and (not device_id or item.get("deviceId") == device_id)
+                    ]
+                    answers = [
+                        item for item in state["answerRecords"]
+                        if item.get("date") == record_date and (not device_id or item.get("deviceId") == device_id)
+                    ]
                 self.send_json(200, {
                     "date": record_date,
+                    "devices": devices,
                     "usage": sorted(usage, key=lambda item: item["deviceId"]),
-                    "answers": sorted(answers, key=lambda item: item["answeredAt"], reverse=True),
+                    "answers": [
+                        {key: value for key, value in item.items() if key != "correctAnswer"}
+                        for item in sorted(answers, key=lambda item: item["answeredAt"], reverse=True)
+                    ],
                 })
         elif path in ("/", "/index.html", "/login", "/settings", "/questions", "/records"):
             self.send_static("index.html", "text/html; charset=utf-8")
@@ -455,6 +472,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     attempt_id, device_id = payload.get("attemptId"), payload.get("deviceId")
                     record_date, answered_at = payload.get("date"), payload.get("answeredAt")
                     question_id, selected_answer = payload.get("questionId"), payload.get("selectedAnswer")
+                    answered = payload.get("answered", True)
                     if not isinstance(attempt_id, str) or not 1 <= len(attempt_id) <= 80:
                         raise ValueError("无效的答题记录 ID")
                     if not isinstance(device_id, str) or not 1 <= len(device_id) <= 80:
@@ -465,7 +483,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                         raise ValueError("答题时间无效")
                     if not isinstance(question_id, str) or not 1 <= len(question_id) <= 80:
                         raise ValueError("无效的题目 ID")
-                    if not isinstance(selected_answer, str) or not 1 <= len(selected_answer) <= 120:
+                    if not isinstance(answered, bool):
+                        raise ValueError("作答状态无效")
+                    if not isinstance(selected_answer, str) or (answered and not 1 <= len(selected_answer) <= 120) or (not answered and selected_answer != ""):
                         raise ValueError("无效的作答内容")
                     with STORE.lock:
                         state = STORE.load()
@@ -475,22 +495,23 @@ class RequestHandler(BaseHTTPRequestHandler):
                             self.send_json(200, {"accepted": True, "correct": existing["correct"], "removed": False})
                             return
                         question = next((item for item in state["questions"] if item["id"] == question_id), None)
-                        if question is None:
+                        if question is None and answered:
                             self.send_json(404, {"error": "题目不存在或已被使用"})
                             return
-                        if selected_answer not in question["options"]:
+                        if answered and selected_answer not in question["options"]:
                             raise ValueError("作答内容不属于该题选项")
-                        correct = selected_answer == question["answer"]
+                        correct = answered and selected_answer == question["answer"]
                         records.append({
                             "attemptId": attempt_id,
                             "deviceId": device_id,
                             "date": record_date,
                             "answeredAt": answered_at,
                             "questionId": question_id,
-                            "prompt": question["prompt"],
+                            "prompt": question["prompt"] if question else "题目已从题库移除",
                             "selectedAnswer": selected_answer,
-                            "correctAnswer": question["answer"],
-                            "correct": correct,
+                            "answered": answered,
+                            "correctAnswer": question["answer"] if question else "",
+                            "correct": bool(correct),
                         })
                         if correct:
                             state["questions"] = [item for item in state["questions"] if item["id"] != question_id]

@@ -22,6 +22,7 @@ const weekdays = [
 let questions = [];
 let aiQuestions = [];
 let refillTimer;
+let recordsDeviceInitialized = false;
 
 // Remove credentials saved by the previous version of the admin page.
 sessionStorage.removeItem("tvParentalAdminToken");
@@ -277,7 +278,8 @@ function renderRecords(records) {
   const answerRows = document.querySelector("#answerRows");
   usageRows.replaceChildren();
   answerRows.replaceChildren();
-  document.querySelector("#recordsSummary").textContent = `共 ${records.usage.length} 台设备，${records.answers.length} 条答题记录`;
+  const deviceId = document.querySelector("#recordsDevice").value;
+  document.querySelector("#recordsSummary").textContent = `${deviceId || "所有设备"} · ${records.usage.length} 条使用记录，${records.answers.length} 条答题记录`;
 
   for (const record of records.usage) {
     const row = document.createElement("tr");
@@ -294,22 +296,42 @@ function renderRecords(records) {
     const row = document.createElement("tr");
     const time = document.createElement("td");
     time.textContent = new Date(record.answeredAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const device = document.createElement("td");
+    device.textContent = record.deviceId;
     const prompt = document.createElement("td");
     prompt.textContent = record.prompt;
     const answer = document.createElement("td");
-    answer.textContent = record.selectedAnswer;
+    answer.textContent = record.answered === false ? "未作答" : record.selectedAnswer;
     const result = document.createElement("td");
-    result.textContent = record.correct ? "答对" : `答错，正确答案：${record.correctAnswer}`;
-    row.append(time, prompt, answer, result);
+    result.textContent = record.correct ? "答对" : "答错";
+    row.append(time, device, prompt, answer, result);
     answerRows.append(row);
   }
-  if (!records.answers.length) setEmptyRow(answerRows, 4, "当天暂无答题记录");
+  if (!records.answers.length) setEmptyRow(answerRows, 5, "当天暂无答题记录");
 }
 
 async function loadRecords() {
   const date = document.querySelector("#recordsDate").value;
   if (!date) return;
-  const records = await api(`/api/v1/admin/records?date=${encodeURIComponent(date)}`);
+  const deviceSelect = document.querySelector("#recordsDevice");
+  const previousDevice = deviceSelect.value;
+  const query = new URLSearchParams({ date });
+  if (previousDevice) query.set("deviceId", previousDevice);
+  const records = await api(`/api/v1/admin/records?${query}`);
+  const devices = records.devices || [];
+  const currentDevices = Array.from(deviceSelect.options).slice(1).map((option) => option.value);
+  const selectedDevice = !recordsDeviceInitialized || (previousDevice && !devices.includes(previousDevice))
+    ? (devices[0] || "")
+    : previousDevice;
+  if (JSON.stringify(currentDevices) !== JSON.stringify(devices)) {
+    deviceSelect.replaceChildren(new Option("所有设备", ""));
+    for (const device of devices) deviceSelect.add(new Option(device, device));
+    deviceSelect.value = devices.includes(selectedDevice) ? selectedDevice : "";
+  }
+  recordsDeviceInitialized = true;
+  if (deviceSelect.value !== previousDevice) {
+    return loadRecords();
+  }
   renderRecords(records);
 }
 
@@ -582,6 +604,7 @@ async function initialize() {
 document.querySelector("#loginForm").addEventListener("submit", login);
 document.querySelector("#settingsForm").addEventListener("submit", saveSettings);
 document.querySelector("#recordsDate").addEventListener("change", () => loadRecords().catch(handleError));
+document.querySelector("#recordsDevice").addEventListener("change", () => loadRecords().catch(handleError));
 document.querySelector("#refreshRecords").addEventListener("click", () => loadRecords().catch(handleError));
 document.querySelector("#resetDevicePin").addEventListener("click", async () => {
   if (!window.confirm("确认将电视 PIN 重置为“上下左右上上”？电视下次同步后生效。")) return;

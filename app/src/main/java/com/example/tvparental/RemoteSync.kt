@@ -41,6 +41,7 @@ object RemoteSync {
                         .put("answeredAt", attempt.answeredAt)
                         .put("questionId", attempt.question.id)
                         .put("selectedAnswer", attempt.selectedAnswer)
+                        .put("answered", attempt.answered)
                         .toString().toByteArray(Charsets.UTF_8)
                     report.setFixedLengthStreamingMode(body.size)
                     report.outputStream.use { it.write(body) }

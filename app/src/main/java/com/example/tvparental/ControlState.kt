@@ -30,6 +30,10 @@ object ControlState {
     private const val DAY_KEY = "usage_day"
     private const val USED_MILLIS_KEY = "used_millis"
     private const val LOCKOUT_UNTIL_KEY = "lockout_until"
+    private const val LOCKOUT_STARTED_AT_KEY = "lockout_started_at"
+    private const val QUESTION_STARTED_AT_KEY = "question_started_at"
+    private const val QUESTION_TIMEOUT_AT_KEY = "question_timeout_at"
+    private const val QUESTION_OVERLAY_ACTIVE_KEY = "question_overlay_active"
     private const val REMOTE_QUESTIONS_KEY = "remote_questions"
     private const val WEEKLY_LIMITS_KEY = "weekly_daily_limit_minutes"
     private const val USAGE_WINDOWS_KEY = "usage_time_windows"
@@ -84,7 +88,15 @@ object ControlState {
         prefs(context).edit().putBoolean(ALWAYS_SHOW_REMAINING_TIME_KEY, enabled).apply()
     }
 
+    @Synchronized
     fun updateSettings(context: Context, settings: ParentSettings) {
+        val preferences = prefs(context)
+        val now = System.currentTimeMillis()
+        val previousLockMinutes = preferences.getInt(WRONG_LOCK_KEY, 10).coerceIn(1, 1440)
+        val lockUntil = preferences.getLong(LOCKOUT_UNTIL_KEY, 0L)
+        val storedLockStart = preferences.getLong(LOCKOUT_STARTED_AT_KEY, 0L)
+        val questionStartedAt = preferences.getLong(QUESTION_STARTED_AT_KEY, 0L)
+        val questionTimeoutAt = preferences.getLong(QUESTION_TIMEOUT_AT_KEY, 0L)
         val weeklyLimits = JSONObject().apply {
             settings.weeklyDailyLimitMinutes.take(7).forEachIndexed { index, minutes ->
                 put((index + 1).toString(), minutes.coerceIn(0, 1440))
@@ -101,14 +113,34 @@ object ControlState {
         }
         val usageWindows = writeWindows(settings.usageTimeWindows)
         val disabledWindows = writeWindows(settings.disabledTimeWindows)
-        prefs(context).edit()
+        val newLockMinutes = settings.wrongLockMinutes.coerceIn(1, 1440)
+        val editor = preferences.edit()
             .putString(WEEKLY_LIMITS_KEY, weeklyLimits.toString())
             .putString(USAGE_WINDOWS_KEY, usageWindows.toString())
             .putString(DISABLED_WINDOWS_KEY, disabledWindows.toString())
             .putInt(QUESTION_INTERVAL_KEY, settings.questionIntervalMinutes.coerceIn(1, 240))
-            .putInt(WRONG_LOCK_KEY, settings.wrongLockMinutes.coerceIn(1, 1440))
+            .putInt(WRONG_LOCK_KEY, newLockMinutes)
             .putInt(SYNC_INTERVAL_KEY, settings.syncIntervalMinutes.coerceIn(1, 60))
-            .apply()
+        if (lockUntil > now) {
+            val lockStartedAt = if (storedLockStart in 1..lockUntil) {
+                storedLockStart
+            } else {
+                (lockUntil - previousLockMinutes * MILLIS_PER_MINUTE).coerceAtLeast(0L)
+            }
+            val adjustedLockUntil = lockStartedAt + newLockMinutes * MILLIS_PER_MINUTE
+            editor.putLong(LOCKOUT_STARTED_AT_KEY, lockStartedAt)
+            if (adjustedLockUntil <= now) {
+                editor.remove(LOCKOUT_UNTIL_KEY)
+            } else {
+                editor.putLong(LOCKOUT_UNTIL_KEY, adjustedLockUntil)
+            }
+        }
+        if (questionTimeoutAt > now && questionStartedAt > 0L) {
+            val adjustedTimeoutAt = questionStartedAt + newLockMinutes * MILLIS_PER_MINUTE
+            editor.putLong(QUESTION_TIMEOUT_AT_KEY, adjustedTimeoutAt)
+            if (adjustedTimeoutAt <= now) editor.putLong(QUESTION_TIMEOUT_AT_KEY, now)
+        }
+        editor.apply()
     }
 
     fun usedMillis(context: Context): Long {
@@ -249,14 +281,54 @@ object ControlState {
 
     fun lockoutUntil(context: Context): Long = prefs(context).getLong(LOCKOUT_UNTIL_KEY, 0L)
 
+    @Synchronized
+    fun ensureQuestionTimeout(context: Context): Long {
+        val preferences = prefs(context)
+        val storedUntil = preferences.getLong(QUESTION_TIMEOUT_AT_KEY, 0L)
+        if (storedUntil > 0L) return storedUntil
+        val startedAt = System.currentTimeMillis()
+        val timeoutAt = startedAt + settings(context).wrongLockMinutes * MILLIS_PER_MINUTE
+        preferences.edit()
+            .putLong(QUESTION_STARTED_AT_KEY, startedAt)
+            .putLong(QUESTION_TIMEOUT_AT_KEY, timeoutAt)
+            .apply()
+        return timeoutAt
+    }
+
+    fun questionTimeoutAt(context: Context): Long = prefs(context).getLong(QUESTION_TIMEOUT_AT_KEY, 0L)
+
+    @Synchronized
+    fun clearQuestionTimeout(context: Context) {
+        prefs(context).edit()
+            .remove(QUESTION_STARTED_AT_KEY)
+            .remove(QUESTION_TIMEOUT_AT_KEY)
+            .apply()
+    }
+
+    fun setQuestionOverlayActive(context: Context, active: Boolean) {
+        prefs(context).edit().putBoolean(QUESTION_OVERLAY_ACTIVE_KEY, active).apply()
+    }
+
+    fun isQuestionOverlayActive(context: Context): Boolean =
+        prefs(context).getBoolean(QUESTION_OVERLAY_ACTIVE_KEY, false)
+
+    @Synchronized
     fun startWrongAnswerLock(context: Context): Long {
-        val until = System.currentTimeMillis() + settings(context).wrongLockMinutes * MILLIS_PER_MINUTE
-        prefs(context).edit().putLong(LOCKOUT_UNTIL_KEY, until).apply()
+        val startedAt = System.currentTimeMillis()
+        val until = startedAt + settings(context).wrongLockMinutes * MILLIS_PER_MINUTE
+        prefs(context).edit()
+            .putLong(LOCKOUT_STARTED_AT_KEY, startedAt)
+            .putLong(LOCKOUT_UNTIL_KEY, until)
+            .apply()
         return until
     }
 
+    @Synchronized
     fun clearWrongAnswerLock(context: Context) {
-        prefs(context).edit().remove(LOCKOUT_UNTIL_KEY).apply()
+        prefs(context).edit()
+            .remove(LOCKOUT_UNTIL_KEY)
+            .remove(LOCKOUT_STARTED_AT_KEY)
+            .apply()
     }
 
     fun millisUntilNextDay(): Long {
