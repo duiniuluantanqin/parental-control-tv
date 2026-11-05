@@ -10,7 +10,7 @@
   <header class="topbar">
     <a class="brand" href="/settings">
       <span class="brand-mark" aria-hidden="true">TV</span>
-      <span><strong>健康使用</strong><small>家长管理</small><small id="backendVersion">后台 v1.0.6</small></span>
+      <span><strong>健康使用</strong><small>家长管理</small><small id="backendVersion">后台 v1.0.7</small></span>
     </a>
     <button id="logoutButton" class="button topbar-button" type="button" hidden>退出登录</button>
   </header>
@@ -113,10 +113,11 @@
     <div class="form-actions"><button id="dismissQuestionDetail" class="button secondary" type="button">关闭</button></div>
   </dialog>
   <dialog id="aiQuestionDialog" class="ai-dialog" aria-labelledby="aiDialogTitle">
-    <div class="form-heading"><div><h2 id="aiDialogTitle">用古诗词出题</h2><p class="muted">输入一首诗词，生成多道四选一题目。</p></div><button id="closeAiDialog" class="icon-button" type="button" aria-label="关闭 AI 出题对话框">×</button></div>
+    <div class="form-heading"><div><h2 id="aiDialogTitle">AI 出题</h2><p class="muted">古诗词需输入名称；数学、地理历史和科学会随机出题。</p></div><button id="closeAiDialog" class="icon-button" type="button" aria-label="关闭 AI 出题对话框">×</button></div>
     <form id="aiGenerationForm">
       <div class="ai-fields">
-        <label for="poemTitleInput">诗词名称<input id="poemTitleInput" maxlength="80" placeholder="例如：静夜思（李白）" required></label>
+        <label for="aiCategoryInput">题目类别<select id="aiCategoryInput" required><option value="古诗词" selected>古诗词</option><option value="数学">数学</option><option value="地理历史">地理历史</option><option value="科学">科学</option></select></label>
+        <label id="poemTitleField" for="poemTitleInput">诗词名称<input id="poemTitleInput" maxlength="80" placeholder="例如：静夜思（李白）" required></label>
         <label for="aiCountInput">出题数量<input id="aiCountInput" type="number" min="1" max="10" value="5" required></label>
         <label for="aiDifficultyInput">难度<select id="aiDifficultyInput"><option value="低">低</option><option value="中" selected>中</option><option value="高">高</option></select></label>
       </div>

@@ -15,6 +15,7 @@
 - Keep the launcher and overlay usable with a TV remote: large labels, visible focus, D-pad navigation, and OK activation.
 - Global display requires `SYSTEM_ALERT_WINDOW`; request it through Android settings and never try to grant it silently.
 - Keep package name `com.example.tvparental` unless the user explicitly changes it.
+- Unlock challenges require five consecutive correct answers. A wrong answer resets challenge progress, starts the configured lockout, and restarts the five-question challenge when the lockout ends; the parent PIN remains an override.
 - The daily-use counter estimates screen-on time, persists locally, resets by local calendar day, and must not count time during an answer lockout.
 - Use a foreground service for usage tracking. Re-arm question alarms after `LOCKED_BOOT_COMPLETED` and `BOOT_COMPLETED`; keep alarm bookkeeping available during direct boot.
 - Randomly select from the 50 built-in questions, avoid repeating the previous question, and preserve an unanswered question across service restarts.
@@ -31,7 +32,7 @@
 - Android sources are under `app/`; the 50-question seed bank is `app/src/main/assets/questions.json`.
 - The launcher displays today's use and supports manual sync and an immediate test question. The backend URL is fixed in `ControlState.BACKEND_URL`.
 - The Web admin has separate `/settings` and `/questions` pages and a modal question form. Configure/reset the single admin with `python backend/server.py --set-admin`; password hashes persist in `backend/data/admin.json`.
-- The question bank supports DeepSeek poetry generation (1–10 questions per poem), preview and selected batch import. `DEEPSEEK_API_KEY` stays in the server environment; the standard-library client in `backend/deepseek.py` uses `deepseek-flash` and JSON output. Generation never writes the bank; batch import validates every item and skips duplicate prompts.
+- The question bank supports DeepSeek question generation: poetry questions use a poem title, while math, geography/history, and science questions are generated randomly by category. Preview and selected batch import are supported. `DEEPSEEK_API_KEY` stays in the server environment; the standard-library client in `backend/deepseek.py` uses `deepseek-flash` and JSON output. Generation never writes the bank; batch import validates every item and skips duplicate prompts.
 - The Web backend and admin page are under `backend/`; run its API tests with `python -m unittest discover -s backend/tests -v`.
 - ECS deployment uses host-level Caddy + a `tvparental` systemd service running as dedicated user `tvparental-deploy`, code at `/var/www/html/tvparental`. `backend/compose.yaml` remains as a Docker alternative. Keep `backend/.env` and `backend/data/` private.
 - `.github/workflows/deploy-ecs.yml` auto-deploys backend changes on `main` via rsync + SSH + `systemctl restart tvparental`; required secrets are documented in `docs/DEPLOY_ECS.md`.

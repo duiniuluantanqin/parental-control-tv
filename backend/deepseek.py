@@ -14,6 +14,9 @@ class DeepSeekError(Exception):
         self.status = status
 
 
+RANDOM_QUESTION_CATEGORIES = ("数学", "地理历史", "科学")
+
+
 def _generate_json(messages: list[dict[str, str]]) -> dict[str, object]:
     key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     if not key:
@@ -99,6 +102,31 @@ def generate_poem_questions(title: str, count: int, difficulty: str = "中") -> 
         return {"title": poem["title"].strip(), "author": poem["author"].strip(), "questions": poem["questions"]}
     except (ValueError, KeyError, IndexError, TypeError):
         raise DeepSeekError("生成结果格式不正确，请重新生成") from None
+
+
+def generate_category_questions(category: str, count: int, difficulty: str = "中") -> list[dict[str, object]]:
+    if category not in RANDOM_QUESTION_CATEGORIES:
+        raise ValueError("不支持的随机出题类别")
+    result = _generate_json([
+        {
+            "role": "system",
+            "content": (
+                "你是一位严谨的出题教师。仅围绕用户指定的类别随机选择不同知识点，生成指定数量的四选一单选题。"
+                "数学题须核算无误；地理历史题须依据可靠事实；科学题须符合基础科学知识。"
+                "难度低侧重基础识记，中侧重理解和简单应用，高侧重推理和综合应用。"
+                "每题独立完整，只有一个正确答案，四个选项不同且不带 A/B/C/D 前缀。"
+                "answer 必须等于某个选项全文。题干最多240字，选项最多120字。"
+                "避免重复题目和有争议的事实。仅输出 JSON，格式为："
+                '{"questions":[{"prompt":"题目内容","options":["选项一","选项二","选项三","选项四"],"answer":"正确选项"}]}。'
+                "questions 长度必须等于请求数量。"
+            ),
+        },
+        {"role": "user", "content": json.dumps({"类别": category, "出题数量": count, "难度": difficulty}, ensure_ascii=False)},
+    ])
+    questions = result.get("questions")
+    if not isinstance(questions, list) or len(questions) != count:
+        raise DeepSeekError("生成题目数量或格式不正确")
+    return questions
 
 
 def generate_random_questions(count: int, difficulty: str, exclude_prompts: list[str]) -> list[dict[str, object]]:

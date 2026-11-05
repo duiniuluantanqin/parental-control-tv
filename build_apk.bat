@@ -1,6 +1,7 @@
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0"
+chcp 65001 >nul
 echo 正在查找Java...
 
 rem 尝试使用Android Studio自带的JDK

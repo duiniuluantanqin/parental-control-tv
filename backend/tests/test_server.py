@@ -434,7 +434,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(server.STORE.path.read_bytes(), original)
 
     def test_ai_generation_requires_login_and_valid_input(self) -> None:
-        with patch("server.generate_poem_questions") as generate:
+        with patch("server.generate_poem_questions") as generate_poem, patch("server.generate_category_questions") as generate_category:
             status, _ = self.request(
                 "/api/v1/admin/questions/generate", method="POST", authenticated=False,
                 body={"title": "静夜思", "count": 3},
@@ -442,12 +442,35 @@ class AdminApiTests(unittest.TestCase):
             self.assertEqual(status, 401)
             invalid = [
                 {"title": "", "count": 3}, {"title": "静夜思", "count": True}, {"title": "静夜思", "count": 11},
+                {"category": "其他", "count": 2},
                 *({"title": "静夜思", "difficulty": value} for value in ("", "初中", None, 1, [])),
             ]
             for payload in invalid:
                 status, _ = self.request("/api/v1/admin/questions/generate", method="POST", body=payload)
                 self.assertEqual(status, 400)
-            generate.assert_not_called()
+            generate_poem.assert_not_called()
+            generate_category.assert_not_called()
+
+    def test_random_ai_categories_need_no_title_and_are_forced_on_questions(self) -> None:
+        generated = [{
+            "category": "古诗词", "difficulty": "低", "prompt": "随机生成题目",
+            "options": ["甲", "乙", "丙", "丁"], "answer": "甲",
+        }]
+        for category in ("数学", "地理历史", "科学"):
+            with self.subTest(category=category), patch("server.generate_category_questions", return_value=generated) as generate:
+                status, preview = self.request(
+                    "/api/v1/admin/questions/generate", method="POST",
+                    body={"category": category, "count": 1, "difficulty": "高"},
+                )
+            self.assertEqual(status, 200)
+            generate.assert_called_once_with(category, 1, "高")
+            self.assertEqual(preview["category"], category)
+            self.assertEqual(preview["title"], category)
+            self.assertEqual(preview["questions"][0]["category"], category)
+            self.assertEqual(preview["questions"][0]["difficulty"], "高")
+            self.assertEqual(preview["questions"][0]["prompt"], "随机生成题目")
+        _, state = self.request("/api/v1/device/state", authenticated=False)
+        self.assertEqual(len(state["questions"]), 50)
 
     def test_ai_preview_does_not_save_and_selected_batch_is_imported_once(self) -> None:
         generated = {

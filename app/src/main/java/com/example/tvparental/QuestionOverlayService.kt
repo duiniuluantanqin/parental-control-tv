@@ -75,7 +75,7 @@ class QuestionOverlayService : Service() {
             ControlState.isDailyLimitReached(this) -> return showDailyLock()
             ControlState.lockoutUntil(this) > System.currentTimeMillis() -> return showLockout()
             !ControlState.isUsageWindowAllowed(this) -> return showUsageWindowLock()
-            currentMode == MODE_QUESTION && overlayView != null -> return
+            currentMode == MODE_QUESTION && overlayView != null && !answerSubmitted -> return
         }
         ControlState.clearWrongAnswerLock(this)
         handler.removeCallbacks(lockTicker)
@@ -91,6 +91,7 @@ class QuestionOverlayService : Service() {
             hideOverlay()
             return
         }
+        QuestionBank.beginChallenge(this)
         val optionTexts = question.options.shuffled()
         val optionViews = mutableListOf<TextView>()
         var selectedIndex = 0
@@ -98,7 +99,7 @@ class QuestionOverlayService : Service() {
 
         val root = createRoot()
         val title = TextView(this).apply {
-            text = "Answer to continue · ${QuestionBank.displayCategory(question.category)}"
+            text = "Answer to continue · Question ${QuestionBank.challengeCorrectCount(this@QuestionOverlayService) + 1}/${QuestionBank.CHALLENGE_QUESTION_COUNT} · ${QuestionBank.displayCategory(question.category)}"
             setTextColor(Color.rgb(193, 203, 194))
             textSize = 20f
             gravity = Gravity.START or Gravity.CENTER_VERTICAL
@@ -180,7 +181,7 @@ class QuestionOverlayService : Service() {
         )
 
         val status = TextView(this).apply {
-            text = "An incorrect answer starts a lockout."
+            text = "All ${QuestionBank.CHALLENGE_QUESTION_COUNT} answers must be correct."
             setTextColor(Color.rgb(205, 214, 206))
             textSize = 18f
             gravity = Gravity.CENTER
@@ -208,7 +209,10 @@ class QuestionOverlayService : Service() {
         if (answerSubmitted) return
         answerSubmitted = true
         if (selected == question.answer) {
-            QuestionBank.markCorrect(this, question)
+            val correctCount = QuestionBank.markCorrect(this, question)
+            if (correctCount == QuestionBank.CHALLENGE_QUESTION_COUNT) {
+                QuestionBank.finishChallenge(this)
+            }
             RemoteSync.syncAsync(applicationContext) { result ->
                 if (result.settingsChanged) QuestionAlarmReceiver.scheduleForCurrentState(applicationContext)
             }
@@ -218,13 +222,19 @@ class QuestionOverlayService : Service() {
             }
             (root as? LinearLayout)?.let { layout ->
                 (layout.getChildAt(layout.childCount - 1) as? TextView)?.apply {
-                    text = "Correct answer"
+                    text = if (correctCount == QuestionBank.CHALLENGE_QUESTION_COUNT) {
+                        "All answers correct"
+                    } else {
+                        "Correct answer · $correctCount/${QuestionBank.CHALLENGE_QUESTION_COUNT}"
+                    }
                     setTextColor(Color.rgb(185, 222, 119))
                 }
             }
             root.postDelayed({
                 if (ControlState.isDailyLimitReached(this)) {
                     showDailyLock()
+                } else if (correctCount < QuestionBank.CHALLENGE_QUESTION_COUNT) {
+                    showQuestion()
                 } else {
                     ControlState.clearWrongAnswerLock(this)
                     QuestionAlarmReceiver.scheduleNext(this)
@@ -233,7 +243,7 @@ class QuestionOverlayService : Service() {
             }, 450)
         } else {
             val until = ControlState.startWrongAnswerLock(this)
-            QuestionBank.finishCurrent(this)
+            QuestionBank.restartChallenge(this)
             QuestionAlarmReceiver.scheduleAfter(this, until - System.currentTimeMillis())
             showLockout()
         }
@@ -303,7 +313,7 @@ class QuestionOverlayService : Service() {
             } else if (mode == MODE_USAGE_WINDOW) {
                 "Try again during an allowed time window."
             } else {
-                "This question allows one answer. Wait for the lockout to end."
+                "The 5-question challenge restarts after the lockout."
             }
             setTextColor(Color.WHITE)
             textSize = 38f
@@ -390,12 +400,14 @@ class QuestionOverlayService : Service() {
     }
 
     private fun unlockDailyLimit() {
+        QuestionBank.finishChallenge(this)
         ControlState.grantPasswordExtension(this)
         QuestionAlarmReceiver.scheduleNext(this)
         hideOverlay()
     }
 
     private fun unlockWrongLock() {
+        QuestionBank.finishChallenge(this)
         ControlState.clearWrongAnswerLock(this)
         if (ControlState.isDailyLimitReached(this)) {
             renderLock(MODE_DAILY_LOCK)
@@ -423,6 +435,8 @@ class QuestionOverlayService : Service() {
         if (currentMode == MODE_DAILY_LOCK && !ControlState.isDailyLimitReached(this)) {
             if (ControlState.lockoutUntil(this) > System.currentTimeMillis()) {
                 renderLock(MODE_WRONG_LOCK)
+            } else if (QuestionBank.isChallengeActive(this)) {
+                showQuestion()
             } else {
                 QuestionAlarmReceiver.scheduleNext(this)
                 hideOverlay()
@@ -437,6 +451,8 @@ class QuestionOverlayService : Service() {
                     renderLock(MODE_DAILY_LOCK)
                 } else if (!ControlState.isUsageWindowAllowed(this)) {
                     renderLock(MODE_USAGE_WINDOW)
+                } else if (QuestionBank.isChallengeActive(this)) {
+                    showQuestion()
                 } else {
                     QuestionAlarmReceiver.scheduleAfter(this, 1_000L)
                     hideOverlay()
@@ -457,8 +473,12 @@ class QuestionOverlayService : Service() {
             ControlState.lockoutUntil(this) > System.currentTimeMillis() -> showLockout()
             !ControlState.isUsageWindowAllowed(this) -> showUsageWindowLock()
             currentMode == MODE_DAILY_LOCK || currentMode == MODE_WRONG_LOCK || currentMode == MODE_USAGE_WINDOW -> {
-                QuestionAlarmReceiver.scheduleNext(this)
-                hideOverlay()
+                if (QuestionBank.isChallengeActive(this)) {
+                    showQuestion()
+                } else {
+                    QuestionAlarmReceiver.scheduleNext(this)
+                    hideOverlay()
+                }
             }
             else -> {
                 currentMode = MODE_NONE

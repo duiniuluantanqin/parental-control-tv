@@ -120,7 +120,8 @@ dialog::backdrop { background: #102c296b; backdrop-filter: blur(3px); }
 .question-detail-prompt { color: #183d38; font-size: 18px; font-weight: 600; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .question-detail-options { display: grid; gap: 10px; margin: 20px 0 0; padding: 0; list-style: none; white-space: pre-wrap; }
 .ai-dialog { width: min(780px, calc(100% - 32px)); }
-.ai-fields { display: grid; grid-template-columns: minmax(0, 1fr) 100px 100px; gap: 16px; }
+.ai-fields { display: grid; grid-template-columns: minmax(140px, .8fr) minmax(200px, 1.2fr) 100px 100px; gap: 16px; }
+.ai-fields.random-category { grid-template-columns: minmax(180px, 1fr) 100px 100px; }
 .ai-fields label { display: grid; gap: 10px; color: #3e514c; font-size: 14px; }
 .ai-fields input, .ai-fields select { width: 100%; min-width: 0; }
 .ai-generation-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 18px; }
@@ -154,7 +155,9 @@ dialog::backdrop { background: #102c296b; backdrop-filter: blur(3px); }
   dialog { padding: 20px; }
   .form-meta, .options-fields { grid-template-columns: 1fr; }
   .ai-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ai-fields.random-category { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ai-fields label:first-child { grid-column: 1 / -1; }
+  .ai-fields #poemTitleField { grid-column: 1 / -1; }
   .ai-generation-actions { align-items: stretch; flex-direction: column; }
   .ai-options { grid-template-columns: 1fr; }
   .ai-question { padding: 14px; }

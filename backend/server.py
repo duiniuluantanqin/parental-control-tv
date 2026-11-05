@@ -19,7 +19,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from deepseek import DeepSeekError, generate_poem_questions, generate_random_questions
+from deepseek import (
+    RANDOM_QUESTION_CATEGORIES,
+    DeepSeekError,
+    generate_category_questions,
+    generate_poem_questions,
+    generate_random_questions,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,7 +36,7 @@ PORT = int(os.environ.get("PORT", "8765"))
 MAX_BODY_BYTES = 64 * 1024
 SESSION_SECONDS = 12 * 60 * 60
 SESSION_COOKIE = "tvparental_session"
-BACKEND_VERSION = "1.0.6"
+BACKEND_VERSION = "1.0.7"
 
 WEEKDAYS = tuple(str(day) for day in range(1, 8))
 DEFAULT_SETTINGS = {
@@ -440,32 +446,41 @@ class RequestHandler(BaseHTTPRequestHandler):
         try:
             payload = self.read_json()
             if path == "/api/v1/admin/questions/generate":
+                category = payload.get("category", "古诗词")
                 title, count = payload.get("title"), payload.get("count", 5)
                 difficulty = payload.get("difficulty", "中")
-                if not isinstance(title, str) or not 1 <= len(title.strip()) <= 80:
+                if category not in ("古诗词", *RANDOM_QUESTION_CATEGORIES):
+                    raise ValueError("类别需选择古诗词、数学、地理历史或科学")
+                if category == "古诗词" and (not isinstance(title, str) or not 1 <= len(title.strip()) <= 80):
                     raise ValueError("请输入 1–80 个字符的诗词名称，可附作者")
                 if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 10:
                     raise ValueError("出题数量需为 1–10 道")
                 if not isinstance(difficulty, str) or difficulty not in ("低", "中", "高"):
                     raise ValueError("难度需选择低、中或高")
                 # Generate outside the state lock so TV sync and admin writes can continue.
-                poem = generate_poem_questions(title.strip(), count, difficulty)
+                if category == "古诗词":
+                    generated_result = generate_poem_questions(title.strip(), count, difficulty)
+                else:
+                    generated_result = {
+                        "title": category,
+                        "questions": generate_category_questions(category, count, difficulty),
+                    }
                 try:
                     candidates = []
-                    for item in poem["questions"]:
+                    for item in generated_result["questions"]:
                         if not isinstance(item, dict):
                             raise ValueError("invalid question")
-                        question = {**item, "category": "古诗词", "difficulty": difficulty}
+                        question = {**item, "category": category, "difficulty": difficulty}
                         prompt = question.get("prompt")
-                        if isinstance(prompt, str) and poem["title"] not in prompt:
-                            question["prompt"] = f"《{poem['title']}》：{prompt}"
+                        if category == "古诗词" and isinstance(prompt, str) and generated_result["title"] not in prompt:
+                            question["prompt"] = f"《{generated_result['title']}》：{prompt}"
                         candidates.append(question)
                     generated = validate_question_batch(candidates)
                     if len({question["prompt"] for question in generated}) != len(generated):
                         raise ValueError("duplicate generated questions")
                 except ValueError:
                     raise DeepSeekError("生成题目的选项、答案或题干不符合要求，请重新生成") from None
-                self.send_json(200, {**poem, "questions": generated})
+                self.send_json(200, {**generated_result, "category": category, "questions": generated})
                 return
             if path == "/api/v1/admin/questions/batch":
                 candidates = validate_question_batch(payload.get("questions"))

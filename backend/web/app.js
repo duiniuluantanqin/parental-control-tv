@@ -8,6 +8,9 @@ const questionDetailDialog = document.querySelector("#questionDetailDialog");
 const aiDialog = document.querySelector("#aiQuestionDialog");
 const aiNotice = document.querySelector("#aiNotice");
 const aiPreview = document.querySelector("#aiPreview");
+const aiCategoryInput = document.querySelector("#aiCategoryInput");
+const poemTitleInput = document.querySelector("#poemTitleInput");
+const poemTitleField = document.querySelector("#poemTitleField");
 const loginView = document.querySelector("#loginView");
 const adminView = document.querySelector("#adminView");
 const page = location.pathname === "/questions" ? "questions" : "settings";
@@ -363,9 +366,11 @@ function updateAiSelection() {
   button.disabled = count === 0;
 }
 
-function renderAiQuestions(poem) {
+function renderAiQuestions(result) {
   const list = document.querySelector("#aiQuestionList");
-  document.querySelector("#aiPoemTitle").textContent = `《${poem.title}》 · ${poem.author}`;
+  document.querySelector("#aiPoemTitle").textContent = result.category === "古诗词"
+    ? `《${result.title}》 · ${result.author}`
+    : `${result.category} · 随机出题`;
   list.replaceChildren();
   for (const [index, question] of aiQuestions.entries()) {
     const card = document.createElement("article");
@@ -403,39 +408,51 @@ function renderAiQuestions(poem) {
 async function generateAiQuestions(event) {
   event.preventDefault();
   const button = document.querySelector("#generateAiQuestions");
-  const titleInput = document.querySelector("#poemTitleInput");
   const countInput = document.querySelector("#aiCountInput");
   const difficultyInput = document.querySelector("#aiDifficultyInput");
+  const category = aiCategoryInput.value;
+  const isPoem = category === "古诗词";
   if (button.disabled) return;
   button.disabled = true;
-  titleInput.disabled = true;
+  aiCategoryInput.disabled = true;
+  poemTitleInput.disabled = true;
   countInput.disabled = true;
   difficultyInput.disabled = true;
   button.textContent = "正在出题…";
   aiPreview.hidden = true;
   aiQuestions = [];
   aiNotice.classList.remove("error");
-  aiNotice.textContent = "正在围绕这首诗词出题，请稍候…";
+  aiNotice.textContent = isPoem ? "正在围绕这首诗词出题，请稍候…" : `正在随机生成${category}题，请稍候…`;
   document.querySelector("#aiGenerationForm").setAttribute("aria-busy", "true");
   try {
-    const poem = await api("/api/v1/admin/questions/generate", {
-      method: "POST", body: JSON.stringify({ title: titleInput.value.trim(), count: Number(countInput.value), difficulty: difficultyInput.value }),
+    const request = { category, count: Number(countInput.value), difficulty: difficultyInput.value };
+    if (isPoem) request.title = poemTitleInput.value.trim();
+    const result = await api("/api/v1/admin/questions/generate", {
+      method: "POST", body: JSON.stringify(request),
     });
-    aiQuestions = poem.questions;
-    renderAiQuestions(poem);
-    aiNotice.textContent = `已生成 ${aiQuestions.length} 道题（难度：${aiQuestions[0].difficulty}），尚未加入题库`;
-    if (!aiDialog.open) setNotice(`《${poem.title}》已生成，打开“AI 出题”查看结果`);
+    aiQuestions = result.questions;
+    renderAiQuestions(result);
+    aiNotice.textContent = `已生成 ${aiQuestions.length} 道${category}题（难度：${aiQuestions[0].difficulty}），尚未加入题库`;
+    if (!aiDialog.open) setNotice(`已生成 ${aiQuestions.length} 道${category}题，打开“AI 出题”查看结果`);
   } catch (error) {
     handleError(error, aiNotice);
     if (!aiDialog.open) handleError(error);
   } finally {
     button.disabled = false;
-    titleInput.disabled = false;
+    aiCategoryInput.disabled = false;
+    poemTitleInput.disabled = false;
     countInput.disabled = false;
     difficultyInput.disabled = false;
     button.textContent = "重新出题";
     document.querySelector("#aiGenerationForm").removeAttribute("aria-busy");
   }
+}
+
+function updateAiCategoryFields() {
+  const isPoem = aiCategoryInput.value === "古诗词";
+  document.querySelector(".ai-fields").classList.toggle("random-category", !isPoem);
+  poemTitleField.hidden = !isPoem;
+  poemTitleInput.required = isPoem;
 }
 
 async function importAiQuestions() {
@@ -552,11 +569,13 @@ for (const id of ["closeQuestionDetail", "dismissQuestionDetail"]) {
 }
 document.querySelector("#aiQuestionButton").addEventListener("click", () => {
   aiDialog.showModal();
-  document.querySelector("#poemTitleInput").focus();
+  aiCategoryInput.focus();
 });
 document.querySelector("#closeAiDialog").addEventListener("click", () => aiDialog.close());
 aiDialog.addEventListener("close", () => document.querySelector("#aiQuestionButton").focus());
 document.querySelector("#aiGenerationForm").addEventListener("submit", generateAiQuestions);
+aiCategoryInput.addEventListener("change", updateAiCategoryFields);
 document.querySelector("#importAiQuestions").addEventListener("click", importAiQuestions);
 categoryFilter.addEventListener("change", renderQuestions);
+updateAiCategoryFields();
 initialize();

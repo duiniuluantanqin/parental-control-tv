@@ -15,10 +15,13 @@ data class TvQuestion(
 )
 
 object QuestionBank {
+    const val CHALLENGE_QUESTION_COUNT = 5
     private const val PREFERENCES = "question_state"
     private const val LAST_QUESTION_ID = "last_question_id"
     private const val CURRENT_QUESTION_ID = "current_question_id"
     private const val PENDING_CORRECT_ANSWERS = "pending_correct_answers"
+    private const val CHALLENGE_ACTIVE = "challenge_active"
+    private const val CHALLENGE_CORRECT_COUNT = "challenge_correct_count"
 
     fun all(context: Context): List<TvQuestion> {
         val answered = pendingCorrectAnswers(context).map { it.id }.toSet()
@@ -59,20 +62,50 @@ object QuestionBank {
         }
     }
 
-    fun finishCurrent(context: Context) {
+    fun beginChallenge(context: Context) {
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             .edit()
+            .putBoolean(CHALLENGE_ACTIVE, true)
+            .apply()
+    }
+
+    fun isChallengeActive(context: Context): Boolean =
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getBoolean(CHALLENGE_ACTIVE, false)
+
+    fun challengeCorrectCount(context: Context): Int =
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getInt(CHALLENGE_CORRECT_COUNT, 0)
+            .coerceIn(0, CHALLENGE_QUESTION_COUNT)
+
+    fun restartChallenge(context: Context) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(CHALLENGE_ACTIVE, true)
+            .putInt(CHALLENGE_CORRECT_COUNT, 0)
+            .remove(CURRENT_QUESTION_ID)
+            .apply()
+    }
+
+    fun finishChallenge(context: Context) {
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(CHALLENGE_ACTIVE, false)
+            .putInt(CHALLENGE_CORRECT_COUNT, 0)
             .remove(CURRENT_QUESTION_ID)
             .apply()
     }
 
     @Synchronized
-    fun markCorrect(context: Context, question: TvQuestion) {
+    fun markCorrect(context: Context, question: TvQuestion): Int {
         val pending = pendingCorrectAnswers(context).filterNot { it.id == question.id } + question
+        val correctCount = (challengeCorrectCount(context) + 1).coerceAtMost(CHALLENGE_QUESTION_COUNT)
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
             .putString(PENDING_CORRECT_ANSWERS, JSONArray(pending.map { toJsonObject(it) }).toString())
+            .putInt(CHALLENGE_CORRECT_COUNT, correctCount)
             .remove(CURRENT_QUESTION_ID)
             .apply()
+        return correctCount
     }
 
     @Synchronized

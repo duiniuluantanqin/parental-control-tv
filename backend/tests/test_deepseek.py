@@ -43,6 +43,27 @@ class DeepSeekTests(unittest.TestCase):
                 payload = json.loads(request.call_args.args[0].data)
                 self.assertEqual(json.loads(payload["messages"][1]["content"])["难度"], difficulty)
 
+    def test_random_category_questions_use_selected_category_without_extra_input(self):
+        questions = [{"prompt": "测试题", "options": ["甲", "乙", "丙", "丁"], "answer": "甲"}]
+        for category in deepseek.RANDOM_QUESTION_CATEGORIES:
+            with self.subTest(category=category), patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("deepseek.urlopen", return_value=self.completion(json.dumps({"questions": questions}))) as request:
+                result = deepseek.generate_category_questions(category, 1, "高")
+            self.assertEqual(result, questions)
+            payload = json.loads(request.call_args.args[0].data)
+            user = json.loads(payload["messages"][1]["content"])
+            self.assertEqual(user, {"类别": category, "出题数量": 1, "难度": "高"})
+
+        for output in ({}, {"questions": []}, {"questions": "错误格式"}):
+            with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("deepseek.urlopen", return_value=self.completion(json.dumps(output))):
+                with self.assertRaises(deepseek.DeepSeekError):
+                    deepseek.generate_category_questions("数学", 1)
+
+    def test_random_category_questions_reject_unknown_category(self):
+        with patch("deepseek.urlopen") as request:
+            with self.assertRaises(ValueError):
+                deepseek.generate_category_questions("其他", 1)
+        request.assert_not_called()
+
     def test_missing_key_does_not_call_provider(self):
         with patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}), patch("deepseek.urlopen") as request:
             with self.assertRaises(deepseek.DeepSeekError) as error:

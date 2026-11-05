@@ -15,18 +15,15 @@ APK 位于 `app\build\outputs\parental\Parental-TV.apk`。应用自动从 `https
 在 Android Studio 打开 Device Manager，找到已创建的虚拟设备并点击启动按钮。也可以在 PowerShell 中列出并启动 AVD：
 
 ```powershell
-emulator -list-avds
-emulator -avd "AVD_NAME"
+$androidSdk = "$env:LOCALAPPDATA\Android\Sdk"
+$emulator = Join-Path $androidSdk "emulator\emulator.exe"
+& $emulator -list-avds
+& $emulator -avd "AVD_NAME"
 ```
 
 如果列表为空，在 Device Manager 点击“Create Device”，选择设备型号和系统镜像，完成创建后再启动。
 
-将 `AVD_NAME` 替换为列表中的设备名称。如果 PowerShell 找不到 `emulator` 命令，可在 Android Studio 的 SDK Manager 查看 SDK 路径，然后使用该目录下的 `emulator\emulator.exe`：
-
-```powershell
-$androidSdk = "$env:LOCALAPPDATA\Android\Sdk"
-& "$androidSdk\emulator\emulator.exe" -avd "AVD_NAME"
-```
+如果 SDK 安装在其他目录，请将 `$androidSdk` 改为 Android Studio SDK Manager 显示的路径。将 `AVD_NAME` 替换为列表中的设备名称。
 
 等待模拟器启动后确认 ADB 已连接，再安装当前调试版本：
 
@@ -66,7 +63,7 @@ python backend/server.py
 
 本地账号以密码散列保存到 `backend/data/admin.json`，忘记密码时重新运行 `--set-admin`；本地题库与规则默认保存到 `backend/data.json`。本机预览使用本地数据。启动本地后台只会让浏览器管理页面使用本地数据；app 当前仍固定连接线上域名 `https://tvparental.mediainsight360.com`，不会因为启动本地后台而自动切换。修改 `backend/web/` 后刷新浏览器即可看到变化，无需重启 Python。
 
-题库支持 DeepSeek AI 出题：在“AI 出题”中输入一首古诗词的名称（可附作者）、数量和难度，一次生成 1–10 道四选一题目，预览并勾选后批量入库。AI 与手动出题的难度统一为“低、中、高”，默认“中”；已有题库的“小学、初中、高中”读取时分别对应“低、中、高”。需要在服务环境中配置 `DEEPSEEK_API_KEY`；Key 配置和使用步骤见[部署文档](docs/DEPLOY_ECS.md#deepseek-ai-古诗词出题)。
+题库支持 DeepSeek AI 出题：古诗词类别输入作品名（可附作者），数学、地理历史和科学类别可直接随机出题。每次生成 1–10 道四选一题目，预览并勾选后批量入库。AI 与手动出题的难度统一为“低、中、高”，默认“中”；已有题库的“小学、初中、高中”读取时分别对应“低、中、高”。需要在服务环境中配置 `DEEPSEEK_API_KEY`；Key 配置和使用步骤见[部署文档](docs/DEPLOY_ECS.md#deepseek-ai-出题)。
 
 ## 部署到阿里云 ECS
 
