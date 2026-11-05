@@ -234,6 +234,7 @@ class QuestionOverlayService : Service() {
             renderOptionSelection(optionViews, selectedIndex)
         }
         renderOptionSelection(optionViews, selectedIndex)
+        MediaPlaybackController.pauseActivePlayback(this)
         attachOverlay(root)
         updateLockCountdown()
         root.post { optionViews.first().requestFocus() }

@@ -36,7 +36,7 @@ PORT = int(os.environ.get("PORT", "8765"))
 MAX_BODY_BYTES = 64 * 1024
 SESSION_SECONDS = 12 * 60 * 60
 SESSION_COOKIE = "tvparental_session"
-BACKEND_VERSION = "1.0.9"
+BACKEND_VERSION = "1.0.10"
 DEVICE_ONLINE_SECONDS = 180
 
 WEEKDAYS = tuple(str(day) for day in range(1, 8))
@@ -426,9 +426,20 @@ class RequestHandler(BaseHTTPRequestHandler):
                         self.device_summary(device_id, state["devices"].get(device_id, {}))
                         for device_id in device_ids
                     ]
+                    daily_usage = {
+                        item["deviceId"]: item for item in state["dailyUsage"]
+                        if item.get("date") == record_date
+                    }
+                    selected_ids = [value for value in device_ids if not device_id or value == device_id]
                     usage = [
-                        item for item in state["dailyUsage"]
-                        if item.get("date") == record_date and (not device_id or item.get("deviceId") == device_id)
+                        {
+                            "deviceId": value,
+                            "date": record_date,
+                            "usageMillis": daily_usage.get(value, {}).get("usageMillis", 0),
+                            "intervals": daily_usage.get(value, {}).get("intervals", []),
+                            "lastReportedAt": state["devices"].get(value, {}).get("lastSeen", 0),
+                        }
+                        for value in selected_ids
                     ]
                     answers = [
                         item for item in state["answerRecords"]

@@ -53,6 +53,7 @@ class MainActivity : Activity() {
     private lateinit var adminStatus: TextView
     private lateinit var usageProgress: ProgressBar
     private lateinit var permissionButton: Button
+    private lateinit var mediaPermissionButton: Button
     private lateinit var testButton: Button
     private lateinit var syncButton: Button
     private var autoOpenedOverlaySettings = false
@@ -188,7 +189,7 @@ class MainActivity : Activity() {
 
         val actionGrid = GridLayout(this).apply {
             columnCount = 2
-            rowCount = 2
+            rowCount = 3
             useDefaultMargins = false
             setPadding(0, dp(22), 0, 0)
         }
@@ -197,10 +198,12 @@ class MainActivity : Activity() {
             menuButton("Set parent PIN", android.R.drawable.ic_lock_lock) { startPasswordSetup() },
             menuButton("Test question", android.R.drawable.ic_media_play) { showQuestionNow() },
             menuButton("Sync now", android.R.drawable.ic_popup_sync) { syncRemoteSettings() },
+            menuButton("Media pause access", android.R.drawable.ic_media_pause) { openMediaAccessSettings() },
         )
         permissionButton = actions[0]
         testButton = actions[2]
         syncButton = actions[3]
+        mediaPermissionButton = actions[4]
         actions.forEachIndexed { index, button ->
             actionGrid.addView(button, GridLayout.LayoutParams(
                 GridLayout.spec(index / 2, 1f),
@@ -299,8 +302,11 @@ class MainActivity : Activity() {
         } else {
             1000
         }
-        permissionStatus.text = if (canDrawOverlays()) "Overlay permission · Enabled" else "Overlay permission · Needs access"
-        permissionStatus.setTextColor(if (canDrawOverlays()) Color.rgb(138, 205, 174) else Color.rgb(239, 185, 104))
+        val hasMediaAccess = MediaPlaybackController.hasAccess(this)
+        permissionStatus.text = "Overlay · ${if (canDrawOverlays()) "Enabled" else "Needs access"}\nPause media · ${if (hasMediaAccess) "Enabled" else "Needs access"}"
+        permissionStatus.setTextColor(if (canDrawOverlays() && hasMediaAccess) Color.rgb(138, 205, 174) else Color.rgb(239, 185, 104))
+        mediaPermissionButton.text = if (hasMediaAccess) "Media pause enabled" else "Allow media pause"
+        mediaPermissionButton.alpha = if (hasMediaAccess) 0.72f else 1f
         passwordStatus.text = if (ControlState.hasUnlockPassword(this)) "Parent PIN · Set" else "Parent PIN · Not set"
         passwordStatus.setTextColor(if (ControlState.hasUnlockPassword(this)) Color.rgb(138, 205, 174) else Color.rgb(239, 185, 104))
         adminStatus.text = if (ControlState.isDeviceAdminActive(this)) {
@@ -461,6 +467,14 @@ class MainActivity : Activity() {
             )
         } catch (_: ActivityNotFoundException) {
             Toast.makeText(this, "Overlay settings are unavailable. Enable overlay access in system app settings.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun openMediaAccessSettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, "Notification access settings are unavailable on this TV.", Toast.LENGTH_LONG).show()
         }
     }
 

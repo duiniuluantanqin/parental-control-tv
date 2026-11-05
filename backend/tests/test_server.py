@@ -95,6 +95,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(records["usage"][0]["deviceId"], "tv-01")
         self.assertEqual(records["usage"][0]["usageMillis"], 120_000)
         self.assertTrue(records["usage"][0]["intervals"])
+        self.assertGreater(records["usage"][0]["lastReportedAt"], 0)
 
     def test_device_registry_includes_name_and_online_status(self) -> None:
         payload = {
@@ -108,6 +109,9 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(result["devices"][0]["name"], "TCL Thunderbird TV")
         self.assertTrue(result["devices"][0]["online"])
         self.assertEqual(result["devices"][0]["deviceId"], "device-uuid-123")
+        _, no_usage_day = self.request("/api/v1/admin/records?date=2026-11-04")
+        self.assertEqual(no_usage_day["usage"][0]["usageMillis"], 0)
+        self.assertGreater(no_usage_day["usage"][0]["lastReportedAt"], 0)
 
     def test_usage_detail_groups_incremental_reports_into_time_intervals(self) -> None:
         payload = {"deviceId": "tv-01", "deviceName": "Family TV", "date": "2026-11-05", "usageMillis": 60_000}

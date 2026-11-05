@@ -22,7 +22,6 @@ const weekdays = [
 let questions = [];
 let aiQuestions = [];
 let refillTimer;
-let recordsDeviceInitialized = false;
 
 // Remove credentials saved by the previous version of the admin page.
 sessionStorage.removeItem("tvParentalAdminToken");
@@ -278,17 +277,21 @@ function renderRecords(records) {
   const answerRows = document.querySelector("#answerRows");
   usageRows.replaceChildren();
   answerRows.replaceChildren();
-  const deviceId = document.querySelector("#recordsDevice").value;
   const deviceNames = new Map((records.deviceDetails || []).map((device) => [device.deviceId, device.name]));
-  document.querySelector("#recordsSummary").textContent = `${deviceNames.get(deviceId) || "所有设备"} · ${records.usage.length} 条使用记录，${records.answers.length} 条答题记录`;
+  document.querySelector("#recordsSummary").textContent = `${records.usage.length} 台设备 · ${records.answers.length} 条答题记录`;
 
   for (const record of records.usage) {
     const row = document.createElement("tr");
-    for (const value of [record.date, deviceNames.get(record.deviceId) || record.deviceId, `${(record.usageMillis / 60_000).toFixed(1)} 分钟`]) {
+    for (const value of [deviceNames.get(record.deviceId) || record.deviceId, `${(record.usageMillis / 60_000).toFixed(1)} 分钟`]) {
       const cell = document.createElement("td");
       cell.textContent = value;
       row.append(cell);
     }
+    const reported = document.createElement("td");
+    reported.textContent = record.lastReportedAt
+      ? new Date(record.lastReportedAt).toLocaleString("zh-CN")
+      : "暂无上报";
+    row.append(reported);
     const detailCell = document.createElement("td");
     const detailButton = document.createElement("button");
     detailButton.className = "text-button";
@@ -299,7 +302,7 @@ function renderRecords(records) {
     row.append(detailCell);
     usageRows.append(row);
   }
-  if (!records.usage.length) setEmptyRow(usageRows, 4, "当天暂无使用时长记录");
+  if (!records.usage.length) setEmptyRow(usageRows, 4, "暂无设备记录");
 
   for (const record of records.answers) {
     const row = document.createElement("tr");
@@ -348,26 +351,7 @@ function showUsageDetails(record, deviceName) {
 async function loadRecords() {
   const date = document.querySelector("#recordsDate").value;
   if (!date) return;
-  const deviceSelect = document.querySelector("#recordsDevice");
-  const previousDevice = deviceSelect.value;
-  const query = new URLSearchParams({ date });
-  if (previousDevice) query.set("deviceId", previousDevice);
-  const records = await api(`/api/v1/admin/records?${query}`);
-  const devices = records.devices || [];
-  const deviceNames = new Map((records.deviceDetails || []).map((device) => [device.deviceId, device.name]));
-  const currentDevices = Array.from(deviceSelect.options).slice(1).map((option) => option.value);
-  const selectedDevice = !recordsDeviceInitialized || (previousDevice && !devices.includes(previousDevice))
-    ? (devices[0] || "")
-    : previousDevice;
-  if (JSON.stringify(currentDevices) !== JSON.stringify(devices)) {
-    deviceSelect.replaceChildren(new Option("所有设备", ""));
-    for (const device of devices) deviceSelect.add(new Option(deviceNames.get(device) || device, device));
-    deviceSelect.value = devices.includes(selectedDevice) ? selectedDevice : "";
-  }
-  recordsDeviceInitialized = true;
-  if (deviceSelect.value !== previousDevice) {
-    return loadRecords();
-  }
+  const records = await api(`/api/v1/admin/records?${new URLSearchParams({ date })}`);
   renderRecords(records);
 }
 
@@ -663,7 +647,6 @@ async function initialize() {
 document.querySelector("#loginForm").addEventListener("submit", login);
 document.querySelector("#settingsForm").addEventListener("submit", saveSettings);
 document.querySelector("#recordsDate").addEventListener("change", () => loadRecords().catch(handleError));
-document.querySelector("#recordsDevice").addEventListener("change", () => loadRecords().catch(handleError));
 document.querySelector("#refreshRecords").addEventListener("click", () => loadRecords().catch(handleError));
 document.querySelector("#refreshDevices").addEventListener("click", () => loadDevices().catch(handleError));
 document.querySelector("#closeUsageDetail").addEventListener("click", () => document.querySelector("#usageDetailDialog").close());

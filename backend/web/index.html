@@ -10,7 +10,7 @@
   <header class="topbar">
     <a class="brand" href="/settings">
       <span class="brand-mark" aria-hidden="true">TV</span>
-      <span><strong>健康使用</strong><small>家长管理</small><small id="backendVersion">后台 v1.0.9</small></span>
+      <span><strong>健康使用</strong><small>家长管理</small><small id="backendVersion">后台 v1.0.10</small></span>
     </a>
     <button id="logoutButton" class="button topbar-button" type="button" hidden>退出登录</button>
   </header>
@@ -103,9 +103,8 @@
 
     <section id="recordsPage" aria-labelledby="recordsTitle" hidden>
       <div class="section-heading records-heading">
-        <div><h1 id="recordsTitle">使用记录</h1><p id="recordsSummary">查看每日使用时长和答题记录。</p></div>
+        <div><h1 id="recordsTitle">使用记录</h1><p id="recordsSummary">查看所有设备的每日使用时长和答题记录。</p></div>
         <div class="records-controls">
-          <label class="records-device" for="recordsDevice">设备<select id="recordsDevice"><option value="">所有设备</option></select></label>
           <label class="records-date" for="recordsDate">日期<input id="recordsDate" type="date"></label>
           <button id="refreshRecords" class="button secondary" type="button">刷新</button>
         </div>
@@ -114,7 +113,7 @@
         <div class="records-section-heading"><h2 id="usageRecordsTitle">每日使用时长</h2></div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>日期</th><th>设备</th><th>使用时长</th><th>详情</th></tr></thead>
+            <thead><tr><th>设备</th><th>使用时长</th><th>上次上报</th><th>详情</th></tr></thead>
             <tbody id="usageRows"></tbody>
           </table>
         </div>
