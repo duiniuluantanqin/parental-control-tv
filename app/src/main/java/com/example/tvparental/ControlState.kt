@@ -37,6 +37,7 @@ object ControlState {
     private const val QUESTION_INTERVAL_KEY = "question_interval_minutes"
     private const val WRONG_LOCK_KEY = "wrong_lock_minutes"
     private const val SYNC_INTERVAL_KEY = "sync_interval_minutes"
+    private const val ALWAYS_SHOW_REMAINING_TIME_KEY = "always_show_remaining_time"
     private const val MILLIS_PER_MINUTE = 60_000L
     private const val TEMP_EXTENSION_KEY = "temp_extension_millis"
     const val TEN_MINUTE_REMINDER_MINUTES = 10
@@ -74,6 +75,13 @@ object ControlState {
             wrongLockMinutes = preferences.getInt(WRONG_LOCK_KEY, 10).coerceIn(1, 1440),
             syncIntervalMinutes = preferences.getInt(SYNC_INTERVAL_KEY, 5).coerceIn(1, 60),
         )
+    }
+
+    fun alwaysShowRemainingTime(context: Context): Boolean =
+        prefs(context).getBoolean(ALWAYS_SHOW_REMAINING_TIME_KEY, false)
+
+    fun setAlwaysShowRemainingTime(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(ALWAYS_SHOW_REMAINING_TIME_KEY, enabled).apply()
     }
 
     fun updateSettings(context: Context, settings: ParentSettings) {
@@ -279,8 +287,10 @@ object ControlState {
     }
 
     const val PASSWORD_LENGTH = 6
+    const val DEFAULT_REMOTE_PASSWORD = "UDLRUU"
     private const val PASSWORD_HASH_KEY = "unlock_password_hash"
     private const val PASSWORD_SALT_KEY = "unlock_password_salt"
+    private const val APPLIED_PASSWORD_RESET_ID_KEY = "applied_password_reset_id"
 
     fun hasUnlockPassword(context: Context): Boolean =
         prefs(context).getString(PASSWORD_HASH_KEY, null) != null
@@ -291,6 +301,19 @@ object ControlState {
         return prefs(context).edit()
             .putString(PASSWORD_SALT_KEY, salt)
             .putString(PASSWORD_HASH_KEY, hashPassword(salt, sequence))
+            .commit()
+    }
+
+    @Synchronized
+    fun applyRemotePasswordReset(context: Context, commandId: String): Boolean {
+        if (commandId.isBlank() || commandId.length > 64) return false
+        val preferences = prefs(context)
+        if (preferences.getString(APPLIED_PASSWORD_RESET_ID_KEY, null) == commandId) return false
+        val salt = java.util.UUID.randomUUID().toString()
+        return preferences.edit()
+            .putString(PASSWORD_SALT_KEY, salt)
+            .putString(PASSWORD_HASH_KEY, hashPassword(salt, DEFAULT_REMOTE_PASSWORD))
+            .putString(APPLIED_PASSWORD_RESET_ID_KEY, commandId)
             .commit()
     }
 

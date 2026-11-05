@@ -26,6 +26,7 @@ import android.widget.GridLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 
@@ -211,6 +212,18 @@ class MainActivity : Activity() {
             })
         }
         controls.addView(actionGrid, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        controls.addView(Switch(this).apply {
+            text = "Always show time remaining"
+            textSize = 16f
+            setTextColor(Color.rgb(235, 241, 237))
+            isChecked = ControlState.alwaysShowRemainingTime(this@MainActivity)
+            setOnCheckedChangeListener { _, enabled ->
+                ControlState.setAlwaysShowRemainingTime(this@MainActivity, enabled)
+                refreshUsageDisplay()
+            }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(56)).apply {
+            topMargin = dp(8)
+        })
         syncStatus = statusText(15f).apply {
             gravity = Gravity.START
             setTextColor(Color.rgb(160, 174, 174))
@@ -315,6 +328,12 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun refreshUsageDisplay() {
+        val intent = Intent(this, UsageTrackingService::class.java)
+            .setAction(UsageTrackingService.ACTION_REFRESH_DISPLAY)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+    }
+
     private fun startPasswordSetup() {
         if (!ControlState.hasUnlockPassword(this)) {
             enterNewPassword()
@@ -332,9 +351,9 @@ class MainActivity : Activity() {
     }
 
     private fun enterNewPassword() {
-        askPassword("Set parent PIN", "Enter a 6-direction PIN using the remote.", false) { first, _, _, dialog ->
+        askPassword("Set parent PIN", "Enter a 6-direction PIN using the remote.", true) { first, _, _, dialog ->
             dialog.dismiss()
-            askPassword("Confirm parent PIN", "Enter the same sequence again.", false) { second, pad, hint, confirmDialog ->
+            askPassword("Confirm parent PIN", "Enter the same sequence again.", true) { second, pad, hint, confirmDialog ->
                 if (second == first) {
                     ControlState.setUnlockPassword(this, first)
                     confirmDialog.dismiss()

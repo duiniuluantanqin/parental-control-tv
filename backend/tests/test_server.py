@@ -74,6 +74,31 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(state["version"], server.BACKEND_VERSION)
         self.assertEqual(len(state["questions"]), 50)
         self.assertEqual(state["settings"], server.DEFAULT_SETTINGS)
+        self.assertIsNone(state["passwordReset"])
+
+    def test_password_reset_command_requires_admin_and_survives_device_sync(self) -> None:
+        status, _ = self.request(
+            "/api/v1/admin/password/reset", method="POST", authenticated=False, body={},
+        )
+        self.assertEqual(status, 401)
+
+        status, queued = self.request("/api/v1/admin/password/reset", method="POST", body={})
+        self.assertEqual(status, 202)
+        self.assertTrue(queued["queued"])
+        self.assertRegex(queued["id"], r"^[0-9a-f]{32}$")
+
+        status, device_state = self.request("/api/v1/device/state", authenticated=False)
+        self.assertEqual(status, 200)
+        self.assertEqual(device_state["passwordReset"], {"id": queued["id"]})
+
+        state = server.STORE.load()
+        state["settings"]["syncIntervalMinutes"] = 7
+        server.STORE.save(state)
+        self.assertEqual(server.STORE.snapshot()["passwordReset"], {"id": queued["id"]})
+
+        _, replaced = self.request("/api/v1/admin/password/reset", method="POST", body={})
+        self.assertNotEqual(replaced["id"], queued["id"])
+        self.assertEqual(server.STORE.snapshot()["passwordReset"], {"id": replaced["id"]})
 
     def test_existing_settings_without_disabled_windows_load_with_empty_windows(self) -> None:
         state = server.STORE.load()

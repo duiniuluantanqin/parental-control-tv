@@ -30,7 +30,7 @@ PORT = int(os.environ.get("PORT", "8765"))
 MAX_BODY_BYTES = 64 * 1024
 SESSION_SECONDS = 12 * 60 * 60
 SESSION_COOKIE = "tvparental_session"
-BACKEND_VERSION = "1.0.4"
+BACKEND_VERSION = "1.0.5"
 
 WEEKDAYS = tuple(str(day) for day in range(1, 8))
 DEFAULT_SETTINGS = {
@@ -164,6 +164,17 @@ def validate_question_batch(value: object) -> list[dict[str, object]]:
     return result
 
 
+def validate_password_reset(value: object) -> dict[str, str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise RuntimeError("backend password reset command has an invalid format")
+    command_id = value.get("id")
+    if not isinstance(command_id, str) or not 1 <= len(command_id) <= 64:
+        raise RuntimeError("backend password reset command has an invalid ID")
+    return {"id": command_id}
+
+
 def default_state() -> dict[str, object]:
     questions = json.loads(SEED_FILE.read_text(encoding="utf-8"))
     if not isinstance(questions, list) or len(questions) != 50:
@@ -174,6 +185,7 @@ def default_state() -> dict[str, object]:
     return {
         "settings": dict(DEFAULT_SETTINGS),
         "questions": normalized,
+        "passwordReset": None,
     }
 
 
@@ -198,7 +210,16 @@ class StateStore:
             return {
                 "settings": validate_settings(state.get("settings", DEFAULT_SETTINGS)),
                 "questions": [validate_question(item) for item in state["questions"]],
+                "passwordReset": validate_password_reset(state.get("passwordReset")),
             }
+
+    def queue_password_reset(self) -> dict[str, str]:
+        with self.lock:
+            state = self.load()
+            command = {"id": uuid.uuid4().hex}
+            state["passwordReset"] = command
+            self.save(state)
+            return command
 
     def save(self, state: dict[str, object]) -> None:
         with self.lock:
@@ -460,6 +481,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                     if added:
                         STORE.save(state)
                 self.send_json(200, {"added": added, "skipped": len(candidates) - added})
+                return
+            if path == "/api/v1/admin/password/reset":
+                command = STORE.queue_password_reset()
+                self.send_json(202, {"queued": True, "id": command["id"]})
                 return
             with STORE.lock:
                 state = STORE.load()

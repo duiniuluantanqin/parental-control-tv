@@ -82,6 +82,14 @@ object RemoteSync {
             check(ControlState.saveRemoteQuestions(context, JSONArray(parsed.map { QuestionBank.toJsonObject(it) }))) {
                 "Could not save the question bank. It will retry later."
             }
+            state.optJSONObject("passwordReset")?.optString("id")
+                ?.takeIf { it.isNotBlank() }
+                ?.let { commandId ->
+                    val applied = ControlState.applyRemotePasswordReset(context, commandId)
+                    if (applied) {
+                        context.sendBroadcast(Intent(ACTION_PASSWORD_RESET).setPackage(context.packageName))
+                    }
+                }
             // Keep the local exclusion until the replacement bank has been saved successfully.
             QuestionBank.acknowledgeCorrectAnswers(context, acknowledged)
             val message = if (parsed.isEmpty()) "Question bank is empty. Waiting for the server to refill it." else "Synced ${parsed.size} questions."
@@ -112,4 +120,5 @@ object RemoteSync {
     }
 
     const val ACTION_SYNC_COMPLETED = "com.example.tvparental.action.SYNC_COMPLETED"
+    const val ACTION_PASSWORD_RESET = "com.example.tvparental.action.PASSWORD_RESET"
 }

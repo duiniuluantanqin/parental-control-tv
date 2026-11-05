@@ -30,8 +30,13 @@ if not exist "gradlew.bat" (
     exit /b 1
 )
 
+rem 优先使用仓库内缓存的 Gradle，避免 Wrapper 首次下载超时
+set "GRADLE_CMD=gradlew.bat"
+if exist ".tools\gradle-9.1.0\bin\gradle.bat" set "GRADLE_CMD=.tools\gradle-9.1.0\bin\gradle.bat"
+echo 使用构建工具: %GRADLE_CMD%
+
 echo [1/3] 清理旧的编译文件...
-call gradlew.bat clean
+call "%GRADLE_CMD%" clean
 if errorlevel 1 (
     echo 清理失败，已停止构建。
     pause
@@ -40,7 +45,7 @@ if errorlevel 1 (
 
 echo.
 echo [2/3] 开始编译 Debug APK...
-call gradlew.bat assembleDebug
+call "%GRADLE_CMD%" assembleDebug
 
 if errorlevel 1 (
     echo.
