@@ -53,7 +53,7 @@ $server = Start-Process -FilePath 'python' `
 try {
     python (Join-Path $pushDir 'tcast-push.py') $tvIp `
         'http://127.0.0.1:8765/TvParental.apk' `
-        'com.example.tvparental' '看电视前答题' $versionCode 300
+        'com.example.tvparental' '健康使用' $versionCode 300
 } finally {
     & $adb -s $adbTarget reverse --remove tcp:8765
     Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue

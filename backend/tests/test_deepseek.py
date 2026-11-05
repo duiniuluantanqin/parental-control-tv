@@ -30,6 +30,9 @@ class DeepSeekTests(unittest.TestCase):
         self.assertEqual(payload["thinking"], {"type": "disabled"})
         self.assertIn("静夜思（李白）", payload["messages"][1]["content"])
         self.assertEqual(json.loads(payload["messages"][1]["content"])["难度"], "中")
+        system_prompt = payload["messages"][0]["content"]
+        self.assertIn("询问上一句", system_prompt)
+        self.assertIn("每批下一句题最多一道", system_prompt)
         self.assertNotIn("test-key", json.dumps(payload))
 
     def test_selected_difficulty_is_sent_to_provider(self):

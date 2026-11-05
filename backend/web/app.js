@@ -489,7 +489,7 @@ async function initialize() {
     document.querySelector("#logoutButton").hidden = false;
     document.querySelector(`#${page}Page`).hidden = false;
     document.querySelector(`[data-page="${page}"]`).setAttribute("aria-current", "page");
-    document.title = `${page === "questions" ? "题库管理" : "使用规则"} · 看电视前答题`;
+    document.title = `${page === "questions" ? "题库管理" : "使用规则"} · 健康使用`;
   } catch (error) {
     if (error.status === 401 && !isLoginPage) {
       location.replace(loginAddress());
