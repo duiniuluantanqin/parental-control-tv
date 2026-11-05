@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 chcp 65001 >nul
 echo ================================
@@ -18,8 +18,23 @@ if not exist "%APK_FILE%" (
 )
 
 rem 检查 adb 是否可用
-where adb >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
+set "ADB_CMD="
+if defined ANDROID_SDK_ROOT if exist "%ANDROID_SDK_ROOT%\platform-tools\adb.exe" set "ADB_CMD=%ANDROID_SDK_ROOT%\platform-tools\adb.exe"
+if not defined ADB_CMD if defined ANDROID_HOME if exist "%ANDROID_HOME%\platform-tools\adb.exe" set "ADB_CMD=%ANDROID_HOME%\platform-tools\adb.exe"
+if not defined ADB_CMD if exist "local.properties" (
+    set "SDK_DIR="
+    for /f "tokens=1,* delims==" %%A in ('findstr /b /c:"sdk.dir=" local.properties 2^>nul') do set "SDK_DIR=%%B"
+    set "SDK_DIR=!SDK_DIR:\:=:!"
+    set "SDK_DIR=!SDK_DIR:\\=\!"
+    set "SDK_DIR=!SDK_DIR:\ = !"
+    if exist "!SDK_DIR!\platform-tools\adb.exe" set "ADB_CMD=!SDK_DIR!\platform-tools\adb.exe"
+)
+if not defined ADB_CMD if defined LOCALAPPDATA if exist "%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe" set "ADB_CMD=%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe"
+if not defined ADB_CMD (
+    where adb >nul 2>&1
+    if not errorlevel 1 set "ADB_CMD=adb"
+)
+if not defined ADB_CMD (
     echo ❌ 错误: 找不到 adb 命令
     echo.
     echo 请确保 Android SDK 已安装并添加到系统 PATH
@@ -28,11 +43,11 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo [1/4] 检查已连接的设备...
-adb devices
+"%ADB_CMD%" devices
 echo.
 
 rem 查找模拟器
-for /f "tokens=1" %%i in ('adb devices ^| findstr "emulator"') do set EMULATOR=%%i
+for /f "tokens=1" %%i in ('"%ADB_CMD%" devices ^| findstr "emulator"') do set EMULATOR=%%i
 
 if "%EMULATOR%"=="" (
     echo ❌ 未找到运行中的模拟器
@@ -49,7 +64,7 @@ echo ✓ 找到模拟器: %EMULATOR%
 echo.
 
 echo [2/4] 卸载旧版本...
-adb -s %EMULATOR% uninstall com.example.tvparental >nul 2>&1
+"%ADB_CMD%" -s %EMULATOR% uninstall com.example.tvparental >nul 2>&1
 if %ERRORLEVEL% EQU 0 (
     echo ✓ 已卸载旧版本
 ) else (
@@ -58,7 +73,7 @@ if %ERRORLEVEL% EQU 0 (
 echo.
 
 echo [3/4] 安装新版本...
-adb -s %EMULATOR% install %APK_FILE%
+"%ADB_CMD%" -s %EMULATOR% install %APK_FILE%
 
 if %ERRORLEVEL% NEQ 0 (
     echo.
@@ -69,7 +84,7 @@ if %ERRORLEVEL% NEQ 0 (
 
 echo.
 echo [4/4] 授予悬浮窗权限...
-adb -s %EMULATOR% shell appops set com.example.tvparental SYSTEM_ALERT_WINDOW allow
+"%ADB_CMD%" -s %EMULATOR% shell appops set com.example.tvparental SYSTEM_ALERT_WINDOW allow
 echo ✓ 权限已授予
 echo.
 
@@ -83,7 +98,7 @@ set /p LAUNCH=
 if /i "%LAUNCH%"=="Y" (
     echo.
     echo 正在启动应用...
-    adb -s %EMULATOR% shell am start -n com.example.tvparental/.MainActivity
+    "%ADB_CMD%" -s %EMULATOR% shell am start -n com.example.tvparental/.MainActivity
     echo.
     echo ✓ 应用已启动
 )

@@ -2,10 +2,10 @@
 
 在 Android Studio 中打开项目目录，等待 Gradle 同步。项目使用 Kotlin、Android Gradle Plugin 9.0.0、`compileSdk 37`、`minSdk 28`，Gradle Wrapper 固定为 9.1.0。若 SDK Platform 37 缺失，请在 SDK Manager 中安装。
 
-Windows 命令行构建：
+Windows 新环境准备、JDK/SDK 定位和安装流程见 [README_BUILD.md](README_BUILD.md)。从仓库根目录使用项目构建脚本：
 
 ```powershell
-.\gradlew.bat assembleDebug
+.\build.bat
 ```
 
 APK 位于 `app\build\outputs\parental\Parental-TV.apk`。应用自动从 `https://tvparental.mediainsight360.com` 同步题目和规则，无需在电视配置地址或登录；首页可手动同步并查看今日已用时间。首次使用需要在电视确认系统悬浮窗权限；应用不能静默授予 Android 特殊权限。
@@ -25,12 +25,13 @@ $emulator = Join-Path $androidSdk "emulator\emulator.exe"
 
 如果 SDK 安装在其他目录，请将 `$androidSdk` 改为 Android Studio SDK Manager 显示的路径。将 `AVD_NAME` 替换为列表中的设备名称。
 
-等待模拟器启动后确认 ADB 已连接，再安装当前调试版本：
+等待模拟器启动后安装当前调试版本：
 
 ```powershell
-adb devices
-.\gradlew.bat installDebug
+.\install_emulator.bat
 ```
+
+模拟器安装脚本会从 Android SDK 环境变量、`local.properties`、常见 SDK 目录或 PATH 定位 ADB，并会先卸载旧包，因此会清除模拟器中的本地应用数据。电视安装请使用 `install_device.bat`。
 
 屏幕亮起时长按 30 秒采样，额度临近耗尽时会缩短采样间隔。后台服务在开机后恢复；TCL 固件还需要通过 ADB 放行 `APP_AUTO_START` 与 `APP_ASSOC_START`。完整安装升级步骤见 [docs/INSTALL_TCL.md](docs/INSTALL_TCL.md)。
 

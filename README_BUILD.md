@@ -1,163 +1,67 @@
-# 编译和安装指南
+# Android 编译与安装
 
-## 快速开始
+## 新环境准备
 
-### 1. 编译项目
+在新电脑克隆项目后，从 Android Studio 打开仓库根目录并完成 Gradle 同步。项目使用 Android Gradle Plugin 9.0.0、Gradle Wrapper 9.1.0、`compileSdk 37` 和 `minSdk 28`。安装 Android Studio 自带的 JDK（JBR）或 JDK 17+，并在 SDK Manager 中安装 Android SDK Platform 37 和 Android SDK Platform-Tools。
 
-运行编译脚本：
-```bash
-build.bat
+Gradle Wrapper 已随仓库提交，无需单独安装全局 Gradle。`.tools/gradle-9.1.0/` 只是可选的本机缓存；没有它时，构建脚本会使用 `gradlew.bat` 下载仓库指定版本。`local.properties` 保存本机 Android SDK 路径，已被 Git 忽略；在新电脑上由 Android Studio 生成，不要从其他电脑复制或提交旧路径。
+
+## 编译 APK
+
+在仓库根目录打开 PowerShell：
+
+```powershell
+.\build.bat
 ```
 
-编译成功后，APK 文件位置：
-```
-D:\work\study\app\build\outputs\parental\Parental-TV.apk
-```
+这是 Windows 的标准入口。脚本会从 `JAVA_HOME`、Android Studio 常见安装位置、JDK 环境变量或 PATH 定位 Java。Gradle 优先使用 `.tools/gradle-9.1.0/` 独立安装或 `GRADLE_USER_HOME` 中已解压的 9.1.0 分发包；若本机没有缓存，则使用 Gradle Wrapper 获取固定版本。项目本地 `.tools/gradle-home/` 存在时会复用其中的 Wrapper 缓存。脚本先执行 `clean`，再构建 Debug APK。
 
-### 2. 安装到设备
+成功产物：
 
-#### 安装到模拟器
-```bash
-install_emulator.bat
+```text
+app\build\outputs\parental\Parental-TV.apk
 ```
 
-#### 安装到真机/TV设备
-```bash
-install_device.bat
+如果 Android Studio 安装在自定义目录且脚本没有找到 JDK，可在当前 PowerShell 窗口临时指定其 JBR/JDK 路径后重试；不需要改系统级环境变量：
+
+```powershell
+$env:JAVA_HOME = 'C:\path\to\Android Studio\jbr'
+Test-Path (Join-Path $env:JAVA_HOME 'bin\java.exe')
+.\build.bat
 ```
 
----
+`build_apk.bat` 为兼容旧调用保留，并转交 `build.bat`。新环境统一使用 `build.bat`。直接调用 `gradlew.bat` 仅用于有意绕过脚本时，并且需要先确保当前 shell 的 `JAVA_HOME` 有效。
 
-## 详细说明
+macOS/Linux 可在仓库根目录运行 `./gradlew assembleDebug`，前提是已安装 JDK 17+，并通过 Android Studio 或 `ANDROID_HOME`/`ANDROID_SDK_ROOT` 配好 SDK 37。
 
-### build.bat - 编译脚本
+## 安装到模拟器
 
-**功能：**
-- 清理旧的编译文件
-- 编译 Debug APK
-- 显示 APK 文件位置和大小
+先在 Android Studio Device Manager 启动 API 28 模拟器，然后运行：
 
-**使用前提：**
-- 已安装 JDK
-- 已设置 JAVA_HOME 环境变量，或在常见安装位置安装了 Android Studio
-
-**如果编译失败：**
-1. 在 Android Studio 中打开项目
-2. 点击 **Build → Rebuild Project**
-3. 查看错误信息并修复
-
----
-
-### install_emulator.bat - 安装到模拟器
-
-**功能：**
-- 自动检测运行中的模拟器
-- 卸载旧版本（如果存在）
-- 安装新版本
-- 授予悬浮窗权限
-- 可选择启动应用
-
-**使用前提：**
-- Android 模拟器已启动
-- ADB 已添加到系统 PATH
-
-**启动模拟器：**
-1. 打开 Android Studio
-2. 点击右上角 AVD Manager
-3. 点击 ▶ 启动模拟器
-
----
-
-### install_device.bat - 安装到真机/TV设备
-
-**功能：**
-- 自动检测已连接的真机设备
-- 卸载旧版本（如果存在）
-- 安装新版本
-- 授予悬浮窗权限
-- 显示已安装版本号
-- 可选择启动应用
-
-**使用前提：**
-- 设备已通过 USB 或网络连接
-- 设备已开启 USB 调试
-- 已授权此电脑进行调试
-
-**连接 TCL TV：**
-```bash
-adb connect 10.0.0.44:5555
+```powershell
+.\install_emulator.bat
 ```
 
-**TCL TV 特殊说明：**
-- TCL 固件不支持 `adb install -r`
-- 可能需要使用 TCL MultiScreen Interaction 应用安装
-- 详见 `docs/INSTALL_TCL.md`
+该脚本会从 Android SDK 环境变量、项目 `local.properties`、常见 SDK 目录或 PATH 定位 ADB，并会先卸载模拟器上的旧包再安装，因此会清除该模拟器中本应用的本地数据。构建产物不存在时先运行 `build.bat`。
 
----
+## 安装到雷鸟/TCL 电视
 
-## 常见问题
+运行：
 
-### Q: 编译失败，提示找不到 JAVA_HOME
+```powershell
+.\install_device.bat
+```
 
-**A:** 两种解决方案：
+电视安装入口是 `install_device.bat`。它需要 Python 3、电视开启 ADB 调试并可从本机访问。安装器会从 `ANDROID_SDK_ROOT`、`ANDROID_HOME`、项目 `local.properties` 或 PATH 查找 ADB，并通过电视自带的 TCL“多屏互动”发起安装；电视上需要用遥控器确认。此固件拒绝 `adb install -r`，不要用普通 ADB 覆盖安装。设备和升级验证步骤见 [docs/INSTALL_TCL.md](docs/INSTALL_TCL.md)。
 
-1. **方案一：在 Android Studio 中编译**
-   - 打开 Android Studio
-   - File → Open → 选择项目
-   - Build → Rebuild Project
+当前目标电视地址为 `10.0.0.44:5555`。换电脑但仍安装到同一台电视时，确认电视和电脑在同一网络，并先用 `adb devices` 或运行安装脚本确认连接状态。
 
-2. **方案二：设置 JAVA_HOME**
-   - 找到 JDK 安装路径（如 `C:\Program Files\Android\Android Studio\jbr`）
-   - 设置系统环境变量 `JAVA_HOME`
+## 故障定位
 
-### Q: 安装时提示找不到 adb
+- 提示找不到 JDK：确认 Android Studio/JDK 已安装；自定义目录时在当前 shell 设置 `JAVA_HOME`，然后重跑 `build.bat`。不要因终端里没有 `java` 命令就判断项目无法构建，脚本会直接检查 Android Studio 的 JBR。
+- 提示 SDK Platform 37 缺失：在 Android Studio 的 SDK Manager 安装 Android SDK Platform 37，然后重新打开项目以生成本机 `local.properties`。
+- Gradle 首次构建停在下载：确认网络能访问 Gradle Wrapper distribution URL。Wrapper 文件已提交；全局安装 Gradle 不是解决方案。
+- 找不到 ADB：安装 Android SDK Platform-Tools。两个安装脚本会查找 SDK 环境变量、`local.properties`、常见 SDK 目录和 PATH。
+- 电视拒绝安装：按 [docs/INSTALL_TCL.md](docs/INSTALL_TCL.md) 使用 TCL MultiScreen Interaction，并在电视端确认。
 
-**A:** 添加 Android SDK 到系统 PATH：
-1. 找到 SDK 路径（通常在 `C:\Users\[用户名]\AppData\Local\Android\Sdk`）
-2. 添加 `platform-tools` 目录到 PATH
-3. 重启命令行窗口
-
-### Q: 模拟器安装脚本提示未找到模拟器
-
-**A:** 
-1. 打开 Android Studio
-2. 点击右上角 AVD Manager
-3. 点击 ▶ 启动一个模拟器
-4. 等待模拟器完全启动后再运行安装脚本
-
-### Q: TCL TV 安装失败
-
-**A:** 
-1. 确保电视和电脑在同一网络
-2. 电视上开启 ADB 调试
-3. 运行 `adb connect 10.0.0.44:5555`
-4. 如果 `adb install` 失败，使用 TCL MultiScreen Interaction 应用
-
----
-
-## 版本信息
-
-当前版本：**0.8.0**
-
-版本历史：
-- 0.8.0: 重构UI，添加密码保护和卸载保护功能
-- 0.7.0: 添加设备管理器和远程同步功能
-- 0.6.0: 初始版本
-
----
-
-## 文件说明
-
-- `build.bat` - 编译脚本
-- `install_emulator.bat` - 安装到模拟器脚本
-- `install_device.bat` - 安装到真机/TV脚本
-- `app/build/outputs/parental/Parental-TV.apk` - 生成的 APK 文件
-
----
-
-## 技术支持
-
-如有问题，请查看：
-- `AGENTS.md` - 项目开发规则
-- `docs/INSTALL_TCL.md` - TCL TV 安装说明
-- `docs/DEPLOY_ECS.md` - 后端部署说明
+新会话开始 Android 工作时，先读仓库根目录的 [AGENTS.md](AGENTS.md) 和 [.codex/skills/tv-parental-control/SKILL.md](.codex/skills/tv-parental-control/SKILL.md)，再从项目根目录使用上述入口。具体 JDK、SDK 和缓存位置属于本机状态，应该从当前机器的脚本、环境变量和 Android Studio 设置中重新发现，不依赖聊天历史。

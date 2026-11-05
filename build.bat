@@ -4,9 +4,22 @@ cd /d "%~dp0"
 chcp 65001 >nul
 
 if not defined JAVA_HOME if exist "%ProgramFiles%\Android\Android Studio\jbr\bin\java.exe" set "JAVA_HOME=%ProgramFiles%\Android\Android Studio\jbr"
-if not defined JAVA_HOME if exist "D:\Program Files\Android\Android Studio\jbr\bin\java.exe" set "JAVA_HOME=D:\Program Files\Android\Android Studio\jbr"
+if not defined JAVA_HOME if defined JDK_HOME if exist "%JDK_HOME%\bin\java.exe" set "JAVA_HOME=%JDK_HOME%"
+if not defined JAVA_HOME if defined STUDIO_JDK if exist "%STUDIO_JDK%\bin\java.exe" set "JAVA_HOME=%STUDIO_JDK%"
+if not defined JAVA_HOME if defined ANDROID_STUDIO_JDK if exist "%ANDROID_STUDIO_JDK%\bin\java.exe" set "JAVA_HOME=%ANDROID_STUDIO_JDK%"
+if not defined JAVA_HOME if defined ANDROID_STUDIO_HOME if exist "%ANDROID_STUDIO_HOME%\jbr\bin\java.exe" set "JAVA_HOME=%ANDROID_STUDIO_HOME%\jbr"
+if not defined JAVA_HOME (
+    for /f "tokens=2,*" %%A in ('reg query "HKLM\SOFTWARE\Android Studio" /v Path 2^>nul ^| findstr /i "REG_SZ"') do (
+        if exist "%%B\jbr\bin\java.exe" set "JAVA_HOME=%%B\jbr"
+    )
+)
+if not defined JAVA_HOME if exist "%ProgramFiles(x86)%\Android\Android Studio\jbr\bin\java.exe" set "JAVA_HOME=%ProgramFiles(x86)%\Android\Android Studio\jbr"
 if not defined JAVA_HOME if exist "%LOCALAPPDATA%\Programs\Android Studio\jbr\bin\java.exe" set "JAVA_HOME=%LOCALAPPDATA%\Programs\Android Studio\jbr"
-
+if not defined JAVA_HOME (
+    for /f "delims=" %%J in ('where java 2^>nul') do (
+        if not defined JAVA_HOME for %%H in ("%%~dpJ..") do if exist "%%~fH\bin\javac.exe" set "JAVA_HOME=%%~fH"
+    )
+)
 if not defined JAVA_HOME (
     echo 错误: 找不到 JDK。请安装 Android Studio 或设置 JAVA_HOME。
     pause
@@ -30,9 +43,16 @@ if not exist "gradlew.bat" (
     exit /b 1
 )
 
-rem 优先使用仓库内缓存的 Gradle，避免 Wrapper 首次下载超时
+rem Prefer an extracted Gradle distribution before falling back to the Wrapper.
 set "GRADLE_CMD=gradlew.bat"
+if not defined GRADLE_USER_HOME if exist ".tools\gradle-home\wrapper\dists" set "GRADLE_USER_HOME=%cd%\.tools\gradle-home"
+if not defined GRADLE_USER_HOME if defined USERPROFILE set "GRADLE_USER_HOME=%USERPROFILE%\.gradle"
 if exist ".tools\gradle-9.1.0\bin\gradle.bat" set "GRADLE_CMD=.tools\gradle-9.1.0\bin\gradle.bat"
+if not exist ".tools\gradle-9.1.0\bin\gradle.bat" (
+    for /d %%H in ("%GRADLE_USER_HOME%\wrapper\dists\gradle-9.1.0-bin\*") do (
+        if exist "%%~fH\gradle-9.1.0\bin\gradle.bat" set "GRADLE_CMD=%%~fH\gradle-9.1.0\bin\gradle.bat"
+    )
+)
 echo 使用构建工具: %GRADLE_CMD%
 
 echo [1/3] 清理旧的编译文件...

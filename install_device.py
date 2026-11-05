@@ -1,6 +1,7 @@
 import hashlib
 import http.server
 import json
+import os
 import shutil
 import socket
 import struct
@@ -31,12 +32,51 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
 
 
 def adb_path():
-    known = Path(r"D:\Downloads\platform-tools-latest-windows\platform-tools\adb.exe")
-    if known.is_file():
-        return str(known)
+    adb_names = ("adb.exe", "adb") if os.name == "nt" else ("adb", "adb.exe")
+    sdk_dirs = []
+    for name in ("ANDROID_SDK_ROOT", "ANDROID_HOME"):
+        value = os.environ.get(name, "").strip()
+        if value:
+            sdk_dirs.append(Path(value).expanduser())
+
+    properties_file = ROOT / "local.properties"
+    try:
+        properties = properties_file.read_text(encoding="utf-8-sig").splitlines()
+    except OSError:
+        properties = []
+    for line in properties:
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("#", "!")):
+            continue
+        key, separator, value = line.partition("=")
+        if separator and key.strip() == "sdk.dir":
+            value = value.strip().replace("\\:", ":").replace("\\ ", " ").replace("\\\\", "\\")
+            if value:
+                sdk_dirs.append(Path(value).expanduser())
+            break
+
+    if os.environ.get("LOCALAPPDATA"):
+        sdk_dirs.append(Path(os.environ["LOCALAPPDATA"]) / "Android" / "Sdk")
+    elif os.name != "nt":
+        sdk_dirs.append(Path.home() / ("Library/Android/sdk" if sys.platform == "darwin" else "Android/Sdk"))
+
+    seen = set()
+    for sdk_dir in sdk_dirs:
+        key = os.path.normcase(os.path.abspath(sdk_dir))
+        if key in seen:
+            continue
+        seen.add(key)
+        for name in adb_names:
+            candidate = sdk_dir / "platform-tools" / name
+            if candidate.is_file():
+                return str(candidate)
+
     found = shutil.which("adb")
     if not found:
-        raise RuntimeError("adb was not found. Install Android platform-tools or add adb to PATH.")
+        raise RuntimeError(
+            "adb was not found. Install Android SDK Platform-Tools, set ANDROID_SDK_ROOT/ANDROID_HOME, "
+            "open the project in Android Studio to create local.properties, or add adb to PATH."
+        )
     return found
 
 
