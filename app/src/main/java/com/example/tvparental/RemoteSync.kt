@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Handler
+import android.provider.Settings
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -11,7 +12,6 @@ import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.UUID
 
 data class SyncResult(
     val success: Boolean,
@@ -147,14 +147,10 @@ object RemoteSync {
         }.start()
     }
 
-    @Synchronized
-    fun deviceId(context: Context): String {
-        val preferences = context.getSharedPreferences("remote_sync", Context.MODE_PRIVATE)
-        preferences.getString("device_id", null)?.let { return it }
-        val id = UUID.randomUUID().toString()
-        check(preferences.edit().putString("device_id", id).commit()) { "Could not save the device ID." }
-        return id
-    }
+    fun deviceId(context: Context): String =
+        Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+            ?.takeIf { it.isNotBlank() }
+            ?: error("Could not read the device ID.")
 
     fun reportUsage(context: Context): Boolean {
         var connection: HttpURLConnection? = null
@@ -192,6 +188,13 @@ object RemoteSync {
     }
 
     private fun deviceName(): String {
+        val avdName = runCatching {
+            Runtime.getRuntime()
+                .exec(arrayOf("/system/bin/getprop", "ro.kernel.qemu.avd_name"))
+                .inputStream.bufferedReader().use { it.readText().trim() }
+        }.getOrDefault("")
+        if (avdName.isNotBlank()) return avdName
+
         val manufacturer = Build.MANUFACTURER.trim().replaceFirstChar { it.uppercase(Locale.ROOT) }
         val model = Build.MODEL.trim()
         return when {

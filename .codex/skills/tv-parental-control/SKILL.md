@@ -15,6 +15,10 @@ Use this skill for Android or backend work in this repository. The target is a T
 - Install to an emulator with `install_emulator.bat`; it discovers ADB using `ANDROID_SDK_ROOT`, `ANDROID_HOME`, `local.properties`, the standard Windows SDK directory, or PATH. Install to the TCL TV with `install_device.bat`; it discovers ADB using the SDK environment variables, `local.properties`, or PATH.
 - For build failures, inspect the actual JDK, SDK, Gradle wrapper/cache, and script output before concluding a tool is missing. Do not infer failure from `java` or `gradle` not being globally available when the project script can locate them.
 
+## Change scope
+
+- This app is not formally released. New changes do not need backward compatibility or migration paths; use the simplest implementation that meets the current requirements, and do not preserve old behavior solely for compatibility.
+
 ## Product behavior
 
 - Default rules: 60 minutes of screen-on time per local day, one question every 10 minutes, and a 10-minute lock after a challenge scores below four correct answers out of five.
@@ -22,6 +26,7 @@ Use this skill for Android or backend work in this repository. The target is a T
 - Each challenge question allows one submission. A score below four correct answers out of five blocks the TV overlay until the lock timer expires; exhausting the daily quota blocks until the next local day.
 - The unlock challenge asks five questions and passes with at least four correct. A score below four starts the configured lockout, then restarts all five questions.
 - Every submitted answer (correct or incorrect) is queued locally until reported. The device reports cumulative daily screen-on usage to the backend once per minute.
+- Device records use `Settings.Secure.ANDROID_ID` as the stable device ID; emulator names come from `ro.kernel.qemu.avd_name`, with manufacturer/model as the physical-device fallback.
 - Parents can add/delete questions and change usage rules in the Web admin page. Device sync reads `/api/v1/device/state`; admin access uses a username/password session. Never put admin credentials in the Android app.
 - The authenticated admin `/records` page displays per-day device usage and answer history.
 - The launcher supports setting the backend URL, manual sync, a usage summary, permission access, and an immediate test question.

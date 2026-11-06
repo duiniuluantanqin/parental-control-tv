@@ -91,7 +91,11 @@
       <div class="section-heading records-heading">
         <div><h1 id="recordsTitle">使用记录</h1><p id="recordsSummary">查看所有设备的每日使用时长和答题记录。</p></div>
         <div class="records-controls">
-          <label class="records-date" for="recordsDate">日期<input id="recordsDate" type="date"></label>
+          <div class="records-date-control">
+            <button id="previousRecordsDate" class="icon-button date-nav-button" type="button" aria-label="前一天" title="前一天">←</button>
+            <label class="records-date" for="recordsDate">日期<input id="recordsDate" type="date"></label>
+            <button id="nextRecordsDate" class="icon-button date-nav-button" type="button" aria-label="后一天" title="后一天">→</button>
+          </div>
           <button id="refreshRecords" class="button secondary" type="button">刷新</button>
         </div>
       </div>

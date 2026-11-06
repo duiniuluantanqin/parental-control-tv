@@ -376,6 +376,14 @@ async function loadRecords() {
   renderRecords(records);
 }
 
+function shiftRecordsDate(days) {
+  const input = document.querySelector("#recordsDate");
+  const [year, month, day] = input.value.split("-").map(Number);
+  const shifted = new Date(year, month - 1, day + days);
+  input.value = [shifted.getFullYear(), String(shifted.getMonth() + 1).padStart(2, "0"), String(shifted.getDate()).padStart(2, "0")].join("-");
+  loadRecords().catch(handleError);
+}
+
 async function login(event) {
   event.preventDefault();
   const button = document.querySelector("#loginButton");
@@ -645,6 +653,8 @@ async function initialize() {
 document.querySelector("#loginForm").addEventListener("submit", login);
 document.querySelector("#settingsForm").addEventListener("submit", saveSettings);
 document.querySelector("#recordsDate").addEventListener("change", () => loadRecords().catch(handleError));
+document.querySelector("#previousRecordsDate").addEventListener("click", () => shiftRecordsDate(-1));
+document.querySelector("#nextRecordsDate").addEventListener("click", () => shiftRecordsDate(1));
 document.querySelector("#refreshRecords").addEventListener("click", () => loadRecords().catch(handleError));
 document.querySelector("#closeUsageDetail").addEventListener("click", () => document.querySelector("#usageDetailDialog").close());
 document.querySelector("#resetDevicePin").addEventListener("click", async () => {
