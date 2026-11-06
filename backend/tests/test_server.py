@@ -759,7 +759,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(server.STORE.path.read_bytes(), original)
 
     def test_ai_generation_requires_login_and_valid_input(self) -> None:
-        with patch("server.generate_poem_questions") as generate_poem, patch("server.generate_category_questions") as generate_category:
+        with patch("server.generate_poem_questions") as generate_poem, patch("server.generate_category_questions") as generate_category, patch("server.generate_english_questions") as generate_english:
             status, _ = self.request(
                 "/api/v1/admin/questions/generate", method="POST", authenticated=False,
                 body={"title": "静夜思", "count": 3},
@@ -768,6 +768,7 @@ class AdminApiTests(unittest.TestCase):
             invalid = [
                 {"title": "", "count": 3}, {"title": "静夜思", "count": True}, {"title": "静夜思", "count": 11},
                 {"category": "其他", "count": 2},
+                *({"category": "英语", "word": value} for value in ("", "apple pie", "苹果", "hello!")),
                 *({"title": "静夜思", "difficulty": value} for value in ("", "初中", None, 1, [])),
             ]
             for payload in invalid:
@@ -775,6 +776,27 @@ class AdminApiTests(unittest.TestCase):
                 self.assertEqual(status, 400)
             generate_poem.assert_not_called()
             generate_category.assert_not_called()
+            generate_english.assert_not_called()
+
+    def test_english_ai_generation_uses_word_and_tags_preview_questions(self) -> None:
+        generated = {
+            "title": "apple",
+            "questions": [{
+                "prompt": "常见的中文释义是什么？", "options": ["苹果", "香蕉", "橙子", "梨"], "answer": "苹果",
+            }],
+        }
+        with patch("server.generate_english_questions", return_value=generated) as generate:
+            status, preview = self.request(
+                "/api/v1/admin/questions/generate", method="POST",
+                body={"category": "英语", "word": "apple", "count": 1, "difficulty": "高"},
+            )
+        self.assertEqual(status, 200)
+        generate.assert_called_once_with("apple", 1, "高")
+        self.assertEqual(preview["category"], "英语")
+        self.assertEqual(preview["title"], "apple")
+        self.assertEqual(preview["questions"][0]["category"], "英语")
+        self.assertEqual(preview["questions"][0]["difficulty"], "高")
+        self.assertIn("apple", preview["questions"][0]["prompt"])
 
     def test_random_ai_categories_need_no_title_and_are_forced_on_questions(self) -> None:
         generated = [{

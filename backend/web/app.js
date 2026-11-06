@@ -11,6 +11,8 @@ const aiPreview = document.querySelector("#aiPreview");
 const aiCategoryInput = document.querySelector("#aiCategoryInput");
 const poemTitleInput = document.querySelector("#poemTitleInput");
 const poemTitleField = document.querySelector("#poemTitleField");
+const englishWordInput = document.querySelector("#englishWordInput");
+const englishWordField = document.querySelector("#englishWordField");
 const loginView = document.querySelector("#loginView");
 const adminView = document.querySelector("#adminView");
 const page = location.pathname === "/questions" ? "questions" : ["/records", "/devices"].includes(location.pathname) ? "records" : "settings";
@@ -71,7 +73,7 @@ function renderCategories() {
   for (const category of categories) categoryFilter.add(new Option(category, category));
   categoryFilter.value = categories.includes(selected) ? selected : "";
   categoryInput.replaceChildren();
-  for (const category of new Set(["古诗词", "数学", "科学", "地理历史", "其他", ...categories])) {
+  for (const category of new Set(["古诗词", "英语", "数学", "科学", "地理历史", "其他", ...categories])) {
     categoryInput.add(new Option(category, category, category === "其他", category === "其他"));
   }
 }
@@ -640,6 +642,8 @@ function renderAiQuestions(result) {
   const list = document.querySelector("#aiQuestionList");
   document.querySelector("#aiPoemTitle").textContent = result.category === "古诗词"
     ? `《${result.title}》 · ${result.author}`
+    : result.category === "英语"
+      ? `英语单词：${result.title}`
     : `${result.category} · 随机出题`;
   list.replaceChildren();
   for (const [index, question] of aiQuestions.entries()) {
@@ -682,21 +686,28 @@ async function generateAiQuestions(event) {
   const difficultyInput = document.querySelector("#aiDifficultyInput");
   const category = aiCategoryInput.value;
   const isPoem = category === "古诗词";
+  const isEnglish = category === "英语";
   if (button.disabled) return;
   button.disabled = true;
   aiCategoryInput.disabled = true;
   poemTitleInput.disabled = true;
+  englishWordInput.disabled = true;
   countInput.disabled = true;
   difficultyInput.disabled = true;
   button.textContent = "正在出题…";
   aiPreview.hidden = true;
   aiQuestions = [];
   aiNotice.classList.remove("error");
-  aiNotice.textContent = isPoem ? "正在围绕这首诗词出题，请稍候…" : `正在随机生成${category}题，请稍候…`;
+  aiNotice.textContent = isPoem
+    ? "正在围绕这首诗词出题，请稍候…"
+    : isEnglish
+      ? `正在围绕单词“${englishWordInput.value.trim()}”出题，请稍候…`
+      : `正在随机生成${category}题，请稍候…`;
   document.querySelector("#aiGenerationForm").setAttribute("aria-busy", "true");
   try {
     const request = { category, count: Number(countInput.value), difficulty: difficultyInput.value };
     if (isPoem) request.title = poemTitleInput.value.trim();
+    if (isEnglish) request.word = englishWordInput.value.trim();
     const result = await api("/api/v1/admin/questions/generate", {
       method: "POST", body: JSON.stringify(request),
     });
@@ -711,6 +722,7 @@ async function generateAiQuestions(event) {
     button.disabled = false;
     aiCategoryInput.disabled = false;
     poemTitleInput.disabled = false;
+    englishWordInput.disabled = false;
     countInput.disabled = false;
     difficultyInput.disabled = false;
     button.textContent = "重新出题";
@@ -720,9 +732,12 @@ async function generateAiQuestions(event) {
 
 function updateAiCategoryFields() {
   const isPoem = aiCategoryInput.value === "古诗词";
-  document.querySelector(".ai-fields").classList.toggle("random-category", !isPoem);
+  const isEnglish = aiCategoryInput.value === "英语";
+  document.querySelector(".ai-fields").classList.toggle("random-category", !isPoem && !isEnglish);
   poemTitleField.hidden = !isPoem;
   poemTitleInput.required = isPoem;
+  englishWordField.hidden = !isEnglish;
+  englishWordInput.required = isEnglish;
 }
 
 async function importAiQuestions() {

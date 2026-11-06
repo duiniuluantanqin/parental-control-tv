@@ -22,9 +22,11 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from deepseek import (
+    ENGLISH_WORD_PATTERN,
     RANDOM_QUESTION_CATEGORIES,
     DeepSeekError,
     generate_category_questions,
+    generate_english_questions,
     generate_poem_questions,
     generate_random_questions,
 )
@@ -970,11 +972,18 @@ class RequestHandler(BaseHTTPRequestHandler):
             if path == "/api/v1/admin/questions/generate":
                 category = payload.get("category", "古诗词")
                 title, count = payload.get("title"), payload.get("count", 5)
+                word = payload.get("word")
                 difficulty = payload.get("difficulty", "中")
-                if category not in ("古诗词", *RANDOM_QUESTION_CATEGORIES):
-                    raise ValueError("类别需选择古诗词、数学、地理历史或科学")
+                if category not in ("古诗词", "英语", *RANDOM_QUESTION_CATEGORIES):
+                    raise ValueError("类别需选择古诗词、英语、数学、地理历史或科学")
                 if category == "古诗词" and (not isinstance(title, str) or not 1 <= len(title.strip()) <= 80):
                     raise ValueError("请输入 1–80 个字符的诗词名称，可附作者")
+                if category == "英语" and (
+                    not isinstance(word, str)
+                    or len(word.strip()) > 80
+                    or not ENGLISH_WORD_PATTERN.fullmatch(word.strip())
+                ):
+                    raise ValueError("请输入一个英文单词")
                 if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 10:
                     raise ValueError("出题数量需为 1–10 道")
                 if not isinstance(difficulty, str) or difficulty not in ("低", "中", "高"):
@@ -982,6 +991,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 # Generate outside the state lock so TV sync and admin writes can continue.
                 if category == "古诗词":
                     generated_result = generate_poem_questions(title.strip(), count, difficulty)
+                elif category == "英语":
+                    generated_result = generate_english_questions(word.strip(), count, difficulty)
                 else:
                     generated_result = {
                         "title": category,
@@ -996,6 +1007,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                         prompt = question.get("prompt")
                         if category == "古诗词" and isinstance(prompt, str) and generated_result["title"] not in prompt:
                             question["prompt"] = f"《{generated_result['title']}》：{prompt}"
+                        if category == "英语" and isinstance(prompt, str) and word.casefold() not in prompt.casefold():
+                            question["prompt"] = f"单词“{word.strip()}”：{prompt}"
                         candidates.append(question)
                     generated = validate_question_batch(candidates)
                     if len({question["prompt"] for question in generated}) != len(generated):

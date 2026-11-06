@@ -245,6 +245,7 @@ dialog::backdrop { background: #102c296b; backdrop-filter: blur(3px); }
   .ai-fields.random-category { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ai-fields label:first-child { grid-column: 1 / -1; }
   .ai-fields #poemTitleField { grid-column: 1 / -1; }
+  .ai-fields #englishWordField { grid-column: 1 / -1; }
   .ai-generation-actions { align-items: stretch; flex-direction: column; }
   .ai-options { grid-template-columns: 1fr; }
   .ai-question { padding: 14px; }

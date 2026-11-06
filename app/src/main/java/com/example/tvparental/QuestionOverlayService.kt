@@ -7,7 +7,9 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
@@ -477,7 +479,7 @@ class QuestionOverlayService : Service() {
             return
         }
         val button = TextView(this).apply {
-            text = "Enter Parent PIN"
+            text = "Unlock with PIN"
             setTextColor(Color.rgb(155, 165, 156))
             textSize = 14f
             gravity = Gravity.CENTER
@@ -486,7 +488,10 @@ class QuestionOverlayService : Service() {
             isFocusableInTouchMode = true
             isClickable = true
             setOnFocusChangeListener { _, hasFocus ->
-                setTextColor(if (hasFocus) Color.rgb(178, 190, 179) else Color.rgb(155, 165, 156))
+                setTextColor(if (hasFocus) Color.rgb(210, 239, 111) else Color.rgb(155, 165, 156))
+                setTypeface(null, if (hasFocus) Typeface.BOLD else Typeface.NORMAL)
+                paintFlags = if (hasFocus) paintFlags or Paint.UNDERLINE_TEXT_FLAG
+                else paintFlags and Paint.UNDERLINE_TEXT_FLAG.inv()
             }
             background = null
             setOnClickListener { showPasswordEntry(mode) }
@@ -513,7 +518,7 @@ class QuestionOverlayService : Service() {
         }
         addRemainingTimeLabel(root)
         root.addView(TextView(this).apply {
-            text = "Enter Parent PIN"
+            text = "Unlock with PIN"
             setTextColor(Color.rgb(220, 235, 222))
             textSize = 28f
             gravity = Gravity.CENTER

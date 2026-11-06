@@ -64,6 +64,27 @@ class DeepSeekTests(unittest.TestCase):
                 deepseek.generate_category_questions("其他", 1)
         request.assert_not_called()
 
+    def test_english_word_questions_send_word_and_difficulty_to_provider(self):
+        questions = [{"prompt": "What does apple mean?", "options": ["苹果", "香蕉", "橙子", "梨"], "answer": "苹果"}]
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("deepseek.urlopen", return_value=self.completion(json.dumps({"questions": questions}))) as request:
+            result = deepseek.generate_english_questions("apple", 1, "高")
+        self.assertEqual(result, {"title": "apple", "questions": questions})
+        payload = json.loads(request.call_args.args[0].data)
+        user = json.loads(payload["messages"][1]["content"])
+        self.assertEqual(user, {"英文单词": "apple", "出题数量": 1, "难度": "高"})
+        self.assertIn("英文单词", payload["messages"][0]["content"])
+
+    def test_english_word_questions_reject_invalid_word_and_bad_result(self):
+        with patch("deepseek.urlopen") as request:
+            for word in ("", "apple pie", "苹果", "hello!"):
+                with self.subTest(word=word), self.assertRaises(ValueError):
+                    deepseek.generate_english_questions(word, 1)
+        request.assert_not_called()
+        for result in ({}, {"questions": []}, {"questions": "invalid"}):
+            with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("deepseek.urlopen", return_value=self.completion(json.dumps(result))):
+                with self.assertRaises(deepseek.DeepSeekError):
+                    deepseek.generate_english_questions("apple", 1)
+
     def test_missing_key_does_not_call_provider(self):
         with patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""}), patch("deepseek.urlopen") as request:
             with self.assertRaises(deepseek.DeepSeekError) as error:

@@ -30,6 +30,7 @@ Use this skill for Android or backend work in this repository. The target is a T
 - Device records use `Settings.Secure.ANDROID_ID` as the stable device ID; emulator names come from `ro.kernel.qemu.avd_name`, with manufacturer/model as the physical-device fallback.
 - Parents can add/delete questions and change usage rules in the Web admin page. Device sync reads `/api/v1/device/state`; admin access uses a username/password session. Never put admin credentials in the Android app.
 - The SQLite database initializes the single admin account as `admin/admin`; the admin can change its password in the Web UI, and `python backend/server.py --set-admin` resets it. Store only salted password hashes in the SQLite database.
+- AI question generation supports poem titles, random math/geography/history/science questions, and English questions based on a single English word. Generated questions are previewed before selected items are imported into the bank.
 - The authenticated admin `/records` page displays per-day device usage and answer history.
 - The launcher supports setting the backend URL, manual sync, a usage summary, permission access, and an immediate test question.
 
@@ -43,9 +44,10 @@ Use this skill for Android or backend work in this repository. The target is a T
 
 ## Implementation constraints
 
+- All user-facing Android app text, including the launcher name, settings, overlays, dialogs, and errors, must be English regardless of the prompt language. Do not add Chinese Android UI text even when a request is written in Chinese.
 - Keep `minSdk` at 28 and declare `LEANBACK_LAUNCHER` plus normal `LAUNCHER` entry points.
 - Use a foreground service and `TYPE_APPLICATION_OVERLAY` for the global full-screen question and lock screen.
 - Every interactive control must be reachable with D-pad arrows and activated by OK/Enter.
 - Restore question alarms and usage tracking after `LOCKED_BOOT_COMPLETED` and `BOOT_COMPLETED`.
-- Backend uses Python's standard library. Keep `backend/.env` and `backend/data/` out of version control. Use the included Caddy HTTPS proxy for ECS; do not expose the app's port 8080 directly to the public internet.
+- Backend uses Python's standard library. Keep `backend/.env` and `backend/data/` out of version control. ECS deployment uses the host's Caddy and a systemd service. Dockerfile and Compose are not used; do not recreate them. Do not expose the app's port 8080 directly to the public internet.
 - Run backend tests with `python -m unittest discover -s backend/tests -v` and Windows Android builds with `build.bat`.

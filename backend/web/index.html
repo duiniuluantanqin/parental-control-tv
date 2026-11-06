@@ -161,15 +161,16 @@
     <div class="form-actions"><button id="dismissQuestionDetail" class="button secondary" type="button">关闭</button></div>
   </dialog>
   <dialog id="aiQuestionDialog" class="ai-dialog" aria-labelledby="aiDialogTitle">
-    <div class="form-heading"><div><h2 id="aiDialogTitle">AI 出题</h2><p class="muted">古诗词需输入名称；数学、地理历史和科学会随机出题。</p></div><button id="closeAiDialog" class="icon-button" type="button" aria-label="关闭 AI 出题对话框">×</button></div>
+    <div class="form-heading"><div><h2 id="aiDialogTitle">AI 出题</h2><p class="muted">古诗词输入作品名，英语输入单词；数学、地理历史和科学随机出题。</p></div><button id="closeAiDialog" class="icon-button" type="button" aria-label="关闭 AI 出题对话框">×</button></div>
     <form id="aiGenerationForm">
       <div class="ai-fields">
-        <label for="aiCategoryInput">题目类别<select id="aiCategoryInput" required><option value="古诗词" selected>古诗词</option><option value="数学">数学</option><option value="地理历史">地理历史</option><option value="科学">科学</option></select></label>
+        <label for="aiCategoryInput">题目类别<select id="aiCategoryInput" required><option value="古诗词" selected>古诗词</option><option value="英语">英语</option><option value="数学">数学</option><option value="地理历史">地理历史</option><option value="科学">科学</option></select></label>
         <label id="poemTitleField" for="poemTitleInput">诗词名称<input id="poemTitleInput" maxlength="80" placeholder="例如：静夜思（李白）" required></label>
+        <label id="englishWordField" for="englishWordInput" hidden>英文单词<input id="englishWordInput" maxlength="80" placeholder="例如：apple" autocomplete="off"></label>
         <label for="aiCountInput">出题数量<input id="aiCountInput" type="number" min="1" max="10" value="5" required></label>
         <label for="aiDifficultyInput">难度<select id="aiDifficultyInput"><option value="低">低</option><option value="中" selected>中</option><option value="高">高</option></select></label>
       </div>
-      <div class="ai-generation-actions"><p class="muted">每次生成 1–10 道，可选低、中、高难度。重名作品可补充作者。</p><button id="generateAiQuestions" class="button primary" type="submit">开始出题</button></div>
+      <div class="ai-generation-actions"><p class="muted">每次生成 1–10 道。英语题围绕输入的单词生成。</p><button id="generateAiQuestions" class="button primary" type="submit">开始出题</button></div>
     </form>
     <p id="aiNotice" class="form-notice" role="status" aria-live="polite"></p>
     <section id="aiPreview" class="ai-preview" aria-labelledby="aiPoemTitle" hidden>
