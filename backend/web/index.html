@@ -103,21 +103,15 @@
         <div class="records-section-heading"><h2 id="usageRecordsTitle">每日使用时长</h2></div>
         <div class="table-wrap">
           <table class="usage-record-table">
-            <colgroup><col class="usage-col-device"><col class="usage-col-total"><col class="usage-col-report"><col class="usage-col-detail"></colgroup>
-            <thead><tr><th>设备</th><th>使用时长</th><th>上次上报</th><th>详情</th></tr></thead>
+            <colgroup><col class="usage-col-device"><col class="usage-col-total"><col class="usage-col-report"><col class="usage-col-action"></colgroup>
+            <thead><tr><th>设备</th><th>使用时长</th><th>上次上报</th><th>操作</th></tr></thead>
             <tbody id="usageRows"></tbody>
           </table>
         </div>
       </section>
       <section class="records-section" aria-labelledby="answerRecordsTitle">
         <div class="records-section-heading"><h2 id="answerRecordsTitle">答题记录</h2></div>
-        <div class="table-wrap">
-          <table class="answer-record-table">
-            <colgroup><col class="answer-col-time"><col class="answer-col-device"><col class="answer-col-question"><col class="answer-col-answer"><col class="answer-col-result"></colgroup>
-            <thead><tr><th>时间</th><th>设备</th><th>题目</th><th>作答</th><th>结果</th></tr></thead>
-            <tbody id="answerRows"></tbody>
-          </table>
-        </div>
+        <div id="challengeRecords" class="challenge-records"></div>
       </section>
     </section>
   </main>

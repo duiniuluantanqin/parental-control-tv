@@ -84,7 +84,7 @@ User=tvparental-deploy
 WorkingDirectory=/var/www/html/tvparental
 Environment=HOST=127.0.0.1
 Environment=PORT=8080
-Environment=TV_PARENTAL_DATA_FILE=/var/www/html/tvparental/backend/data/state.json
+Environment=TV_PARENTAL_DATA_FILE=/var/www/html/tvparental/backend/data/state.sqlite3
 EnvironmentFile=/var/www/html/tvparental/backend/.env
 ExecStart=/usr/bin/python3 -u backend/server.py
 Restart=on-failure
@@ -100,7 +100,7 @@ sudo systemctl enable tvparental
 
 `systemctl enable tvparental` 只设置开机自启，不会立即启动服务。此时还没有上传代码，**首次启动由 Actions 上传代码并重启服务来完成**。`.env` 由 systemd 加载，Python 本身不会读取它；域名配置在 Caddy 和 GitHub 中即可。先用 `sudo ss -ltnp 'sport = :8080'` 确认端口未被其他服务占用；若需换端口，同时修改上面的 `PORT`、Caddy 的代理地址及工作流的本机检查地址。
 
-已有部署应先备份并保留 `.env` 和题库。旧版默认数据文件是 `backend/data.json`，如仍在使用它，在 `.env` 中设置 `TV_PARENTAL_DATA_FILE=/var/www/html/tvparental/backend/data.json`；本流程不会自动迁移数据。部署目录限制为仅部署用户可访问，Caddy 无需读取该目录。
+已有部署应先备份并保留 `.env` 和题库。现在后台将状态保存到 SQLite；如果数据库不存在，程序会从对应的旧 JSON 文件一次性导入，并保留 JSON 原文件作为备份。建议将 `.env` 中的 `TV_PARENTAL_DATA_FILE` 指向 `/var/www/html/tvparental/backend/data/state.sqlite3`。部署目录限制为仅部署用户可访问，Caddy 无需读取该目录。
 
 ## 3. 为现有 Caddy 增加站点
 
@@ -147,7 +147,7 @@ Caddy 自动管理该域名的 HTTPS。后台首次部署前出现 502 属正常
 提交并推送工作流及代码后，在 **Actions → deploy-ecs → Run workflow** 选择 `main`。之后 `main` 上的 `backend/**`、种子题库或工作流变更会自动触发发布：
 
 1. 运行后端 API 测试；通过后才部署，其他分支不会部署。
-2. rsync 同步后台和种子题库，保留 `.env`、`data/` 和旧的 `data.json`。
+2. rsync 同步后台和种子题库，保留 `.env`、`data/`、SQLite 数据库以及旧 JSON 备份。
 3. 重启 `tvparental`，等待本机接口就绪，再检查公网 HTTPS 接口。部署串行执行，避免交叉覆盖。
 
 首次发布完成后，在本机用第 5 节的命令 SSH 登录部署账户，执行：
@@ -270,7 +270,7 @@ curl -sS -o /dev/null -w 'HTTP %{http_code}\n' https://tvparental.mediainsight36
 
 ### 维护与备份
 
-- 题库与规则通常保存在 `backend/data/state.json`；备份该目录（包含管理员账号文件 `admin.json`）和 `.env`。种子题库只用于数据文件不存在时初始化，更新种子不会替换已经保存的题库。
+- 题库、规则、设备和记录通常保存在 `backend/data/state.sqlite3`；备份该目录（包含管理员账号文件 `admin.json`）和 `.env`。首次启动会从同路径的旧 `state.json` 导入一次并保留原文件。种子题库只用于数据库和旧状态文件都不存在时初始化，更新种子不会替换已经保存的题库。
 - 发布失败：先看 Actions 失败步骤，再在 ECS 执行 `sudo journalctl -u tvparental -n 100 --no-pager`。本机接口正常、HTTPS 失败时检查 DNS、Caddy 和安全组。
 - 自动发布会短暂重启后台，没有自动回滚。回退时在 GitHub 撤销有问题的提交并推送到 `main`。
 - 部署密钥可读写本应用代码和数据，应妥善保管；管理员密码通过交互提示输入，不要提交到 Git 或直接写进命令历史。

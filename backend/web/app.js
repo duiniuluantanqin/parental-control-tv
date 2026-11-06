@@ -274,11 +274,8 @@ function setEmptyRow(container, columnCount, message) {
 
 function renderRecords(records) {
   const usageRows = document.querySelector("#usageRows");
-  const answerRows = document.querySelector("#answerRows");
   usageRows.replaceChildren();
-  answerRows.replaceChildren();
   const deviceNames = new Map((records.deviceDetails || []).map((device) => [device.deviceId, device.name]));
-  document.querySelector("#recordsSummary").textContent = `${records.usage.length} 台设备 · ${records.answers.length} 条答题记录`;
 
   for (const record of records.usage) {
     const row = document.createElement("tr");
@@ -303,37 +300,131 @@ function renderRecords(records) {
     }
     row.append(reported);
     const detailCell = document.createElement("td");
+    const actions = document.createElement("div");
+    actions.className = "usage-actions";
     const detailButton = document.createElement("button");
     detailButton.className = "text-button";
     detailButton.type = "button";
     detailButton.textContent = "详情";
     detailButton.setAttribute("aria-label", `查看${deviceName}的使用详情`);
     detailButton.addEventListener("click", () => showUsageDetails(record, deviceName));
-    detailCell.append(detailButton);
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "text-button delete-record-button";
+    deleteButton.type = "button";
+    deleteButton.textContent = "删除";
+    deleteButton.setAttribute("aria-label", `删除${deviceName}在${record.date}的使用记录`);
+    deleteButton.addEventListener("click", () => deleteUsageRecord(record, deviceName, deleteButton));
+    actions.append(detailButton, deleteButton);
+    detailCell.append(actions);
     row.append(detailCell);
     usageRows.append(row);
   }
   if (!records.usage.length) setEmptyRow(usageRows, 4, "暂无设备记录");
+  renderChallengeRecords(records, deviceNames);
+}
 
-  for (const record of records.answers) {
-    const row = document.createElement("tr");
-    const time = document.createElement("td");
-    time.textContent = new Date(record.answeredAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    const device = document.createElement("td");
-    const deviceName = record.deviceName || deviceNames.get(record.deviceId) || record.deviceId;
-    device.className = "answer-device-cell";
-    device.textContent = deviceName;
-    device.title = deviceName === record.deviceId ? `设备 ID：${record.deviceId}` : `${deviceName} · 设备 ID：${record.deviceId}`;
-    const prompt = document.createElement("td");
-    prompt.textContent = record.prompt;
-    const answer = document.createElement("td");
-    answer.textContent = record.answered === false ? "未作答" : record.selectedAnswer;
-    const result = document.createElement("td");
-    result.textContent = record.correct ? "答对" : "答错";
-    row.append(time, device, prompt, answer, result);
-    answerRows.append(row);
+function renderChallengeRecords(records, deviceNames) {
+  const container = document.querySelector("#challengeRecords");
+  const challenges = records.challenges || [];
+  const answersByChallenge = new Map();
+  for (const answer of records.answers || []) {
+    if (!answer.challengeId) continue;
+    const answers = answersByChallenge.get(answer.challengeId) || [];
+    answers.push(answer);
+    answersByChallenge.set(answer.challengeId, answers);
   }
-  if (!records.answers.length) setEmptyRow(answerRows, 5, "当天暂无答题记录");
+  const statusLabels = {
+    active: "答题中",
+    answered: "全部作答",
+    timeout: "倒计时结束退出",
+    reboot: "电视/模拟器重启退出",
+    daily_limit: "每日限额退出",
+  };
+  container.replaceChildren();
+  document.querySelector("#recordsSummary").textContent = `${records.usage.length} 台设备 · ${challenges.length} 次五题答题`;
+
+  for (const challenge of challenges) {
+    const pane = document.createElement("details");
+    pane.className = "challenge-record";
+    const summary = document.createElement("summary");
+    summary.className = "challenge-summary";
+    const main = document.createElement("span");
+    main.className = "challenge-summary-main";
+    const device = document.createElement("span");
+    device.className = "challenge-device";
+    device.textContent = challenge.deviceName || deviceNames.get(challenge.deviceId) || challenge.deviceId;
+    device.title = `${device.textContent} · ${challenge.deviceId}`;
+    const time = document.createElement("time");
+    time.className = "challenge-time";
+    time.dateTime = new Date(challenge.startedAt).toISOString();
+    time.textContent = new Date(challenge.startedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+    main.append(device, time);
+    const meta = document.createElement("span");
+    meta.className = "challenge-summary-meta";
+    const status = document.createElement("span");
+    status.className = `challenge-status status-${challenge.status}`;
+    status.textContent = statusLabels[challenge.status] || challenge.status;
+    const score = document.createElement("span");
+    score.className = "challenge-score";
+    score.textContent = `已答 ${challenge.answeredCount}/5 · 答对 ${challenge.correctCount}/5`;
+    meta.append(status, score);
+    summary.append(main, meta);
+    pane.append(summary);
+
+    const questions = document.createElement("div");
+    questions.className = "challenge-questions";
+    const answers = answersByChallenge.get(challenge.sessionId) || [];
+    for (const [index, question] of challenge.questions.entries()) {
+      const attempt = answers.find((item) => item.questionId === question.questionId);
+      const row = document.createElement("div");
+      row.className = "challenge-question";
+      const number = document.createElement("span");
+      number.className = "challenge-question-number";
+      number.textContent = String(index + 1).padStart(2, "0");
+      const prompt = document.createElement("span");
+      prompt.className = "challenge-question-prompt";
+      prompt.textContent = question.prompt;
+      const result = document.createElement("span");
+      const unanswered = !attempt || attempt.answered === false;
+      const interrupted = challenge.interruptedQuestionId === question.questionId;
+      let answerStatus;
+      if (!unanswered) {
+        answerStatus = attempt.correct ? "correct" : "incorrect";
+      } else if (interrupted && challenge.status === "timeout") {
+        answerStatus = "timeout";
+      } else if (interrupted && challenge.status === "reboot") {
+        answerStatus = "reboot";
+      } else {
+        answerStatus = attempt ? "unanswered" : "not-shown";
+      }
+      result.className = `challenge-question-result ${answerStatus}`;
+      result.textContent = {
+        correct: "答对",
+        incorrect: "答错",
+        timeout: "倒计时结束，未作答",
+        reboot: "重启时未作答",
+        unanswered: "未作答",
+        "not-shown": "未弹出",
+      }[answerStatus];
+      row.append(number, prompt, result);
+      if (!unanswered) {
+        const answer = document.createElement("span");
+        answer.className = "challenge-question-answer";
+        answer.textContent = `作答：${attempt.selectedAnswer}`;
+        row.append(answer);
+      }
+      questions.append(row);
+    }
+    pane.append(questions);
+    container.append(pane);
+  }
+
+  if (!challenges.length) {
+    const empty = document.createElement("div");
+    empty.className = "challenge-empty";
+    empty.textContent = "当天暂无答题记录";
+    container.append(empty);
+  }
 }
 
 function showUsageDetails(record, deviceName) {
@@ -374,6 +465,22 @@ async function loadRecords() {
   if (!date) return;
   const records = await api(`/api/v1/admin/records?${new URLSearchParams({ date })}`);
   renderRecords(records);
+}
+
+async function deleteUsageRecord(record, deviceName, button) {
+  if (!window.confirm(`确定删除 ${deviceName} 在 ${record.date} 的每日使用记录吗？答题记录和设备信息不会删除。`)) return;
+  button.disabled = true;
+  try {
+    await api(`/api/v1/admin/records/usage?${new URLSearchParams({ deviceId: record.deviceId, date: record.date })}`, {
+      method: "DELETE",
+    });
+    setNotice("每日使用记录已删除");
+    await loadRecords();
+  } catch (error) {
+    handleError(error);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function shiftRecordsDate(days) {

@@ -112,7 +112,6 @@ class QuestionOverlayService : Service() {
             handleQuestionTimeout(question)
             return
         }
-        QuestionBank.beginChallenge(this)
         val optionTexts = question.options.shuffled()
         val optionViews = mutableListOf<TextView>()
         var selectedIndex = 0
@@ -252,6 +251,11 @@ class QuestionOverlayService : Service() {
         lockCountdown?.text = ""
         currentQuestion = null
         val progress = QuestionBank.recordAnswer(this, question, selected)
+        if (progress.complete) {
+            QuestionBank.finishChallenge(this, QuestionBank.STATUS_ANSWERED)
+        } else if (ControlState.isDailyLimitReached(this)) {
+            QuestionBank.finishChallenge(this, QuestionBank.STATUS_DAILY_LIMIT)
+        }
         RemoteSync.syncAsync(applicationContext) { result ->
             if (result.settingsChanged) QuestionAlarmReceiver.scheduleForCurrentState(applicationContext)
         }
@@ -261,12 +265,10 @@ class QuestionOverlayService : Service() {
         }
         if (progress.complete && !progress.passed) {
             val until = ControlState.startWrongAnswerLock(this)
-            QuestionBank.restartChallenge(this)
             QuestionAlarmReceiver.scheduleAfter(this, until - System.currentTimeMillis())
             showLockout()
             return
         }
-        if (progress.passed) QuestionBank.finishChallenge(this)
         (root as? LinearLayout)?.let { layout ->
             (layout.getChildAt(layout.childCount - 1) as? TextView)?.apply {
                 text = when {
@@ -296,6 +298,14 @@ class QuestionOverlayService : Service() {
             return
         }
         if (!ControlState.isDailyLimitReached(this)) return refreshBlockingState()
+        if (QuestionBank.isChallengeActive(this)) {
+            QuestionBank.finishChallenge(this, QuestionBank.STATUS_DAILY_LIMIT, currentQuestion?.id.orEmpty())
+            ControlState.clearQuestionTimeout(this)
+            currentQuestion = null
+            RemoteSync.syncAsync(applicationContext) { result ->
+                if (result.settingsChanged) QuestionAlarmReceiver.scheduleForCurrentState(applicationContext)
+            }
+        }
         renderLock(MODE_DAILY_LOCK)
     }
 
@@ -418,9 +428,9 @@ class QuestionOverlayService : Service() {
         if (answerSubmitted || currentMode != MODE_QUESTION) return
         answerSubmitted = true
         QuestionBank.recordUnanswered(this, question)
+        QuestionBank.finishChallenge(this, QuestionBank.STATUS_TIMEOUT, question.id)
         ControlState.clearQuestionTimeout(this)
         currentQuestion = null
-        QuestionBank.restartChallenge(this)
         RemoteSync.syncAsync(applicationContext) { result ->
             if (result.settingsChanged) QuestionAlarmReceiver.scheduleForCurrentState(applicationContext)
         }
@@ -544,7 +554,7 @@ class QuestionOverlayService : Service() {
     private fun unlockDailyLimit() {
         ControlState.clearQuestionTimeout(this)
         currentQuestion = null
-        QuestionBank.finishChallenge(this)
+        QuestionBank.finishChallenge(this, QuestionBank.STATUS_DAILY_LIMIT)
         ControlState.grantPasswordExtension(this)
         QuestionAlarmReceiver.scheduleNext(this)
         hideOverlay()

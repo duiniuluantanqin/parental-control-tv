@@ -57,6 +57,7 @@ class MainActivity : Activity() {
     private lateinit var testButton: Button
     private lateinit var syncButton: Button
     private var autoOpenedOverlaySettings = false
+    private var startupQuestionPending = false
 
     companion object {
         private const val REQUEST_CODE_ENABLE_ADMIN = 1001
@@ -74,6 +75,7 @@ class MainActivity : Activity() {
         registerSyncReceiver()
         startUsageTracking()
         QuestionAlarmReceiver.ensureScheduled(this)
+        startupQuestionPending = ControlState.showQuestionOnStartup(this)
         refreshStatus()
         permissionButton.post { permissionButton.requestFocus() }
     }
@@ -86,6 +88,10 @@ class MainActivity : Activity() {
         if (!canDrawOverlays() && !autoOpenedOverlaySettings) {
             autoOpenedOverlaySettings = true
             openOverlaySettings()
+        }
+        if (startupQuestionPending && canDrawOverlays()) {
+            startupQuestionPending = false
+            showQuestionNow()
         }
     }
 
@@ -199,6 +205,7 @@ class MainActivity : Activity() {
             menuButton("Test question", android.R.drawable.ic_media_play) { showQuestionNow() },
             menuButton("Sync now", android.R.drawable.ic_popup_sync) { syncRemoteSettings() },
             menuButton("Media pause access", android.R.drawable.ic_media_pause) { openMediaAccessSettings() },
+            menuButton("Advanced settings", android.R.drawable.ic_menu_preferences) { openAdvancedSettings() },
         )
         permissionButton = actions[0]
         testButton = actions[2]
@@ -354,6 +361,58 @@ class MainActivity : Activity() {
                 pad.reset()
             }
         }
+    }
+
+    private fun openAdvancedSettings() {
+        if (!ControlState.hasUnlockPassword(this)) {
+            Toast.makeText(this, "Set a parent PIN before opening advanced settings.", Toast.LENGTH_LONG).show()
+            return
+        }
+        askPassword("Advanced settings", "Enter your 6-direction parent PIN.", true) { entered, pad, hint, passwordDialog ->
+            if (ControlState.verifyUnlockPassword(this, entered)) {
+                passwordDialog.dismiss()
+                showAdvancedSettings()
+            } else {
+                hint.text = "Incorrect PIN. Try again."
+                pad.reset()
+            }
+        }
+    }
+
+    private fun showAdvancedSettings() {
+        val dialog = Dialog(this)
+        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(36), dp(30), dp(36), dp(30))
+            background = GradientDrawable().apply {
+                setColor(Color.rgb(28, 34, 36))
+                setStroke(dp(2), Color.rgb(138, 205, 174))
+                cornerRadius = dp(8).toFloat()
+            }
+        }
+        box.addView(TextView(this).apply {
+            text = "Advanced settings"
+            setTextColor(Color.WHITE)
+            textSize = 26f
+            setPadding(0, 0, 0, dp(18))
+        }, centeredParams())
+        val startupQuestion = Switch(this).apply {
+            text = "Show a question when the app starts"
+            textSize = 18f
+            setTextColor(Color.rgb(235, 241, 237))
+            isChecked = ControlState.showQuestionOnStartup(this@MainActivity)
+            setOnCheckedChangeListener { _, enabled ->
+                ControlState.setShowQuestionOnStartup(this@MainActivity, enabled)
+            }
+        }
+        box.addView(startupQuestion, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(64)))
+        box.addView(menuButton("Done", android.R.drawable.ic_menu_close_clear_cancel) { dialog.dismiss() },
+            LinearLayout.LayoutParams(dp(220), dp(58)).apply { topMargin = dp(18) })
+        dialog.setContentView(box)
+        dialog.setOnShowListener { startupQuestion.requestFocus() }
+        dialog.show()
+        dialog.window?.setLayout(dp(760), ViewGroup.LayoutParams.WRAP_CONTENT)
     }
 
     private fun enterNewPassword() {

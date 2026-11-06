@@ -18,6 +18,7 @@ class BootReceiver : BroadcastReceiver() {
             return
         }
 
+        QuestionBank.finishForReboot(context)
         QuestionAlarmReceiver.scheduleNext(context)
         val trackingIntent = Intent(context, UsageTrackingService::class.java)
             .setAction(UsageTrackingService.ACTION_START)
@@ -27,6 +28,16 @@ class BootReceiver : BroadcastReceiver() {
             context.startService(trackingIntent)
         }
         Log.i(TAG, "Received $action; question alarm and usage tracking started")
+
+        if (ControlState.showQuestionOnStartup(context)) {
+            val questionIntent = Intent(context, QuestionOverlayService::class.java)
+                .setAction(QuestionOverlayService.ACTION_SHOW_QUESTION)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(questionIntent)
+            } else {
+                context.startService(questionIntent)
+            }
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
             !Settings.canDrawOverlays(context)

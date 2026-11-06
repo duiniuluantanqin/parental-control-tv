@@ -9,11 +9,13 @@ import hashlib
 import hmac
 import json
 import os
+import sqlite3
 from datetime import date, datetime, time as datetime_time
 import secrets
 import threading
 import time
 import uuid
+from contextlib import closing
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,7 +32,7 @@ from deepseek import (
 
 ROOT = Path(__file__).resolve().parents[1]
 SEED_FILE = ROOT / "app" / "src" / "main" / "assets" / "questions.json"
-DATA_FILE = Path(os.environ.get("TV_PARENTAL_DATA_FILE", ROOT / "backend" / "data.json"))
+DATA_FILE = Path(os.environ.get("TV_PARENTAL_DATA_FILE", ROOT / "backend" / "data.sqlite3"))
 ADMIN_FILE = Path(os.environ.get("TV_PARENTAL_ADMIN_FILE", ROOT / "backend" / "data" / "admin.json"))
 PORT = int(os.environ.get("PORT", "8765"))
 MAX_BODY_BYTES = 64 * 1024
@@ -134,7 +136,7 @@ def merge_usage_intervals(value: object) -> list[dict[str, int]]:
             intervals.append((start, end))
     merged: list[dict[str, int]] = []
     for start, end in sorted(intervals):
-        if merged and start <= merged[-1]["end"]:
+        if merged and start <= merged[-1]["end"] + 120_000:
             merged[-1]["end"] = max(merged[-1]["end"], end)
         else:
             merged.append({"start": start, "end": end})
@@ -214,13 +216,15 @@ def default_state() -> dict[str, object]:
         "passwordReset": None,
         "dailyUsage": [],
         "answerRecords": [],
+        "challengeRecords": [],
         "devices": {},
     }
 
 
 class StateStore:
     def __init__(self, path: Path) -> None:
-        self.path = path
+        self.legacy_path = path if path.suffix.lower() == ".json" else path.with_suffix(".json")
+        self.path = path.with_suffix(".sqlite3") if path.suffix.lower() == ".json" else path
         self.lock = threading.RLock()
         self.refill_thread: threading.Thread | None = None
         self.refill_running = False
@@ -229,19 +233,43 @@ class StateStore:
 
     def load(self) -> dict[str, object]:
         with self.lock:
-            if not self.path.exists():
-                state = default_state()
-                self.save(state)
-                return state
-            state = json.loads(self.path.read_text(encoding="utf-8"))
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with closing(sqlite3.connect(self.path, timeout=10)) as connection:
+                self._create_schema(connection)
+                row = connection.execute(
+                    "SELECT settings, password_reset FROM app_state WHERE id = 1",
+                ).fetchone()
+                if row is None:
+                    state = self._read_legacy_state()
+                    self._write_state(connection, state)
+                else:
+                    state = {
+                        "settings": json.loads(row[0]),
+                        "passwordReset": json.loads(row[1]) if row[1] is not None else None,
+                        "questions": [json.loads(item[0]) for item in connection.execute("SELECT payload FROM questions ORDER BY position")],
+                        "dailyUsage": [
+                            {
+                                "deviceId": item[0], "date": item[1], "usageMillis": item[2],
+                                "intervals": json.loads(item[3]),
+                            }
+                            for item in connection.execute("SELECT device_id, record_date, usage_millis, intervals FROM daily_usage")
+                        ],
+                        "answerRecords": [json.loads(item[0]) for item in connection.execute("SELECT payload FROM answer_records ORDER BY position")],
+                        "challengeRecords": [json.loads(item[0]) for item in connection.execute("SELECT payload FROM challenge_records ORDER BY position")],
+                        "devices": {
+                            item[0]: json.loads(item[1])
+                            for item in connection.execute("SELECT device_id, payload FROM devices")
+                        },
+                    }
             if not isinstance(state, dict) or not isinstance(state.get("questions"), list):
-                raise RuntimeError("backend state file has an invalid format")
+                raise RuntimeError("backend state database has an invalid format")
             return {
                 "settings": validate_settings(state.get("settings", DEFAULT_SETTINGS)),
                 "questions": [validate_question(item) for item in state["questions"]],
                 "passwordReset": validate_password_reset(state.get("passwordReset")),
                 "dailyUsage": state.get("dailyUsage", []),
                 "answerRecords": state.get("answerRecords", []),
+                "challengeRecords": state.get("challengeRecords", []),
                 "devices": state.get("devices", {}),
             }
 
@@ -256,12 +284,140 @@ class StateStore:
     def save(self, state: dict[str, object]) -> None:
         with self.lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.path.with_suffix(self.path.suffix + ".tmp")
-            temporary.write_text(
-                json.dumps(state, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
+            with closing(sqlite3.connect(self.path, timeout=10)) as connection:
+                self._create_schema(connection)
+                self._write_state(connection, state)
+
+    def delete_usage(self, device_id: str, record_date: str) -> bool:
+        with self.lock:
+            self.load()
+            with closing(sqlite3.connect(self.path, timeout=10)) as connection:
+                with connection:
+                    cursor = connection.execute(
+                        "DELETE FROM daily_usage WHERE device_id = ? AND record_date = ?",
+                        (device_id, record_date),
+                    )
+                    if cursor.rowcount:
+                        connection.execute(
+                            "INSERT OR IGNORE INTO usage_deletions(device_id, record_date) VALUES (?, ?)",
+                            (device_id, record_date),
+                        )
+                    return cursor.rowcount > 0
+
+    def is_usage_deleted(self, device_id: str, record_date: str) -> bool:
+        with self.lock:
+            self.load()
+            with closing(sqlite3.connect(self.path, timeout=10)) as connection:
+                return connection.execute(
+                    "SELECT 1 FROM usage_deletions WHERE device_id = ? AND record_date = ?",
+                    (device_id, record_date),
+                ).fetchone() is not None
+
+    def _read_legacy_state(self) -> dict[str, object]:
+        if not self.legacy_path.exists():
+            return default_state()
+        state = json.loads(self.legacy_path.read_text(encoding="utf-8"))
+        if not isinstance(state, dict) or not isinstance(state.get("questions"), list):
+            raise RuntimeError("legacy backend state file has an invalid format")
+        return {
+            "settings": validate_settings(state.get("settings", DEFAULT_SETTINGS)),
+            "questions": [validate_question(item) for item in state["questions"]],
+            "passwordReset": validate_password_reset(state.get("passwordReset")),
+            "dailyUsage": state.get("dailyUsage", []),
+            "answerRecords": state.get("answerRecords", []),
+            "challengeRecords": state.get("challengeRecords", []),
+            "devices": state.get("devices", {}),
+        }
+
+    @staticmethod
+    def _create_schema(connection: sqlite3.Connection) -> None:
+        connection.executescript("""
+            CREATE TABLE IF NOT EXISTS app_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                settings TEXT NOT NULL,
+                password_reset TEXT
+            );
+            CREATE TABLE IF NOT EXISTS questions (
+                position INTEGER PRIMARY KEY,
+                question_id TEXT NOT NULL UNIQUE,
+                payload TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS daily_usage (
+                device_id TEXT NOT NULL,
+                record_date TEXT NOT NULL,
+                usage_millis INTEGER NOT NULL,
+                intervals TEXT NOT NULL,
+                PRIMARY KEY (device_id, record_date)
+            );
+            CREATE TABLE IF NOT EXISTS usage_deletions (
+                device_id TEXT NOT NULL,
+                record_date TEXT NOT NULL,
+                PRIMARY KEY (device_id, record_date)
+            );
+            CREATE TABLE IF NOT EXISTS answer_records (
+                position INTEGER PRIMARY KEY,
+                record_date TEXT NOT NULL,
+                device_id TEXT NOT NULL,
+                answered_at INTEGER NOT NULL,
+                challenge_id TEXT NOT NULL,
+                payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS answer_records_by_day ON answer_records(record_date, device_id, answered_at);
+            CREATE TABLE IF NOT EXISTS challenge_records (
+                position INTEGER PRIMARY KEY,
+                record_date TEXT NOT NULL,
+                device_id TEXT NOT NULL,
+                started_at INTEGER NOT NULL,
+                session_id TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                UNIQUE (device_id, session_id)
+            );
+            CREATE INDEX IF NOT EXISTS challenge_records_by_day ON challenge_records(record_date, device_id, started_at);
+            CREATE TABLE IF NOT EXISTS devices (
+                device_id TEXT PRIMARY KEY,
+                payload TEXT NOT NULL
+            );
+        """)
+
+    @staticmethod
+    def _write_state(connection: sqlite3.Connection, state: dict[str, object]) -> None:
+        encoded = lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        with connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO app_state(id, settings, password_reset) VALUES (1, ?, ?)",
+                (encoded(state["settings"]), encoded(state["passwordReset"]) if state.get("passwordReset") is not None else None),
             )
-            temporary.replace(self.path)
+            for table in ("questions", "daily_usage", "answer_records", "challenge_records", "devices"):
+                connection.execute(f"DELETE FROM {table}")
+            connection.executemany(
+                "INSERT INTO questions(position, question_id, payload) VALUES (?, ?, ?)",
+                [(index, item["id"], encoded(item)) for index, item in enumerate(state["questions"])],
+            )
+            connection.executemany(
+                "INSERT INTO daily_usage(device_id, record_date, usage_millis, intervals) VALUES (?, ?, ?, ?)",
+                [
+                    (item["deviceId"], item["date"], item.get("usageMillis", 0), encoded(item.get("intervals", [])))
+                    for item in state["dailyUsage"]
+                ],
+            )
+            connection.executemany(
+                "INSERT INTO answer_records(position, record_date, device_id, answered_at, challenge_id, payload) VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    (index, item.get("date", ""), item.get("deviceId", ""), item.get("answeredAt", 0), item.get("challengeId", ""), encoded(item))
+                    for index, item in enumerate(state["answerRecords"])
+                ],
+            )
+            connection.executemany(
+                "INSERT INTO challenge_records(position, record_date, device_id, started_at, session_id, payload) VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    (index, item["date"], item["deviceId"], item["startedAt"], item["sessionId"], encoded(item))
+                    for index, item in enumerate(state["challengeRecords"])
+                ],
+            )
+            connection.executemany(
+                "INSERT INTO devices(device_id, payload) VALUES (?, ?)",
+                [(device_id, encoded(item)) for device_id, item in state["devices"].items()],
+            )
 
     def snapshot(self) -> dict[str, object]:
         with self.lock:
@@ -437,7 +593,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     state = STORE.load()
                     device_ids = sorted({
                         item["deviceId"]
-                        for key in ("dailyUsage", "answerRecords")
+                        for key in ("dailyUsage", "answerRecords", "challengeRecords")
                         for item in state[key]
                         if isinstance(item.get("deviceId"), str)
                     } | set(state["devices"]))
@@ -449,7 +605,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                         item["deviceId"]: item for item in state["dailyUsage"]
                         if item.get("date") == record_date
                     }
-                    selected_ids = [value for value in device_ids if not device_id or value == device_id]
+                    selected_ids = sorted(value for value in daily_usage if not device_id or value == device_id)
                     usage = [
                         {
                             "deviceId": value,
@@ -460,9 +616,15 @@ class RequestHandler(BaseHTTPRequestHandler):
                         }
                         for value in selected_ids
                     ]
+                    challenges = [
+                        item for item in state["challengeRecords"]
+                        if item.get("date") == record_date and (not device_id or item.get("deviceId") == device_id)
+                    ]
+                    challenge_ids = {item["sessionId"] for item in challenges}
                     answers = [
                         item for item in state["answerRecords"]
-                        if item.get("date") == record_date and (not device_id or item.get("deviceId") == device_id)
+                        if (item.get("date") == record_date or item.get("challengeId") in challenge_ids)
+                        and (not device_id or item.get("deviceId") == device_id)
                     ]
                 self.send_json(200, {
                     "date": record_date,
@@ -476,6 +638,13 @@ class RequestHandler(BaseHTTPRequestHandler):
                         }
                         for item in sorted(answers, key=lambda item: item["answeredAt"], reverse=True)
                     ],
+                    "challenges": [
+                        {
+                            **item,
+                            "deviceName": state["devices"].get(item["deviceId"], {}).get("name", item["deviceId"]),
+                        }
+                        for item in sorted(challenges, key=lambda item: item["startedAt"], reverse=True)
+                    ],
                 })
         elif path == "/api/v1/admin/devices":
             if self.require_admin():
@@ -485,7 +654,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     known_ids = set(devices)
                     known_ids.update(
                         item["deviceId"]
-                        for key in ("dailyUsage", "answerRecords")
+                        for key in ("dailyUsage", "answerRecords", "challengeRecords")
                         for item in state[key]
                         if isinstance(item.get("deviceId"), str)
                     )
@@ -528,6 +697,14 @@ class RequestHandler(BaseHTTPRequestHandler):
                     name = payload.get("deviceName")
                     if isinstance(name, str) and 1 <= len(name.strip()) <= 100:
                         device["name"] = name.strip()
+                    if STORE.is_usage_deleted(device_id, record_date):
+                        device["lastSeen"] = now_ms
+                        device["lastUsageAt"] = now_ms
+                        device["lastUsageMillis"] = usage_millis
+                        devices[device_id] = device
+                        STORE.save(state)
+                        self.send_json(200, {"accepted": True, "usageMillis": usage_millis})
+                        return
                     previous_total = device.get("lastUsageMillis", 0)
                     previous_at = device.get("lastUsageAt", 0)
                     delta = max(0, usage_millis - previous_total)
@@ -554,6 +731,81 @@ class RequestHandler(BaseHTTPRequestHandler):
             except (ValueError, TypeError) as error:
                 self.send_json(400, {"error": str(error) or "使用时长上报格式无效"})
             return
+        if path == "/api/v1/device/challenges":
+            if not self.same_origin():
+                return
+            try:
+                payload = self.read_json()
+                session_id = payload.get("sessionId")
+                device_id = payload.get("deviceId")
+                record_date = payload.get("date")
+                started_at = payload.get("startedAt")
+                ended_at = payload.get("endedAt")
+                status = payload.get("status")
+                answered_count = payload.get("answeredCount")
+                correct_count = payload.get("correctCount")
+                questions = payload.get("questions")
+                interrupted_question_id = payload.get("interruptedQuestionId", "")
+                if not isinstance(session_id, str) or not 1 <= len(session_id) <= 80:
+                    raise ValueError("答题会话 ID 无效")
+                if not isinstance(device_id, str) or not 1 <= len(device_id) <= 80:
+                    raise ValueError("无效的设备 ID")
+                if not isinstance(record_date, str) or date.fromisoformat(record_date).isoformat() != record_date:
+                    raise ValueError("答题日期格式必须为 YYYY-MM-DD")
+                if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in (started_at, ended_at)):
+                    raise ValueError("答题会话时间无效")
+                if status not in ("active", "answered", "timeout", "reboot", "daily_limit"):
+                    raise ValueError("答题会话状态无效")
+                if status != "active" and ended_at < started_at:
+                    raise ValueError("答题会话结束时间无效")
+                if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > 5 for value in (answered_count, correct_count)):
+                    raise ValueError("答题数量无效")
+                if correct_count > answered_count:
+                    raise ValueError("答对数量不能超过已答数量")
+                if not isinstance(questions, list) or len(questions) != 5:
+                    raise ValueError("答题会话必须包含五道题")
+                normalized_questions = []
+                for question in questions:
+                    if not isinstance(question, dict):
+                        raise ValueError("答题会话题目格式无效")
+                    question_id, prompt = question.get("questionId"), question.get("prompt")
+                    if not isinstance(question_id, str) or not 1 <= len(question_id) <= 80:
+                        raise ValueError("无效的题目 ID")
+                    if not isinstance(prompt, str) or not 1 <= len(prompt) <= 240:
+                        raise ValueError("题目内容无效")
+                    normalized_questions.append({"questionId": question_id, "prompt": prompt})
+                if not isinstance(interrupted_question_id, str) or len(interrupted_question_id) > 80:
+                    raise ValueError("中断题目 ID 无效")
+                record = {
+                    "sessionId": session_id,
+                    "deviceId": device_id,
+                    "date": record_date,
+                    "startedAt": started_at,
+                    "endedAt": ended_at,
+                    "status": status,
+                    "answeredCount": answered_count,
+                    "correctCount": correct_count,
+                    "questions": normalized_questions,
+                    "interruptedQuestionId": interrupted_question_id,
+                }
+                with STORE.lock:
+                    state = STORE.load()
+                    device_name = payload.get("deviceName")
+                    if isinstance(device_name, str) and 1 <= len(device_name.strip()) <= 100:
+                        device = state["devices"].get(device_id, {"name": device_id, "lastSeen": 0, "lastUsageMillis": 0, "lastUsageAt": 0})
+                        device["name"] = device_name.strip()
+                        state["devices"][device_id] = device
+                    records = state["challengeRecords"]
+                    existing = next((item for item in records if item["deviceId"] == device_id and item["sessionId"] == session_id), None)
+                    if existing is None:
+                        records.append(record)
+                    elif existing["status"] == "active" or existing["status"] == status == "active":
+                        existing.update(record)
+                    STORE.save(state)
+                self.send_json(200, {"accepted": True, "sessionId": session_id})
+            except (ValueError, TypeError) as error:
+                self.send_json(400, {"error": str(error) or "答题会话格式无效"})
+            return
         if path == "/api/v1/device/answers":
             if not self.same_origin():
                 return
@@ -563,6 +815,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     attempt_id, device_id = payload.get("attemptId"), payload.get("deviceId")
                     record_date, answered_at = payload.get("date"), payload.get("answeredAt")
                     question_id, selected_answer = payload.get("questionId"), payload.get("selectedAnswer")
+                    challenge_id = payload.get("challengeId", "")
                     answered = payload.get("answered", True)
                     if not isinstance(attempt_id, str) or not 1 <= len(attempt_id) <= 80:
                         raise ValueError("无效的答题记录 ID")
@@ -574,10 +827,18 @@ class RequestHandler(BaseHTTPRequestHandler):
                         raise ValueError("答题时间无效")
                     if not isinstance(question_id, str) or not 1 <= len(question_id) <= 80:
                         raise ValueError("无效的题目 ID")
+                    if not isinstance(challenge_id, str) or len(challenge_id) > 80:
+                        raise ValueError("答题会话 ID 无效")
                     if not isinstance(answered, bool):
                         raise ValueError("作答状态无效")
                     if not isinstance(selected_answer, str) or (answered and not 1 <= len(selected_answer) <= 120) or (not answered and selected_answer != ""):
                         raise ValueError("无效的作答内容")
+                    question_snapshot = payload.get("question")
+                    if question_snapshot is not None and (
+                        not isinstance(question_snapshot, dict)
+                        or question_snapshot.get("id") != question_id
+                    ):
+                        raise ValueError("题目快照无效")
                     with STORE.lock:
                         state = STORE.load()
                         records = state["answerRecords"]
@@ -586,6 +847,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                             self.send_json(200, {"accepted": True, "correct": existing["correct"], "removed": False})
                             return
                         question = next((item for item in state["questions"] if item["id"] == question_id), None)
+                        if question is None and isinstance(question_snapshot, dict):
+                            question = validate_question(question_snapshot)
                         if question is None and answered:
                             self.send_json(404, {"error": "题目不存在或已被使用"})
                             return
@@ -598,6 +861,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                             "date": record_date,
                             "answeredAt": answered_at,
                             "questionId": question_id,
+                            "challengeId": challenge_id,
                             "prompt": question["prompt"] if question else "题目已从题库移除",
                             "selectedAnswer": selected_answer,
                             "answered": answered,
@@ -733,8 +997,28 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": str(error)})
 
     def do_DELETE(self) -> None:
-        prefix = "/api/v1/admin/questions/"
         path = urlsplit(self.path).path
+        if path == "/api/v1/admin/records/usage":
+            if not self.same_origin() or not self.require_admin():
+                return
+            params = parse_qs(urlsplit(self.path).query)
+            device_id = params.get("deviceId", [""])[0]
+            record_date = params.get("date", [""])[0]
+            try:
+                if not isinstance(device_id, str) or not 1 <= len(device_id) <= 80:
+                    raise ValueError("无效的设备 ID")
+                if not isinstance(record_date, str) or date.fromisoformat(record_date).isoformat() != record_date:
+                    raise ValueError("日期格式必须为 YYYY-MM-DD")
+            except ValueError as error:
+                self.send_json(400, {"error": str(error)})
+                return
+            if not STORE.delete_usage(device_id, record_date):
+                self.send_json(404, {"error": "当天没有该设备的使用记录"})
+                return
+            self.send_json(200, {"deleted": True, "deviceId": device_id, "date": record_date})
+            return
+
+        prefix = "/api/v1/admin/questions/"
         if not path.startswith(prefix):
             self.send_json(404, {"error": "请求地址不存在"})
             return

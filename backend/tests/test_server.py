@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import threading
 import time
 import unittest
+from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 from http.cookiejar import CookieJar
 from http.server import ThreadingHTTPServer
@@ -110,8 +112,8 @@ class AdminApiTests(unittest.TestCase):
         self.assertTrue(result["devices"][0]["online"])
         self.assertEqual(result["devices"][0]["deviceId"], "device-uuid-123")
         _, no_usage_day = self.request("/api/v1/admin/records?date=2026-11-04")
-        self.assertEqual(no_usage_day["usage"][0]["usageMillis"], 0)
-        self.assertGreater(no_usage_day["usage"][0]["lastReportedAt"], 0)
+        self.assertEqual(no_usage_day["usage"], [])
+        self.assertGreater(no_usage_day["deviceDetails"][0]["lastSeen"], 0)
 
     def test_usage_detail_groups_incremental_reports_into_time_intervals(self) -> None:
         payload = {"deviceId": "tv-01", "deviceName": "Family TV", "date": "2026-11-05", "usageMillis": 60_000}
@@ -125,7 +127,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(len(records["usage"][0]["intervals"]), 1)
         self.assertEqual(records["deviceDetails"][0]["name"], "Family TV")
 
-    def test_usage_detail_sorts_and_merges_legacy_contiguous_intervals(self) -> None:
+    def test_usage_detail_sorts_and_merges_gaps_up_to_two_minutes(self) -> None:
         state = server.STORE.load()
         state["dailyUsage"] = [{
             "deviceId": "tv-01",
@@ -138,6 +140,7 @@ class AdminApiTests(unittest.TestCase):
                 {"start": 250, "end": 300},
                 {"start": 450, "end": 500},
                 {"start": 490, "end": 600},
+                {"start": 120_600, "end": 121_000},
             ],
         }]
         server.STORE.save(state)
@@ -145,9 +148,63 @@ class AdminApiTests(unittest.TestCase):
         _, records = self.request("/api/v1/admin/records?date=2026-11-05")
 
         self.assertEqual(records["usage"][0]["intervals"], [
-            {"start": 100, "end": 400},
-            {"start": 450, "end": 600},
+            {"start": 100, "end": 121_000},
         ])
+
+    def test_usage_record_can_be_deleted_for_one_device_and_date(self) -> None:
+        self.request(
+            "/api/v1/device/usage", method="POST", authenticated=False,
+            body={"deviceId": "tv-01", "deviceName": "Family TV", "date": "2026-11-05", "usageMillis": 60_000},
+        )
+        path = "/api/v1/admin/records/usage?deviceId=tv-01&date=2026-11-05"
+        status, _ = self.request(path, method="DELETE", authenticated=False)
+        self.assertEqual(status, 401)
+
+        status, result = self.request(path, method="DELETE")
+        self.assertEqual(status, 200)
+        self.assertTrue(result["deleted"])
+        _, records = self.request("/api/v1/admin/records?date=2026-11-05")
+        self.assertEqual(records["usage"], [])
+        self.assertEqual(records["deviceDetails"][0]["name"], "Family TV")
+        self.request(
+            "/api/v1/device/usage", method="POST", authenticated=False,
+            body={"deviceId": "tv-01", "deviceName": "Family TV", "date": "2026-11-05", "usageMillis": 120_000},
+        )
+        _, records = self.request("/api/v1/admin/records?date=2026-11-05")
+        self.assertEqual(records["usage"], [])
+        status, _ = self.request(path, method="DELETE")
+        self.assertEqual(status, 404)
+
+    def test_json_state_is_imported_once_into_sqlite_and_left_as_backup(self) -> None:
+        legacy_path = Path(self.temp_dir.name) / "state.json"
+        state = server.default_state()
+        state["settings"]["questionIntervalMinutes"] = 15
+        state["dailyUsage"] = [{
+            "deviceId": "tv-01", "date": "2026-11-05", "usageMillis": 120_000,
+            "intervals": [{"start": 1_000, "end": 121_000}],
+        }]
+        state["answerRecords"] = [{"attemptId": "answer-1", "deviceId": "tv-01", "date": "2026-11-05", "answeredAt": 2_000}]
+        state["challengeRecords"] = [{"sessionId": "challenge-1", "deviceId": "tv-01", "date": "2026-11-05", "startedAt": 1_000}]
+        state["devices"] = {"tv-01": {"name": "Family TV", "lastSeen": 1_000}}
+        legacy_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+        store = server.StateStore(legacy_path)
+        imported = store.load()
+
+        self.assertEqual(store.path, legacy_path.with_suffix(".sqlite3"))
+        self.assertEqual(imported["settings"]["questionIntervalMinutes"], 15)
+        self.assertEqual(imported["dailyUsage"], state["dailyUsage"])
+        self.assertEqual(imported["answerRecords"], state["answerRecords"])
+        self.assertEqual(imported["challengeRecords"], state["challengeRecords"])
+        self.assertEqual(imported["devices"], state["devices"])
+        self.assertTrue(legacy_path.exists())
+        with closing(sqlite3.connect(store.path)) as connection:
+            self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+
+        imported["settings"]["questionIntervalMinutes"] = 20
+        store.save(imported)
+        self.assertEqual(server.StateStore(store.path).load()["settings"]["questionIntervalMinutes"], 20)
+        self.assertEqual(json.loads(legacy_path.read_text(encoding="utf-8"))["settings"]["questionIntervalMinutes"], 15)
 
     def test_answer_attempts_record_correctness_and_retry_without_duplicates(self) -> None:
         question = server.STORE.load()["questions"][0]
@@ -224,6 +281,72 @@ class AdminApiTests(unittest.TestCase):
         _, records = self.request("/api/v1/admin/records?date=2026-11-05&deviceId=tv-01")
         self.assertFalse(records["answers"][0]["answered"])
         self.assertFalse(records["answers"][0]["correct"])
+
+    def test_challenge_sessions_group_five_questions_and_update_exit_reason(self) -> None:
+        questions = server.STORE.load()["questions"][:5]
+        started_at = 1793836800000
+        session = {
+            "sessionId": "challenge-tv-01-1",
+            "deviceId": "tv-01",
+            "date": "2026-11-05",
+            "startedAt": started_at,
+            "endedAt": 0,
+            "status": "active",
+            "answeredCount": 1,
+            "correctCount": 0,
+            "questions": [{"questionId": item["id"], "prompt": item["prompt"]} for item in questions],
+            "interruptedQuestionId": "",
+        }
+        status, _ = self.request("/api/v1/device/challenges", method="POST", authenticated=False, body=session)
+        self.assertEqual(status, 200)
+
+        question = questions[0]
+        wrong_answer = next(option for option in question["options"] if option != question["answer"])
+        status, _ = self.request(
+            "/api/v1/device/answers", method="POST", authenticated=False,
+            body={
+                "attemptId": "challenge-tv-01-answer-1", "challengeId": session["sessionId"],
+                "deviceId": "tv-01", "date": "2026-11-05", "answeredAt": started_at + 10_000,
+                "questionId": question["id"], "selectedAnswer": wrong_answer,
+            },
+        )
+        self.assertEqual(status, 200)
+
+        session.update({
+            "endedAt": started_at + 60_000,
+            "status": "timeout",
+            "interruptedQuestionId": questions[1]["id"],
+        })
+        status, _ = self.request("/api/v1/device/challenges", method="POST", authenticated=False, body=session)
+        self.assertEqual(status, 200)
+
+        _, records = self.request("/api/v1/admin/records?date=2026-11-05")
+        self.assertEqual(len(records["challenges"]), 1)
+        challenge = records["challenges"][0]
+        self.assertEqual(challenge["status"], "timeout")
+        self.assertEqual(challenge["deviceName"], "tv-01")
+        self.assertEqual(len(challenge["questions"]), 5)
+        self.assertEqual(challenge["interruptedQuestionId"], questions[1]["id"])
+        self.assertEqual(records["answers"][0]["challengeId"], session["sessionId"])
+
+    def test_cached_question_answer_is_accepted_after_question_was_removed(self) -> None:
+        question = server.STORE.load()["questions"][0]
+        state = server.STORE.load()
+        state["questions"] = state["questions"][1:]
+        server.STORE.save(state)
+        status, result = self.request(
+            "/api/v1/device/answers", method="POST", authenticated=False,
+            body={
+                "attemptId": "cached-question-answer-1", "challengeId": "cached-challenge-1",
+                "deviceId": "tv-01", "date": "2026-11-05", "answeredAt": 1793836810000,
+                "questionId": question["id"], "selectedAnswer": question["answer"], "answered": True,
+                "question": question,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(result["correct"])
+        _, records = self.request("/api/v1/admin/records?date=2026-11-05")
+        self.assertEqual(records["answers"][0]["prompt"], question["prompt"])
 
     def test_password_reset_command_requires_admin_and_survives_device_sync(self) -> None:
         status, _ = self.request(

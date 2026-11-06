@@ -28,6 +28,7 @@ data class ChallengeProgress(
 
 data class PendingAnswer(
     val attemptId: String,
+    val challengeId: String,
     val question: TvQuestion,
     val selectedAnswer: String,
     val answeredAt: Long,
@@ -35,17 +36,45 @@ data class PendingAnswer(
     val answered: Boolean = true,
 )
 
+data class ChallengeQuestionSnapshot(
+    val questionId: String,
+    val prompt: String,
+)
+
+data class PendingChallengeRecord(
+    val sessionId: String,
+    val date: String,
+    val startedAt: Long,
+    val endedAt: Long,
+    val status: String,
+    val answeredCount: Int,
+    val correctCount: Int,
+    val questions: List<ChallengeQuestionSnapshot>,
+    val interruptedQuestionId: String,
+)
+
 object QuestionBank {
     const val CHALLENGE_QUESTION_COUNT = 5
     const val CHALLENGE_REQUIRED_CORRECT = 4
     private const val PREFERENCES = "question_state"
     private const val LAST_QUESTION_ID = "last_question_id"
-    private const val CURRENT_QUESTION_ID = "current_question_id"
     private const val PENDING_CORRECT_ANSWERS = "pending_correct_answers"
     private const val CHALLENGE_ACTIVE = "challenge_active"
     private const val CHALLENGE_ANSWER_COUNT = "challenge_answer_count"
     private const val CHALLENGE_CORRECT_COUNT = "challenge_correct_count"
+    private const val CHALLENGE_QUESTIONS = "challenge_questions"
+    private const val CHALLENGE_INDEX = "challenge_index"
+    private const val CHALLENGE_SESSION_ID = "challenge_session_id"
+    private const val CHALLENGE_STARTED_AT = "challenge_started_at"
+    private const val REUSE_CACHED_QUESTIONS = "reuse_cached_questions"
     private const val PENDING_ANSWER_ATTEMPTS = "pending_answer_attempts"
+    private const val PENDING_CHALLENGE_RECORDS = "pending_challenge_records"
+
+    const val STATUS_ACTIVE = "active"
+    const val STATUS_ANSWERED = "answered"
+    const val STATUS_TIMEOUT = "timeout"
+    const val STATUS_REBOOT = "reboot"
+    const val STATUS_DAILY_LIMIT = "daily_limit"
 
     fun all(context: Context): List<TvQuestion> {
         val answered = pendingCorrectAnswers(context).map { it.id }.toSet()
@@ -59,38 +88,40 @@ object QuestionBank {
         return parseQuestions(bundled).filterNot { it.id in answered }
     }
 
+    @Synchronized
     fun currentOrNext(context: Context): TvQuestion? {
-        val questions = all(context)
-        if (questions.isEmpty()) return null
         val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-        val currentId = questionId(preferences, CURRENT_QUESTION_ID)
-        questions.firstOrNull { it.id == currentId }?.let { return it }
-        val previousId = questionId(preferences, LAST_QUESTION_ID)
-        val candidates = if (questions.size > 1) questions.filterNot { it.id == previousId } else questions
-        val question = candidates.random()
-        preferences.edit()
-            .putString(LAST_QUESTION_ID, question.id)
-            .putString(CURRENT_QUESTION_ID, question.id)
-            .apply()
-        return question
-    }
-
-    private fun questionId(preferences: SharedPreferences, key: String): String? {
-        // Older releases saved integer IDs. getString throws on those values after an upgrade.
-        return when (val value = preferences.all[key]) {
-            is String -> value
-            is Int -> value.toString().also { id ->
-                preferences.edit().putString(key, id).apply()
+        if (!preferences.getBoolean(CHALLENGE_ACTIVE, false)) {
+            val cached = storedChallengeQuestions(preferences)
+            val questions = if (preferences.getBoolean(REUSE_CACHED_QUESTIONS, false) && cached.size == CHALLENGE_QUESTION_COUNT) {
+                cached
+            } else {
+                val available = all(context)
+                if (available.size < CHALLENGE_QUESTION_COUNT) return null
+                val previousId = preferences.getString(LAST_QUESTION_ID, null)
+                val candidates = if (available.size > CHALLENGE_QUESTION_COUNT) {
+                    available.filterNot { it.id == previousId }
+                } else {
+                    available
+                }
+                candidates.shuffled().take(CHALLENGE_QUESTION_COUNT)
             }
-            else -> null
+            val startedAt = System.currentTimeMillis()
+            val sessionId = UUID.randomUUID().toString()
+            check(preferences.edit()
+                .putBoolean(CHALLENGE_ACTIVE, true)
+                .putInt(CHALLENGE_ANSWER_COUNT, 0)
+                .putInt(CHALLENGE_CORRECT_COUNT, 0)
+                .putInt(CHALLENGE_INDEX, 0)
+                .putString(CHALLENGE_SESSION_ID, sessionId)
+                .putLong(CHALLENGE_STARTED_AT, startedAt)
+                .putString(CHALLENGE_QUESTIONS, JSONArray(questions.map { toJsonObject(it) }).toString())
+                .putBoolean(REUSE_CACHED_QUESTIONS, false)
+                .commit()) { "Could not save the challenge questions." }
+            queueChallengeRecord(context, STATUS_ACTIVE)
         }
-    }
-
-    fun beginChallenge(context: Context) {
-        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean(CHALLENGE_ACTIVE, true)
-            .apply()
+        val questions = storedChallengeQuestions(preferences)
+        return questions.getOrNull(preferences.getInt(CHALLENGE_INDEX, 0))
     }
 
     fun isChallengeActive(context: Context): Boolean =
@@ -108,29 +139,45 @@ object QuestionBank {
             .coerceIn(0, CHALLENGE_QUESTION_COUNT)
     }
 
-    fun restartChallenge(context: Context) {
-        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean(CHALLENGE_ACTIVE, true)
-            .putInt(CHALLENGE_ANSWER_COUNT, 0)
-            .putInt(CHALLENGE_CORRECT_COUNT, 0)
-            .remove(CURRENT_QUESTION_ID)
-            .apply()
-    }
-
-    fun finishChallenge(context: Context) {
+    @Synchronized
+    fun finishChallenge(context: Context, status: String = STATUS_ANSWERED, interruptedQuestionId: String = "") {
+        if (!isChallengeActive(context)) return
+        queueChallengeRecord(context, status, interruptedQuestionId)
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(CHALLENGE_ACTIVE, false)
             .putInt(CHALLENGE_ANSWER_COUNT, 0)
             .putInt(CHALLENGE_CORRECT_COUNT, 0)
-            .remove(CURRENT_QUESTION_ID)
-            .apply()
+            .putInt(CHALLENGE_INDEX, 0)
+            .putBoolean(REUSE_CACHED_QUESTIONS, false)
+            .remove(CHALLENGE_SESSION_ID)
+            .remove(CHALLENGE_STARTED_AT)
+            .remove(CHALLENGE_QUESTIONS)
+            .commit()
+    }
+
+    @Synchronized
+    fun finishForReboot(context: Context) {
+        if (!isChallengeActive(context)) return
+        val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        val questions = storedChallengeQuestions(preferences)
+        val currentQuestion = questions.getOrNull(preferences.getInt(CHALLENGE_INDEX, 0))
+        queueChallengeRecord(context, STATUS_REBOOT, currentQuestion?.id.orEmpty())
+        check(preferences.edit()
+            .putBoolean(CHALLENGE_ACTIVE, false)
+            .putInt(CHALLENGE_ANSWER_COUNT, 0)
+            .putInt(CHALLENGE_CORRECT_COUNT, 0)
+            .putInt(CHALLENGE_INDEX, 0)
+            .putBoolean(REUSE_CACHED_QUESTIONS, questions.size == CHALLENGE_QUESTION_COUNT)
+            .remove(CHALLENGE_SESSION_ID)
+            .remove(CHALLENGE_STARTED_AT)
+            .commit()) { "Could not preserve the challenge questions after reboot." }
     }
 
     @Synchronized
     fun recordAnswer(context: Context, question: TvQuestion, selectedAnswer: String): ChallengeProgress {
         val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        val sessionId = checkNotNull(preferences.getString(CHALLENGE_SESSION_ID, null)) { "No active challenge session." }
         val correct = selectedAnswer == question.answer
         val answeredCount = (challengeAnsweredCount(context) + 1).coerceAtMost(CHALLENGE_QUESTION_COUNT)
         val correctCount = (challengeCorrectCount(context) + if (correct) 1 else 0)
@@ -138,6 +185,7 @@ object QuestionBank {
         val answeredAt = System.currentTimeMillis()
         val pendingAnswers = pendingAnswerAttempts(context) + PendingAnswer(
             attemptId = UUID.randomUUID().toString(),
+            challengeId = sessionId,
             question = question,
             selectedAnswer = selectedAnswer,
             answeredAt = answeredAt,
@@ -148,12 +196,14 @@ object QuestionBank {
             .putString(PENDING_ANSWER_ATTEMPTS, JSONArray(pendingAnswers.map { pendingAnswerToJson(it) }).toString())
             .putInt(CHALLENGE_ANSWER_COUNT, answeredCount)
             .putInt(CHALLENGE_CORRECT_COUNT, correctCount)
-            .remove(CURRENT_QUESTION_ID)
+            .putInt(CHALLENGE_INDEX, preferences.getInt(CHALLENGE_INDEX, 0) + 1)
+            .putString(LAST_QUESTION_ID, question.id)
         if (correct) {
             val pendingCorrect = pendingCorrectAnswers(context).filterNot { it.id == question.id } + question
             editor.putString(PENDING_CORRECT_ANSWERS, JSONArray(pendingCorrect.map { toJsonObject(it) }).toString())
         }
-        editor.apply()
+        check(editor.commit()) { "Could not save the challenge answer." }
+        queueChallengeRecord(context, STATUS_ACTIVE)
         return ChallengeProgress(answeredCount, correctCount)
     }
 
@@ -163,6 +213,7 @@ object QuestionBank {
         val answeredAt = System.currentTimeMillis()
         val pendingAnswers = pendingAnswerAttempts(context) + PendingAnswer(
             attemptId = UUID.randomUUID().toString(),
+            challengeId = checkNotNull(preferences.getString(CHALLENGE_SESSION_ID, null)) { "No active challenge session." },
             question = question,
             selectedAnswer = "",
             answeredAt = answeredAt,
@@ -171,8 +222,8 @@ object QuestionBank {
         )
         preferences.edit()
             .putString(PENDING_ANSWER_ATTEMPTS, JSONArray(pendingAnswers.map { pendingAnswerToJson(it) }).toString())
-            .remove(CURRENT_QUESTION_ID)
-            .apply()
+            .putString(LAST_QUESTION_ID, question.id)
+            .commit()
     }
 
     @Synchronized
@@ -184,6 +235,7 @@ object QuestionBank {
             val item = array.getJSONObject(index)
             PendingAnswer(
                 attemptId = item.getString("attemptId"),
+                challengeId = item.getString("challengeId"),
                 question = parseQuestions(JSONArray().put(item.getJSONObject("question")).toString()).single(),
                 selectedAnswer = item.getString("selectedAnswer"),
                 answeredAt = item.getLong("answeredAt"),
@@ -203,11 +255,85 @@ object QuestionBank {
 
     private fun pendingAnswerToJson(answer: PendingAnswer) = JSONObject()
         .put("attemptId", answer.attemptId)
+        .put("challengeId", answer.challengeId)
         .put("question", toJsonObject(answer.question))
         .put("selectedAnswer", answer.selectedAnswer)
         .put("answeredAt", answer.answeredAt)
         .put("date", answer.date)
         .put("answered", answer.answered)
+
+    @Synchronized
+    fun pendingChallengeRecords(context: Context): List<PendingChallengeRecord> {
+        val json = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getString(PENDING_CHALLENGE_RECORDS, "[]") ?: "[]"
+        val array = JSONArray(json)
+        return (0 until array.length()).map { index ->
+            val item = array.getJSONObject(index)
+            val questions = item.getJSONArray("questions")
+            PendingChallengeRecord(
+                sessionId = item.getString("sessionId"),
+                date = item.getString("date"),
+                startedAt = item.getLong("startedAt"),
+                endedAt = item.getLong("endedAt"),
+                status = item.getString("status"),
+                answeredCount = item.getInt("answeredCount"),
+                correctCount = item.getInt("correctCount"),
+                questions = (0 until questions.length()).map { questionIndex ->
+                    val question = questions.getJSONObject(questionIndex)
+                    ChallengeQuestionSnapshot(question.getString("questionId"), question.getString("prompt"))
+                },
+                interruptedQuestionId = item.optString("interruptedQuestionId", ""),
+            )
+        }
+    }
+
+    @Synchronized
+    fun acknowledgeChallengeRecords(context: Context, ids: Set<String>) {
+        val remaining = pendingChallengeRecords(context).filterNot { it.sessionId in ids }
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
+            .putString(PENDING_CHALLENGE_RECORDS, JSONArray(remaining.map { challengeRecordToJson(it) }).toString())
+            .apply()
+    }
+
+    private fun queueChallengeRecord(context: Context, status: String, interruptedQuestionId: String = "") {
+        val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        val sessionId = preferences.getString(CHALLENGE_SESSION_ID, null) ?: return
+        val startedAt = preferences.getLong(CHALLENGE_STARTED_AT, 0L)
+        val questions = storedChallengeQuestions(preferences)
+        val record = PendingChallengeRecord(
+            sessionId = sessionId,
+            date = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(startedAt)),
+            startedAt = startedAt,
+            endedAt = if (status == STATUS_ACTIVE) 0L else System.currentTimeMillis(),
+            status = status,
+            answeredCount = challengeAnsweredCount(context),
+            correctCount = challengeCorrectCount(context),
+            questions = questions.map { ChallengeQuestionSnapshot(it.id, it.prompt) },
+            interruptedQuestionId = interruptedQuestionId,
+        )
+        val pending = pendingChallengeRecords(context).filterNot { it.sessionId == sessionId } + record
+        check(preferences.edit()
+            .putString(PENDING_CHALLENGE_RECORDS, JSONArray(pending.map { challengeRecordToJson(it) }).toString())
+            .commit()) { "Could not save the challenge record." }
+    }
+
+    private fun challengeRecordToJson(record: PendingChallengeRecord) = JSONObject()
+        .put("sessionId", record.sessionId)
+        .put("date", record.date)
+        .put("startedAt", record.startedAt)
+        .put("endedAt", record.endedAt)
+        .put("status", record.status)
+        .put("answeredCount", record.answeredCount)
+        .put("correctCount", record.correctCount)
+        .put("questions", JSONArray(record.questions.map { question ->
+            JSONObject().put("questionId", question.questionId).put("prompt", question.prompt)
+        }))
+        .put("interruptedQuestionId", record.interruptedQuestionId)
+
+    private fun storedChallengeQuestions(preferences: SharedPreferences): List<TvQuestion> {
+        val json = preferences.getString(CHALLENGE_QUESTIONS, "[]") ?: "[]"
+        return runCatching { parseQuestions(json) }.getOrDefault(emptyList())
+    }
 
     @Synchronized
     fun pendingCorrectAnswers(context: Context): List<TvQuestion> {

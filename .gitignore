@@ -5,6 +5,8 @@ app/build/
 local.properties
 .tools/
 backend/data.json
+backend/data.sqlite3
+backend/data.sqlite3-*
 backend/data/
 backend/.env
 backend/__pycache__/

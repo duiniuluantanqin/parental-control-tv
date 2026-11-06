@@ -62,7 +62,7 @@ python backend/server.py
 
 此时打开 `http://127.0.0.1:8766/settings`。停止服务时在运行它的 PowerShell 窗口按 `Ctrl+C`。
 
-本地账号以密码散列保存到 `backend/data/admin.json`，忘记密码时重新运行 `--set-admin`；本地题库与规则默认保存到 `backend/data.json`。本机预览使用本地数据。启动本地后台只会让浏览器管理页面使用本地数据；app 当前仍固定连接线上域名 `https://tvparental.mediainsight360.com`，不会因为启动本地后台而自动切换。修改 `backend/web/` 后刷新浏览器即可看到变化，无需重启 Python。
+本地账号以密码散列保存到 `backend/data/admin.json`，忘记密码时重新运行 `--set-admin`；题库、规则、设备和使用记录默认保存在 `backend/data.sqlite3`。首次启动会自动导入原有 `backend/data.json` 并保留原文件。启动本地后台只会让浏览器管理页面使用本地数据；app 当前仍固定连接线上域名 `https://tvparental.mediainsight360.com`，不会因为启动本地后台而自动切换。修改 `backend/web/` 后刷新浏览器即可看到变化，无需重启 Python。
 
 题库支持 DeepSeek AI 出题：古诗词类别输入作品名（可附作者），数学、地理历史和科学类别可直接随机出题。每次生成 1–10 道四选一题目，预览并勾选后批量入库。AI 与手动出题的难度统一为“低、中、高”，默认“中”；已有题库的“小学、初中、高中”读取时分别对应“低、中、高”。需要在服务环境中配置 `DEEPSEEK_API_KEY`；Key 配置和使用步骤见[部署文档](docs/DEPLOY_ECS.md#deepseek-ai-出题)。
 
@@ -70,7 +70,7 @@ python backend/server.py
 
 复用 ECS 上已有的 Caddy，为新域名增加 `reverse_proxy 127.0.0.1:8080`，Python 后台由 systemd 托管。按 [部署文档](docs/DEPLOY_ECS.md) 完成一次性初始化后，推送后台或种子题库到 `main`，GitHub Actions 就会测试、同步代码、重启后台并检查 HTTPS 接口。
 
-管理页面为 https://tvparental.mediainsight360.com/ 。代码位于 `/var/www/html/tvparental`，管理员账号散列保存在 `backend/data/admin.json`，题库和规则保存在 `backend/data/state.json`；自动发布会保留这些运行数据，请另外备份。旧版令牌不再用于登录，升级后设置管理员账号的步骤见部署文档。应用端口 8080 只监听本机，无需在安全组开放。
+管理页面为 https://tvparental.mediainsight360.com/ 。代码位于 `/var/www/html/tvparental`，管理员账号散列保存在 `backend/data/admin.json`，题库、规则、设备和记录保存在 `backend/data/state.sqlite3`；自动发布会保留这些运行数据，请另外备份。旧版令牌不再用于登录，升级后设置管理员账号的步骤见部署文档。应用端口 8080 只监听本机，无需在安全组开放。
 
 已有宿主机 Caddy 时不要运行仓库的 `backend/compose.yaml`，其中自带的 Caddy 会争用 80/443 端口。
 

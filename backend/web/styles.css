@@ -107,10 +107,10 @@ td:nth-child(3) { color: #39675b; width: 200px; }
 .records-section-heading { margin-bottom: 12px; }
 .records-section-heading h2 { color: #244a42; font-size: 17px; }
 .usage-record-table { min-width: 0; table-layout: fixed; }
-.usage-record-table .usage-col-device { width: 38%; }
+.usage-record-table .usage-col-device { width: 34%; }
 .usage-record-table .usage-col-total { width: 18%; }
 .usage-record-table .usage-col-report { width: 28%; }
-.usage-record-table .usage-col-detail { width: 16%; }
+.usage-record-table .usage-col-action { width: 20%; }
 .usage-record-table th, .usage-record-table td { padding: 12px 16px; }
 .usage-record-table th:first-child, .usage-record-table td:first-child,
 .usage-record-table th:last-child, .usage-record-table td:last-child { width: auto; }
@@ -119,6 +119,9 @@ td:nth-child(3) { color: #39675b; width: 200px; }
 .usage-total-cell { color: #2d6659; }
 .usage-report-cell { color: #71817b; font-size: 13px; }
 .usage-record-table td:last-child { text-align: right; }
+.usage-actions { display: flex; justify-content: flex-end; align-items: center; gap: 14px; }
+.delete-record-button { color: #984b3f; }
+.delete-record-button:hover { color: #75372f; }
 .usage-detail-dialog { width: min(560px, calc(100% - 32px)); }
 .usage-detail-dialog .form-heading { margin-bottom: 18px; }
 .usage-interval-table { min-width: 0; table-layout: fixed; }
@@ -137,6 +140,29 @@ td:nth-child(3) { color: #39675b; width: 200px; }
 .answer-record-table th:last-child, .answer-record-table td:last-child { width: auto; }
 .answer-record-table td:nth-child(3) { width: auto; }
 .answer-device-cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.challenge-records { display: grid; gap: 10px; }
+.challenge-record { border: 1px solid #d1dbd6; background: #fff; border-radius: 5px; }
+.challenge-summary { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 15px 18px; cursor: pointer; list-style: none; }
+.challenge-summary::-webkit-details-marker { display: none; }
+.challenge-summary::after { content: "+"; color: #557069; font-size: 18px; }
+.challenge-record[open] .challenge-summary::after { content: "−"; }
+.challenge-summary-main, .challenge-summary-meta { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.challenge-device { overflow: hidden; color: #203f39; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.challenge-time, .challenge-score { color: #71817b; font-size: 13px; white-space: nowrap; }
+.challenge-status { padding: 4px 8px; color: #185e4d; background: #e3eee8; border-radius: 4px; font-size: 12px; white-space: nowrap; }
+.challenge-status.status-timeout, .challenge-status.status-reboot { color: #835229; background: #f6ead8; }
+.challenge-status.status-daily_limit { color: #984b3f; background: #f9e9e5; }
+.challenge-questions { display: grid; gap: 0; padding: 0 18px 8px; }
+.challenge-question { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 12px 0; border-top: 1px solid #e6ece8; }
+.challenge-question-number { color: #71817b; font-size: 13px; font-variant-numeric: tabular-nums; }
+.challenge-question-prompt { min-width: 0; color: #29463f; line-height: 1.55; overflow-wrap: anywhere; }
+.challenge-question-result { color: #61746c; font-size: 13px; white-space: nowrap; }
+.challenge-question-result.correct { color: #185e4d; }
+.challenge-question-result.incorrect { color: #984b3f; }
+.challenge-question-result.timeout, .challenge-question-result.reboot { color: #835229; }
+.challenge-question-result.not-shown { color: #89958f; }
+.challenge-question-answer { grid-column: 2 / 4; color: #71817b; font-size: 13px; overflow-wrap: anywhere; }
+.challenge-empty { padding: 36px; color: #71817c; text-align: center; }
 .delete-button { padding: 5px 9px; color: #984b3f; background: transparent; border: 1px solid #d9b2aa; border-radius: 4px; font-size: 12px; }
 .delete-button:hover { background: #f9e9e5; }
 .loading { margin: 64px auto; text-align: center; color: #61746c; }
@@ -197,7 +223,11 @@ dialog::backdrop { background: #102c296b; backdrop-filter: blur(3px); }
   .filters select { flex: 1; min-width: 0; }
   table { min-width: 620px; }
   .usage-record-table { min-width: 560px; }
-  .answer-record-table { min-width: 760px; }
+  .challenge-summary { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .challenge-summary-main, .challenge-summary-meta { max-width: 100%; flex-wrap: wrap; }
+  .challenge-question { grid-template-columns: 24px minmax(0, 1fr); }
+  .challenge-question-result { grid-column: 2; }
+  .challenge-question-answer { grid-column: 2; }
   .usage-interval-table { min-width: 0; }
   .login-view { padding-top: 32px; }
   .login-card { padding: 24px; }

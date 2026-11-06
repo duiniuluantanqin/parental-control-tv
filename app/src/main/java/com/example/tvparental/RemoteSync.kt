@@ -27,6 +27,41 @@ object RemoteSync {
         return try {
             val acknowledged = mutableSetOf<String>()
             val acknowledgedAttempts = mutableSetOf<String>()
+            val acknowledgedChallenges = mutableSetOf<String>()
+            for (challenge in QuestionBank.pendingChallengeRecords(context)) {
+                val report = URL("${ControlState.BACKEND_URL}/api/v1/device/challenges").openConnection() as HttpURLConnection
+                try {
+                    report.requestMethod = "POST"
+                    report.connectTimeout = 5_000
+                    report.readTimeout = 5_000
+                    report.doOutput = true
+                    report.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                    val questions = JSONArray(challenge.questions.map { question ->
+                        JSONObject().put("questionId", question.questionId).put("prompt", question.prompt)
+                    })
+                    val body = JSONObject()
+                        .put("sessionId", challenge.sessionId)
+                        .put("deviceId", deviceId(context))
+                        .put("deviceName", deviceName())
+                        .put("date", challenge.date)
+                        .put("startedAt", challenge.startedAt)
+                        .put("endedAt", challenge.endedAt)
+                        .put("status", challenge.status)
+                        .put("answeredCount", challenge.answeredCount)
+                        .put("correctCount", challenge.correctCount)
+                        .put("questions", questions)
+                        .put("interruptedQuestionId", challenge.interruptedQuestionId)
+                        .toString().toByteArray(Charsets.UTF_8)
+                    report.setFixedLengthStreamingMode(body.size)
+                    report.outputStream.use { it.write(body) }
+                    val code = report.responseCode
+                    if (code !in 200..299) return SyncResult(false, "Challenge report failed (HTTP $code). It will retry later.")
+                    val result = JSONObject(report.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
+                    if (result.getBoolean("accepted")) acknowledgedChallenges.add(challenge.sessionId)
+                } finally {
+                    report.disconnect()
+                }
+            }
             for (attempt in QuestionBank.pendingAnswerAttempts(context)) {
                 val report = URL("${ControlState.BACKEND_URL}/api/v1/device/answers").openConnection() as HttpURLConnection
                 try {
@@ -41,8 +76,10 @@ object RemoteSync {
                         .put("date", attempt.date)
                         .put("answeredAt", attempt.answeredAt)
                         .put("questionId", attempt.question.id)
+                        .put("challengeId", attempt.challengeId)
                         .put("selectedAnswer", attempt.selectedAnswer)
                         .put("answered", attempt.answered)
+                        .put("question", QuestionBank.toJsonObject(attempt.question))
                         .toString().toByteArray(Charsets.UTF_8)
                     report.setFixedLengthStreamingMode(body.size)
                     report.outputStream.use { it.write(body) }
@@ -128,6 +165,7 @@ object RemoteSync {
                 }
             // Keep the local exclusion until the replacement bank has been saved successfully.
             QuestionBank.acknowledgeAnswerAttempts(context, acknowledgedAttempts)
+            QuestionBank.acknowledgeChallengeRecords(context, acknowledgedChallenges)
             QuestionBank.acknowledgeCorrectAnswers(context, acknowledged)
             val message = if (parsed.isEmpty()) "Question bank is empty. Waiting for the server to refill it." else "Synced ${parsed.size} questions."
             SyncResult(true, message, parsed.size, settingsChanged)
