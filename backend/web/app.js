@@ -13,7 +13,7 @@ const poemTitleInput = document.querySelector("#poemTitleInput");
 const poemTitleField = document.querySelector("#poemTitleField");
 const loginView = document.querySelector("#loginView");
 const adminView = document.querySelector("#adminView");
-const page = location.pathname === "/questions" ? "questions" : location.pathname === "/records" ? "records" : location.pathname === "/devices" ? "devices" : "settings";
+const page = location.pathname === "/questions" ? "questions" : ["/records", "/devices"].includes(location.pathname) ? "records" : "settings";
 const isLoginPage = !["/settings", "/questions", "/records", "/devices"].includes(location.pathname);
 const weekdays = [
   ["1", "周一"], ["2", "周二"], ["3", "周三"], ["4", "周四"],
@@ -282,22 +282,33 @@ function renderRecords(records) {
 
   for (const record of records.usage) {
     const row = document.createElement("tr");
-    for (const value of [deviceNames.get(record.deviceId) || record.deviceId, `${(record.usageMillis / 60_000).toFixed(1)} 分钟`]) {
-      const cell = document.createElement("td");
-      cell.textContent = value;
-      row.append(cell);
-    }
+    const deviceName = deviceNames.get(record.deviceId) || record.deviceId;
+    const device = document.createElement("td");
+    device.className = "usage-device-cell";
+    device.textContent = deviceName;
+    device.title = deviceName === record.deviceId ? `设备 ID：${record.deviceId}` : `${deviceName} · 设备 ID：${record.deviceId}`;
+    row.append(device);
+    const total = document.createElement("td");
+    total.className = "usage-total-cell";
+    total.textContent = `${(record.usageMillis / 60_000).toFixed(1)} 分钟`;
+    row.append(total);
     const reported = document.createElement("td");
-    reported.textContent = record.lastReportedAt
-      ? new Date(record.lastReportedAt).toLocaleString("zh-CN")
-      : "暂无上报";
+    reported.className = "usage-report-cell";
+    if (record.lastReportedAt) {
+      const reportDate = new Date(record.lastReportedAt);
+      reported.textContent = reportDate.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+      reported.title = reportDate.toLocaleString("zh-CN");
+    } else {
+      reported.textContent = "暂无上报";
+    }
     row.append(reported);
     const detailCell = document.createElement("td");
     const detailButton = document.createElement("button");
     detailButton.className = "text-button";
     detailButton.type = "button";
-    detailButton.textContent = "查看详情";
-    detailButton.addEventListener("click", () => showUsageDetails(record, deviceNames.get(record.deviceId) || record.deviceId));
+    detailButton.textContent = "详情";
+    detailButton.setAttribute("aria-label", `查看${deviceName}的使用详情`);
+    detailButton.addEventListener("click", () => showUsageDetails(record, deviceName));
     detailCell.append(detailButton);
     row.append(detailCell);
     usageRows.append(row);
@@ -309,7 +320,10 @@ function renderRecords(records) {
     const time = document.createElement("td");
     time.textContent = new Date(record.answeredAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     const device = document.createElement("td");
-    device.textContent = record.deviceName || deviceNames.get(record.deviceId) || record.deviceId;
+    const deviceName = record.deviceName || deviceNames.get(record.deviceId) || record.deviceId;
+    device.className = "answer-device-cell";
+    device.textContent = deviceName;
+    device.title = deviceName === record.deviceId ? `设备 ID：${record.deviceId}` : `${deviceName} · 设备 ID：${record.deviceId}`;
     const prompt = document.createElement("td");
     prompt.textContent = record.prompt;
     const answer = document.createElement("td");
@@ -326,25 +340,32 @@ function showUsageDetails(record, deviceName) {
   const dialog = document.querySelector("#usageDetailDialog");
   const rows = document.querySelector("#usageIntervalRows");
   rows.replaceChildren();
-  document.querySelector("#usageDetailTitle").textContent = `${deviceName} · 在线时间`;
-  document.querySelector("#usageDetailSubtitle").textContent = `${record.date} · ${(record.usageMillis / 60_000).toFixed(1)} 分钟累计使用`;
-  for (const interval of record.intervals || []) {
+  const intervals = record.intervals || [];
+  document.querySelector("#usageDetailTitle").textContent = `${deviceName} · 使用明细`;
+  document.querySelector("#usageDetailSubtitle").textContent = `${record.date} · 累计 ${(record.usageMillis / 60_000).toFixed(1)} 分钟 · ${intervals.length} 个连续时段`;
+  for (const interval of intervals) {
     const start = new Date(interval.start);
     const end = new Date(interval.end);
-    const durationMinutes = (interval.end - interval.start) / 60_000;
+    const durationSeconds = Math.max(0, Math.round((interval.end - interval.start) / 1_000));
+    const hours = Math.floor(durationSeconds / 3_600);
+    const minutes = Math.floor((durationSeconds % 3_600) / 60);
+    const seconds = durationSeconds % 60;
+    const duration = hours
+      ? `${hours}小时${minutes ? `${minutes}分` : ""}`
+      : minutes
+        ? `${minutes}分${seconds ? `${seconds}秒` : ""}`
+        : `${seconds}秒`;
     const row = document.createElement("tr");
-    for (const value of [
-      start.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
-      end.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
-      `${durationMinutes.toFixed(1)} 分钟`,
-    ]) {
-      const cell = document.createElement("td");
-      cell.textContent = value;
-      row.append(cell);
-    }
+    const period = document.createElement("td");
+    period.className = "usage-period-cell";
+    period.textContent = `${start.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}–${end.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`;
+    const elapsed = document.createElement("td");
+    elapsed.className = "usage-interval-duration";
+    elapsed.textContent = duration;
+    row.append(period, elapsed);
     rows.append(row);
   }
-  if (!rows.children.length) setEmptyRow(rows, 3, "暂无可还原的在线时间段；设备需完成至少两次时长上报后才会生成明细");
+  if (!rows.children.length) setEmptyRow(rows, 2, "暂无可还原的使用时段；设备完成多次时长上报后会显示明细");
   dialog.showModal();
 }
 
@@ -353,28 +374,6 @@ async function loadRecords() {
   if (!date) return;
   const records = await api(`/api/v1/admin/records?${new URLSearchParams({ date })}`);
   renderRecords(records);
-}
-
-async function loadDevices() {
-  const result = await api("/api/v1/admin/devices");
-  const rows = document.querySelector("#deviceRows");
-  rows.replaceChildren();
-  document.querySelector("#devicesSummary").textContent = `${result.devices.length} 台设备 · 在线状态每分钟更新`;
-  for (const device of result.devices) {
-    const row = document.createElement("tr");
-    const name = document.createElement("td");
-    name.textContent = device.name;
-    const status = document.createElement("td");
-    status.textContent = device.online ? "在线" : "离线";
-    status.className = device.online ? "device-online" : "device-offline";
-    const lastSeen = document.createElement("td");
-    lastSeen.textContent = device.lastSeen ? new Date(device.lastSeen).toLocaleString("zh-CN") : "尚无上报";
-    const id = document.createElement("td");
-    id.textContent = device.deviceId;
-    row.append(name, status, lastSeen, id);
-    rows.append(row);
-  }
-  if (!result.devices.length) setEmptyRow(rows, 4, "设备首次上报使用时长后会显示在这里");
 }
 
 async function login(event) {
@@ -629,8 +628,7 @@ async function initialize() {
       }
       await loadRecords();
     }
-    if (page === "devices") await loadDevices();
-    document.title = `${page === "questions" ? "题库管理" : page === "records" ? "使用记录" : page === "devices" ? "设备" : "使用规则"} · 健康使用`;
+    document.title = `${page === "questions" ? "题库管理" : page === "records" ? "使用记录" : "使用规则"} · 健康使用`;
   } catch (error) {
     if (error.status === 401 && !isLoginPage) {
       location.replace(loginAddress());
@@ -648,9 +646,7 @@ document.querySelector("#loginForm").addEventListener("submit", login);
 document.querySelector("#settingsForm").addEventListener("submit", saveSettings);
 document.querySelector("#recordsDate").addEventListener("change", () => loadRecords().catch(handleError));
 document.querySelector("#refreshRecords").addEventListener("click", () => loadRecords().catch(handleError));
-document.querySelector("#refreshDevices").addEventListener("click", () => loadDevices().catch(handleError));
 document.querySelector("#closeUsageDetail").addEventListener("click", () => document.querySelector("#usageDetailDialog").close());
-if (page === "devices") window.setInterval(() => loadDevices().catch(handleError), 30_000);
 document.querySelector("#resetDevicePin").addEventListener("click", async () => {
   if (!window.confirm("确认将电视 PIN 重置为“上下左右上上”？电视下次同步后生效。")) return;
   const button = document.querySelector("#resetDevicePin");

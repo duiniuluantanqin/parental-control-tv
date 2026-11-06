@@ -122,7 +122,32 @@ class AdminApiTests(unittest.TestCase):
         _, records = self.request("/api/v1/admin/records?date=2026-11-05")
         interval = records["usage"][0]["intervals"][0]
         self.assertGreater(interval["end"], interval["start"])
+        self.assertEqual(len(records["usage"][0]["intervals"]), 1)
         self.assertEqual(records["deviceDetails"][0]["name"], "Family TV")
+
+    def test_usage_detail_sorts_and_merges_legacy_contiguous_intervals(self) -> None:
+        state = server.STORE.load()
+        state["dailyUsage"] = [{
+            "deviceId": "tv-01",
+            "date": "2026-11-05",
+            "usageMillis": 300_000,
+            "intervals": [
+                {"start": 300, "end": 400},
+                {"start": 100, "end": 200},
+                {"start": 200, "end": 250},
+                {"start": 250, "end": 300},
+                {"start": 450, "end": 500},
+                {"start": 490, "end": 600},
+            ],
+        }]
+        server.STORE.save(state)
+
+        _, records = self.request("/api/v1/admin/records?date=2026-11-05")
+
+        self.assertEqual(records["usage"][0]["intervals"], [
+            {"start": 100, "end": 400},
+            {"start": 450, "end": 600},
+        ])
 
     def test_answer_attempts_record_correctness_and_retry_without_duplicates(self) -> None:
         question = server.STORE.load()["questions"][0]

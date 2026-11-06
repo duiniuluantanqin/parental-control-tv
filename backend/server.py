@@ -122,6 +122,25 @@ def validate_weekly_windows(value: object, name: str) -> dict[str, list[dict[str
     return normalized
 
 
+def merge_usage_intervals(value: object) -> list[dict[str, int]]:
+    if not isinstance(value, list):
+        return []
+    intervals = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        start, end = item.get("start"), item.get("end")
+        if type(start) is int and type(end) is int and 0 <= start < end:
+            intervals.append((start, end))
+    merged: list[dict[str, int]] = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1]["end"]:
+            merged[-1]["end"] = max(merged[-1]["end"], end)
+        else:
+            merged.append({"start": start, "end": end})
+    return merged
+
+
 def validate_question(value: object, *, require_id: bool = True) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError("题目格式不正确")
@@ -436,7 +455,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                             "deviceId": value,
                             "date": record_date,
                             "usageMillis": daily_usage.get(value, {}).get("usageMillis", 0),
-                            "intervals": daily_usage.get(value, {}).get("intervals", []),
+                            "intervals": merge_usage_intervals(daily_usage.get(value, {}).get("intervals", [])),
                             "lastReportedAt": state["devices"].get(value, {}).get("lastSeen", 0),
                         }
                         for value in selected_ids
@@ -520,10 +539,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                             record = {"deviceId": device_id, "date": record_date, "usageMillis": 0, "intervals": []}
                             usage.append(record)
                         intervals = record.setdefault("intervals", [])
-                        if not intervals or interval["start"] > intervals[-1]["end"]:
-                            intervals.append(interval)
-                        else:
-                            intervals[-1]["end"] = max(intervals[-1]["end"], interval["end"])
+                        record["intervals"] = merge_usage_intervals([*intervals, interval])
                     device["lastSeen"] = now_ms
                     device["lastUsageAt"] = now_ms
                     device["lastUsageMillis"] = usage_millis

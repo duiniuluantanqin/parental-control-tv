@@ -37,7 +37,6 @@
       <a href="/settings" data-page="settings">使用规则</a>
       <a href="/questions" data-page="questions">题库管理</a>
       <a href="/records" data-page="records">使用记录</a>
-      <a href="/devices" data-page="devices">设备</a>
     </nav>
     <p id="notice" class="notice" role="status" aria-live="polite"></p>
 
@@ -70,19 +69,6 @@
       </section>
     </section>
 
-    <section id="devicesPage" aria-labelledby="devicesTitle" hidden>
-      <div class="section-heading records-heading">
-        <div><h1 id="devicesTitle">设备</h1><p id="devicesSummary">查看已上报设备及最近在线状态。</p></div>
-        <button id="refreshDevices" class="button secondary" type="button">刷新</button>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>设备名称</th><th>状态</th><th>最近上报</th><th>设备 ID</th></tr></thead>
-          <tbody id="deviceRows"></tbody>
-        </table>
-      </div>
-    </section>
-
     <section id="questionsPage" aria-labelledby="questionsTitle" hidden>
       <div class="section-heading">
         <div><h1 id="questionsTitle">题库管理 <span id="questionCount" class="count">0</span></h1><p>电视从题库随机抽题，避免连续重复。</p></div>
@@ -112,7 +98,8 @@
       <section class="records-section" aria-labelledby="usageRecordsTitle">
         <div class="records-section-heading"><h2 id="usageRecordsTitle">每日使用时长</h2></div>
         <div class="table-wrap">
-          <table>
+          <table class="usage-record-table">
+            <colgroup><col class="usage-col-device"><col class="usage-col-total"><col class="usage-col-report"><col class="usage-col-detail"></colgroup>
             <thead><tr><th>设备</th><th>使用时长</th><th>上次上报</th><th>详情</th></tr></thead>
             <tbody id="usageRows"></tbody>
           </table>
@@ -121,7 +108,8 @@
       <section class="records-section" aria-labelledby="answerRecordsTitle">
         <div class="records-section-heading"><h2 id="answerRecordsTitle">答题记录</h2></div>
         <div class="table-wrap">
-          <table>
+          <table class="answer-record-table">
+            <colgroup><col class="answer-col-time"><col class="answer-col-device"><col class="answer-col-question"><col class="answer-col-answer"><col class="answer-col-result"></colgroup>
             <thead><tr><th>时间</th><th>设备</th><th>题目</th><th>作答</th><th>结果</th></tr></thead>
             <tbody id="answerRows"></tbody>
           </table>
@@ -130,9 +118,9 @@
     </section>
   </main>
 
-  <dialog id="usageDetailDialog" aria-labelledby="usageDetailTitle">
-    <div class="form-heading"><div><h2 id="usageDetailTitle">在线时间</h2><p id="usageDetailSubtitle" class="muted"></p></div><button id="closeUsageDetail" class="icon-button" type="button" aria-label="关闭在线时间详情">×</button></div>
-    <div class="table-wrap"><table><thead><tr><th>开始</th><th>结束</th><th>时长</th></tr></thead><tbody id="usageIntervalRows"></tbody></table></div>
+  <dialog id="usageDetailDialog" class="usage-detail-dialog" aria-labelledby="usageDetailTitle">
+    <div class="form-heading"><div><h2 id="usageDetailTitle">使用明细</h2><p id="usageDetailSubtitle" class="muted"></p></div><button id="closeUsageDetail" class="icon-button" type="button" aria-label="关闭使用明细">×</button></div>
+    <div class="table-wrap"><table class="usage-interval-table"><thead><tr><th>连续时段</th><th>使用时长</th></tr></thead><tbody id="usageIntervalRows"></tbody></table></div>
   </dialog>
 
   <dialog id="questionDialog" aria-labelledby="questionDialogTitle">
