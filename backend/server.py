@@ -33,12 +33,12 @@ from deepseek import (
 ROOT = Path(__file__).resolve().parents[1]
 SEED_FILE = ROOT / "app" / "src" / "main" / "assets" / "questions.json"
 DATA_FILE = Path(os.environ.get("TV_PARENTAL_DATA_FILE", ROOT / "backend" / "data.sqlite3"))
-ADMIN_FILE = Path(os.environ.get("TV_PARENTAL_ADMIN_FILE", ROOT / "backend" / "data" / "admin.json"))
 PORT = int(os.environ.get("PORT", "8765"))
 MAX_BODY_BYTES = 64 * 1024
 SESSION_SECONDS = 12 * 60 * 60
 SESSION_COOKIE = "tvparental_session"
-BACKEND_VERSION = "1.0.10"
+PASSWORD_ITERATIONS = 600_000
+BACKEND_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 DEVICE_ONLINE_SECONDS = 180
 
 WEEKDAYS = tuple(str(day) for day in range(1, 8))
@@ -330,7 +330,22 @@ class StateStore:
                 device_id TEXT PRIMARY KEY,
                 payload TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS admin_account (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                username TEXT NOT NULL,
+                salt TEXT NOT NULL,
+                iterations INTEGER NOT NULL,
+                password_hash TEXT NOT NULL
+            );
         """)
+        if connection.execute("SELECT 1 FROM admin_account WHERE id = 1").fetchone() is None:
+            salt = secrets.token_bytes(16)
+            password_hash = hashlib.pbkdf2_hmac("sha256", b"admin", salt, PASSWORD_ITERATIONS).hex()
+            connection.execute(
+                "INSERT INTO admin_account(id, username, salt, iterations, password_hash) VALUES (1, ?, ?, ?, ?)",
+                ("admin", salt.hex(), PASSWORD_ITERATIONS, password_hash),
+            )
+            connection.commit()
 
     @staticmethod
     def _write_state(connection: sqlite3.Connection, state: dict[str, object]) -> None:
@@ -442,73 +457,114 @@ class AdminAuth:
         self.sessions: dict[str, tuple[float, str]] = {}
         self.failures: list[float] = []
 
+    @staticmethod
+    def _digest(password: str, salt: str, iterations: int) -> str:
+        return hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), iterations).hex()
+
     def set_password(self, username: str, password: str) -> None:
         if not 1 <= len(username.strip()) <= 64:
             raise ValueError("用户名需为 1–64 个字符")
         if not 10 <= len(password) <= 1024:
             raise ValueError("密码需为 10–1024 个字符")
         salt = secrets.token_bytes(16)
-        credentials = {
-            "username": username.strip(),
-            "salt": salt.hex(),
-            "iterations": 600_000,
-            "passwordHash": hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 600_000).hex(),
-        }
+        password_hash = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PASSWORD_ITERATIONS).hex()
         with self.lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.path.with_suffix(".tmp")
-            with temporary.open("w", encoding="utf-8") as output:
-                os.chmod(temporary, 0o600)
-                json.dump(credentials, output)
-            if hasattr(os, "geteuid") and os.geteuid() == 0:
-                owner = self.path.parent.stat()
-                os.chown(temporary, owner.st_uid, owner.st_gid)
-            temporary.replace(self.path)
+            with closing(sqlite3.connect(self.path, timeout=10)) as connection:
+                StateStore._create_schema(connection)
+                connection.execute(
+                    "UPDATE admin_account SET username = ?, salt = ?, iterations = ?, password_hash = ? WHERE id = 1",
+                    (username.strip(), salt.hex(), PASSWORD_ITERATIONS, password_hash),
+                )
+                connection.commit()
             self.sessions.clear()
             self.failures.clear()
 
     def login(self, username: str, password: str) -> tuple[int, str]:
         with self.lock:
-            if not self.path.exists():
-                return 503, "管理员尚未设置，请联系维护者配置账号"
             now = time.monotonic()
             self.failures = [attempt for attempt in self.failures if now - attempt < 60]
             if len(self.failures) >= 5:
                 return 429, "尝试次数过多，请一分钟后再试"
             try:
-                credentials = json.loads(self.path.read_text(encoding="utf-8"))
-            except PermissionError:
-                return 503, "管理员账号文件无法读取，请联系维护者检查文件权限"
-            digest = hashlib.pbkdf2_hmac(
-                "sha256", password.encode(), bytes.fromhex(credentials["salt"]), credentials["iterations"],
-            ).hex()
-            if username != credentials["username"] or not hmac.compare_digest(digest, credentials["passwordHash"]):
+                with closing(sqlite3.connect(self.path, timeout=10)) as connection:
+                    credentials = connection.execute(
+                        "SELECT username, salt, iterations, password_hash FROM admin_account WHERE id = 1",
+                    ).fetchone()
+            except sqlite3.Error:
+                return 503, "管理员账号数据库不可用"
+            if credentials is None:
+                return 503, "管理员账号尚未初始化"
+            saved_username, salt, iterations, saved_hash = credentials
+            digest = self._digest(password, salt, iterations)
+            if username != saved_username or not hmac.compare_digest(digest, saved_hash):
                 self.failures.append(now)
                 return 401, "用户名或密码错误"
             self.failures.clear()
             self.sessions = {key: value for key, value in self.sessions.items() if value[0] > now}
             session = secrets.token_urlsafe(32)
-            self.sessions[session] = (now + SESSION_SECONDS, credentials["passwordHash"])
+            self.sessions[session] = (now + SESSION_SECONDS, saved_hash)
             return 200, session
 
     def is_authenticated(self, session: str) -> bool:
         with self.lock:
             expires, password_hash = self.sessions.get(session, (0, ""))
-            if expires <= time.monotonic() or not self.path.exists():
+            if expires <= time.monotonic():
                 self.sessions.pop(session, None)
                 return False
             try:
-                credentials = json.loads(self.path.read_text(encoding="utf-8"))
-            except PermissionError:
+                with closing(sqlite3.connect(self.path, timeout=10)) as connection:
+                    row = connection.execute("SELECT password_hash FROM admin_account WHERE id = 1").fetchone()
+            except sqlite3.Error:
                 return False
-            return hmac.compare_digest(password_hash, credentials["passwordHash"])
+            if row is None or not hmac.compare_digest(password_hash, row[0]):
+                self.sessions.pop(session, None)
+                return False
+            return True
+
+    def change_password(self, session: str, current_password: str, new_password: str) -> tuple[int, str]:
+        if not 10 <= len(new_password) <= 1024:
+            return 400, "新密码需为 10–1024 个字符"
+        if current_password == new_password:
+            return 400, "新密码不能与当前密码相同"
+        with self.lock:
+            expires, session_hash = self.sessions.get(session, (0, ""))
+            if expires <= time.monotonic():
+                self.sessions.pop(session, None)
+                return 401, "登录已过期，请重新登录"
+            try:
+                with closing(sqlite3.connect(self.path, timeout=10)) as connection:
+                    row = connection.execute(
+                        "SELECT salt, iterations, password_hash FROM admin_account WHERE id = 1",
+                    ).fetchone()
+                    if row is None:
+                        return 503, "管理员账号尚未初始化"
+                    salt, iterations, saved_hash = row
+                    if not hmac.compare_digest(session_hash, saved_hash):
+                        self.sessions.pop(session, None)
+                        return 401, "登录已过期，请重新登录"
+                    if not hmac.compare_digest(self._digest(current_password, salt, iterations), saved_hash):
+                        return 400, "当前密码不正确"
+                    new_salt = secrets.token_bytes(16)
+                    new_hash = hashlib.pbkdf2_hmac(
+                        "sha256", new_password.encode(), new_salt, PASSWORD_ITERATIONS,
+                    ).hex()
+                    connection.execute(
+                        "UPDATE admin_account SET salt = ?, iterations = ?, password_hash = ? WHERE id = 1",
+                        (new_salt.hex(), PASSWORD_ITERATIONS, new_hash),
+                    )
+                    connection.commit()
+            except sqlite3.Error:
+                return 503, "管理员账号数据库不可用"
+            self.sessions = {session: (expires, new_hash)}
+            return 200, ""
 
     def logout(self, session: str) -> None:
         with self.lock:
             self.sessions.pop(session, None)
 
 
-AUTH = AdminAuth(ADMIN_FILE)
+AUTH = AdminAuth(DATA_FILE)
 
 
 class RequestHandler(BaseHTTPRequestHandler):
@@ -870,6 +926,17 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self.read_json()
+            if path == "/api/v1/admin/password/change":
+                current_password = payload.get("currentPassword")
+                new_password = payload.get("newPassword")
+                confirm_password = payload.get("confirmPassword")
+                if any(not isinstance(value, str) or len(value) > 1024 for value in (current_password, new_password, confirm_password)):
+                    raise ValueError("请输入有效的当前密码和新密码")
+                if new_password != confirm_password:
+                    raise ValueError("两次输入的新密码不一致")
+                status, message = AUTH.change_password(self.session_id(), current_password, new_password)
+                self.send_json(status, {"changed": status == 200, **({} if status == 200 else {"error": message})})
+                return
             if path == "/api/v1/admin/answers/restore":
                 attempt_id = payload.get("attemptId")
                 if not isinstance(attempt_id, str) or not 1 <= len(attempt_id) <= 80:

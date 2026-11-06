@@ -83,7 +83,7 @@ object ControlState {
     }
 
     fun alwaysShowRemainingTime(context: Context): Boolean =
-        prefs(context).getBoolean(ALWAYS_SHOW_REMAINING_TIME_KEY, false)
+        prefs(context).getBoolean(ALWAYS_SHOW_REMAINING_TIME_KEY, true)
 
     fun setAlwaysShowRemainingTime(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(ALWAYS_SHOW_REMAINING_TIME_KEY, enabled).apply()

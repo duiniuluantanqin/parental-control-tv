@@ -3,6 +3,7 @@ FROM python:3.11-slim
 WORKDIR /srv/tv-parental
 COPY backend /srv/tv-parental/backend
 COPY app/src/main/assets/questions.json /srv/tv-parental/app/src/main/assets/questions.json
+COPY VERSION /srv/tv-parental/VERSION
 
 ENV HOST=0.0.0.0
 ENV PORT=8080

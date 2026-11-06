@@ -2,6 +2,9 @@ plugins {
     id("com.android.application")
 }
 
+val appVersion = rootProject.file("VERSION").readText().trim()
+val apkFileName = "Parental-TV-v$appVersion.apk"
+
 android {
     namespace = "com.example.tvparental"
     compileSdk = 37
@@ -10,8 +13,8 @@ android {
         applicationId = "com.example.tvparental"
         minSdk = 28
         targetSdk = 28
-        versionCode = 31
-        versionName = "0.9.11"
+        versionCode = 33
+        versionName = appVersion
     }
 
     buildTypes {
@@ -29,7 +32,7 @@ android {
 val copyDebugApk by tasks.registering(Copy::class) {
     from(layout.buildDirectory.file("outputs/apk/debug/app-debug.apk"))
     into(layout.buildDirectory.dir("outputs/parental"))
-    rename { "Parental-TV.apk" }
+    rename { apkFileName }
 }
 
 tasks.configureEach {

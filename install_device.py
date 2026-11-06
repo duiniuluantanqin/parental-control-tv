@@ -20,7 +20,8 @@ APP_LABEL = "健康使用"
 PORT = 8765
 TIMEOUT_SECONDS = 300
 ROOT = Path(__file__).resolve().parent
-APK = ROOT / "app" / "build" / "outputs" / "parental" / "Parental-TV.apk"
+APP_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+APK = ROOT / "app" / "build" / "outputs" / "parental" / f"Parental-TV-v{APP_VERSION}.apk"
 METADATA = ROOT / "app" / "build" / "outputs" / "apk" / "debug" / "output-metadata.json"
 PUSH_DIR = ROOT / ".tools" / "tv-parental-push"
 PUSH_APK = PUSH_DIR / "TvParental.apk"

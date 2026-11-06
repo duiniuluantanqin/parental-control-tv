@@ -69,7 +69,7 @@ ssh -o BatchMode=yes -o IdentitiesOnly=yes -i "C:\Users\49581\.ssh\tv-parental-d
 
 ## 2. 一次性准备后台服务
 
-新部署先创建空的环境文件（已有文件不覆盖），注册服务。账号在首次上传代码后通过 `--set-admin` 命令设置：
+新部署先创建空的环境文件（已有文件不覆盖），注册服务。管理员账号会在 SQLite 初始化时创建为 `admin/admin`：
 
 ```bash
 sudo -u tvparental-deploy touch /var/www/html/tvparental/backend/.env
@@ -144,28 +144,15 @@ Caddy 自动管理该域名的 HTTPS。后台首次部署前出现 502 属正常
 
 **SSH 端口必须能被 GitHub runner 访问。** 仅放行家庭 IP 会导致 Actions 超时；GitHub 托管 runner 没有固定的单一出口 IP，改 SSH 域名也不会解决。若必须使用固定来源 IP，需要自托管 runner 或专门的网络通道。
 
-提交并推送工作流及代码后，在 **Actions → deploy-ecs → Run workflow** 选择 `main`。之后 `main` 上的 `backend/**`、种子题库或工作流变更会自动触发发布：
+提交并推送工作流及代码后，在 **Actions → deploy-ecs → Run workflow** 选择 `main`。之后 `main` 上的 `backend/**`、根目录 `VERSION`、种子题库或工作流变更会自动触发发布：
 
 1. 运行后端 API 测试；通过后才部署，其他分支不会部署。
 2. rsync 同步后台和种子题库，保留 `.env`、`data/` 和 SQLite 数据库。
 3. 重启 `tvparental`，等待本机接口就绪，再检查公网 HTTPS 接口。部署串行执行，避免交叉覆盖。
 
-首次发布完成后，在本机用第 5 节的命令 SSH 登录部署账户，执行：
+首次发布完成并等待服务启动后，打开管理页，用 `admin/admin` 登录，然后通过右上角“修改密码”设置新密码（至少 10 个字符）。账号散列保存在 `backend/data/state.sqlite3`。已存在的 SQLite 题库、规则、设备和记录会保留；旧 `admin.json` 不再用于登录或自动导入。
 
-```bash
-cd /var/www/html/tvparental
-/usr/bin/python3 backend/server.py --set-admin
-```
-
-按提示输入用户名（回车默认 `admin`）、密码（至少 10 个字符）并确认密码；输入密码时终端不显示字符。随后打开管理页，用刚设置的账号登录。账号保存在 `backend/data/admin.json`，服务可立即读取，无需重新启动。未设置账号时管理登录不可用，电视只读同步仍正常。
-
-如果当前是 **root 会话**，请直接使用部署账户运行命令：
-
-```bash
-sudo -u tvparental-deploy /usr/bin/python3 /var/www/html/tvparental/backend/server.py --set-admin
-```
-
-**从旧版令牌登录升级：** 发布新代码后执行同一条 `--set-admin` 命令即可，旧题库与规则保留；原 `.env` 中的 `TV_PARENTAL_ADMIN_TOKEN` 已不再使用。无需重新初始化题库或重复配置 Caddy。
+**从旧版令牌登录升级：** 无需运行额外的账号初始化命令；原 `.env` 中的 `TV_PARENTAL_ADMIN_TOKEN` 已不再使用。首次启动会在现有 SQLite 数据库中创建默认管理员账号，无需重新初始化题库或重复配置 Caddy。
 
 ## 5. 日常使用与排障
 
@@ -182,32 +169,18 @@ ssh -o IdentitiesOnly=yes -i "C:\Users\49581\.ssh\tv-parental-deploy" tvparental
 ### 登录管理页与重设密码
 
 1. 打开 https://tvparental.mediainsight360.com/ 。
-2. 填写通过 `python3 backend/server.py --set-admin` 设置的用户名和密码，点击“登录”。
+2. 使用 `admin/admin` 登录，首次登录后通过右上角“修改密码”更换默认密码。
 3. “使用规则”页面（`/settings`）管理每日可用时长、答题间隔、答错锁定和同步间隔；“题库管理”页面（`/questions`）筛选、添加或删除题目。添加题目会打开对话框，类别从下拉框选择；点击题目可查看详情，包括类别、难度、四个选项和正确答案。本机预览步骤见 [README 的“本机后台”](../README.md#本机后台)。
 4. 使用完成后可点击右上角“退出登录”。会话最长保持 12 小时；服务重启后需重新登录。
 
-忘记用户名或密码时，以部署账户 SSH 登录 ECS 并重新执行：
+忘记用户名或密码时，以部署账户 SSH 登录 ECS 并执行：
 
 ```bash
 cd /var/www/html/tvparental
 /usr/bin/python3 backend/server.py --set-admin
 ```
 
-这会替换管理员账号及密码，原登录会话失效，题库与规则保留。服务只保存加盐的密码散列，无法查询密码明文。连续输错 5 次会暂停登录一分钟，稍后重试。
-
-### 设置账号后登录提示 JSON 解析失败
-
-2026-11-03 遇到的原因是：在 root 会话中运行旧版 `--set-admin`，使 `backend/data/admin.json` 属于 `root:root` 且权限为 `600`，后台的 `tvparental-deploy` 账户读不到文件。日志报 `PermissionError`，登录接口没有返回正常 JSON，页面显示 `Unexpected end of JSON input`。
-
-在 root / 管理员会话中修复该文件归属，保留已有账号和密码：
-
-```bash
-sudo chown tvparental-deploy:tvparental-deploy /var/www/html/tvparental/backend/data/admin.json
-sudo chmod 600 /var/www/html/tvparental/backend/data/admin.json
-sudo -u tvparental-deploy test -r /var/www/html/tvparental/backend/data/admin.json && echo 'admin.json readable'
-```
-
-随后刷新页面重新登录，无需重设密码或重启服务。以后优先以部署账户运行 `--set-admin`；新版命令在 root 下运行时也会让账号文件归属于数据目录的所属用户，保持 `600` 权限。若仍有错误，用管理员账户执行 `sudo journalctl -u tvparental -n 50 --no-pager` 检查日志。
+这会重设管理员用户名和密码、撤销当前所有登录会话，题库与规则保留。服务只保存加盐的密码散列，无法查询密码明文。连续输错 5 次会暂停登录一分钟，稍后重试。`--set-admin` 应以 `tvparental-deploy` 身份运行，确保 SQLite 文件仍可被服务读取。
 
 ### DeepSeek AI 出题
 
@@ -270,7 +243,7 @@ curl -sS -o /dev/null -w 'HTTP %{http_code}\n' https://tvparental.mediainsight36
 
 ### 维护与备份
 
-- 题库、规则、设备和记录通常保存在 `backend/data/state.sqlite3`；备份该目录（包含管理员账号文件 `admin.json`）和 `.env`。数据库不存在时，程序会用默认规则和种子题库初始化；旧 JSON 状态不会自动导入。更新种子不会替换已经保存的题库。
+- 管理员账号散列、题库、规则、设备和记录保存在 `backend/data/state.sqlite3`；备份该数据库和 `.env`。新数据库会用默认账号 `admin/admin`、默认规则和种子题库初始化；旧 JSON 状态及 `admin.json` 账号不会自动导入。更新种子不会替换已经保存的题库。
 - 发布失败：先看 Actions 失败步骤，再在 ECS 执行 `sudo journalctl -u tvparental -n 100 --no-pager`。本机接口正常、HTTPS 失败时检查 DNS、Caddy 和安全组。
 - 自动发布会短暂重启后台，没有自动回滚。回退时在 GitHub 撤销有问题的提交并推送到 `main`。
 - 部署密钥可读写本应用代码和数据，应妥善保管；管理员密码通过交互提示输入，不要提交到 Git 或直接写进命令历史。

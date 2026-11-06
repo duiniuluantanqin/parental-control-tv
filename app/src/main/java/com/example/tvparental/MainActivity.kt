@@ -91,7 +91,7 @@ class MainActivity : Activity() {
         }
         if (startupQuestionPending && canDrawOverlays()) {
             startupQuestionPending = false
-            showQuestionNow()
+            showQuestionNow(testQuestion = false)
         }
     }
 
@@ -202,7 +202,7 @@ class MainActivity : Activity() {
         val actions = listOf(
             menuButton("Overlay access", android.R.drawable.ic_menu_manage) { openOverlaySettings() },
             menuButton("Set parent PIN", android.R.drawable.ic_lock_lock) { startPasswordSetup() },
-            menuButton("Test question", android.R.drawable.ic_media_play) { showQuestionNow() },
+            menuButton("Test question", android.R.drawable.ic_media_play) { showQuestionNow(testQuestion = true) },
             menuButton("Sync now", android.R.drawable.ic_popup_sync) { syncRemoteSettings() },
             menuButton("Media pause access", android.R.drawable.ic_media_pause) { openMediaAccessSettings() },
             menuButton("Advanced settings", android.R.drawable.ic_menu_preferences) { openAdvancedSettings() },
@@ -222,18 +222,6 @@ class MainActivity : Activity() {
             })
         }
         controls.addView(actionGrid, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-        controls.addView(Switch(this).apply {
-            text = "Always show time remaining"
-            textSize = 16f
-            setTextColor(Color.rgb(235, 241, 237))
-            isChecked = ControlState.alwaysShowRemainingTime(this@MainActivity)
-            setOnCheckedChangeListener { _, enabled ->
-                ControlState.setAlwaysShowRemainingTime(this@MainActivity, enabled)
-                refreshUsageDisplay()
-            }
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(56)).apply {
-            topMargin = dp(8)
-        })
         syncStatus = statusText(15f).apply {
             gravity = Gravity.START
             setTextColor(Color.rgb(160, 174, 174))
@@ -407,6 +395,17 @@ class MainActivity : Activity() {
             }
         }
         box.addView(startupQuestion, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(64)))
+        val alwaysShowRemainingTime = Switch(this).apply {
+            text = "Always show time remaining"
+            textSize = 18f
+            setTextColor(Color.rgb(235, 241, 237))
+            isChecked = ControlState.alwaysShowRemainingTime(this@MainActivity)
+            setOnCheckedChangeListener { _, enabled ->
+                ControlState.setAlwaysShowRemainingTime(this@MainActivity, enabled)
+                refreshUsageDisplay()
+            }
+        }
+        box.addView(alwaysShowRemainingTime, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(64)))
         box.addView(menuButton("Done", android.R.drawable.ic_menu_close_clear_cancel) { dialog.dismiss() },
             LinearLayout.LayoutParams(dp(220), dp(58)).apply { topMargin = dp(18) })
         dialog.setContentView(box)
@@ -537,14 +536,14 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun showQuestionNow() {
+    private fun showQuestionNow(testQuestion: Boolean) {
         if (!canDrawOverlays()) {
             openOverlaySettings()
             return
         }
         val intent = Intent(this, QuestionOverlayService::class.java)
             .setAction(QuestionOverlayService.ACTION_SHOW_QUESTION)
-            .putExtra(QuestionOverlayService.EXTRA_TEST_QUESTION, true)
+            .putExtra(QuestionOverlayService.EXTRA_TEST_QUESTION, testQuestion)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
     }
 

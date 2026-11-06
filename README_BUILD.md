@@ -19,7 +19,7 @@ Gradle Wrapper 已随仓库提交，无需单独安装全局 Gradle。`.tools/gr
 成功产物：
 
 ```text
-app\build\outputs\parental\Parental-TV.apk
+app\build\outputs\parental\Parental-TV-v<version>.apk
 ```
 
 如果 Android Studio 安装在自定义目录且脚本没有找到 JDK，可在当前 PowerShell 窗口临时指定其 JBR/JDK 路径后重试；不需要改系统级环境变量：

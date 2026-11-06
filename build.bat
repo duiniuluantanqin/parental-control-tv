@@ -35,6 +35,14 @@ echo    Parental TV 编译脚本
 echo ================================
 echo.
 
+set "APP_VERSION="
+for /f "usebackq delims=" %%V in ("VERSION") do if not defined APP_VERSION set "APP_VERSION=%%V"
+if not defined APP_VERSION (
+    echo 错误: 无法读取根目录 VERSION 文件。
+    pause
+    exit /b 1
+)
+
 rem 检查 gradlew.bat 是否存在
 if not exist "gradlew.bat" (
     echo 错误: 找不到 gradlew.bat
@@ -92,7 +100,7 @@ echo ================================
 echo.
 echo APK 文件位置：
 
-set APK_FILE=app\build\outputs\parental\Parental-TV.apk
+set "APK_FILE=app\build\outputs\parental\Parental-TV-v%APP_VERSION%.apk"
 if exist "%APK_FILE%" (
     echo %cd%\%APK_FILE%
     echo.

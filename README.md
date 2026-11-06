@@ -8,7 +8,7 @@ Windows 新环境准备、JDK/SDK 定位和安装流程见 [README_BUILD.md](REA
 .\build.bat
 ```
 
-APK 位于 `app\build\outputs\parental\Parental-TV.apk`。应用自动从 `https://tvparental.mediainsight360.com` 同步题目和规则，无需在电视配置地址或登录；首页可手动同步并查看今日已用时间。首次使用需要在电视确认系统悬浮窗权限；应用不能静默授予 Android 特殊权限。
+版本号统一保存在根目录 `VERSION`。APK 位于 `app\build\outputs\parental\Parental-TV-v<版本号>.apk`。应用自动从 `https://tvparental.mediainsight360.com` 同步题目和规则，无需在电视配置地址或登录；首页可手动同步并查看今日已用时间。首次使用需要在电视确认系统悬浮窗权限；应用不能静默授予 Android 特殊权限。
 
 ### 启动 Android 模拟器
 
@@ -37,11 +37,7 @@ $emulator = Join-Path $androidSdk "emulator\emulator.exe"
 
 ## 本机后台
 
-需要 Python 3.11 或更高版本，无第三方 Python 依赖。在项目根目录打开 PowerShell，首次预览时设置本地管理员（已有账号可跳过）：
-
-```powershell
-python backend/server.py --set-admin
-```
+需要 Python 3.11 或更高版本，无第三方 Python 依赖。在项目根目录打开 PowerShell，首次启动会在 SQLite 中创建默认管理员 `admin/admin`。
 
 然后启动本地预览服务，保持这个终端运行：
 
@@ -50,7 +46,7 @@ $env:HOST = "127.0.0.1"
 python backend/server.py
 ```
 
-浏览器打开 `http://127.0.0.1:8765/questions`，使用上一步设置的用户名和密码登录（用户名默认 `admin`，密码至少 10 个字符）。后台分为“使用规则”和“题库管理”两个页面：添加题目时从下拉框选择类别，包含内置类别与题库已有的自定义类别；点击列表中的题目可打开详情，查看类别、难度、四个选项和正确答案。
+浏览器打开 `http://127.0.0.1:8765/questions`，使用 `admin/admin` 登录，然后通过右上角“修改密码”更换默认密码（新密码至少 10 个字符）。后台分为“使用规则”和“题库管理”两个页面：添加题目时从下拉框选择类别，包含内置类别与题库已有的自定义类别；点击列表中的题目可打开详情，查看类别、难度、四个选项和正确答案。
 
 如果 8765 端口已被占用，可在启动服务前改用其他端口，例如：
 
@@ -62,7 +58,7 @@ python backend/server.py
 
 此时打开 `http://127.0.0.1:8766/settings`。停止服务时在运行它的 PowerShell 窗口按 `Ctrl+C`。
 
-本地账号以密码散列保存到 `backend/data/admin.json`，忘记密码时重新运行 `--set-admin`；题库、规则、设备和使用记录默认保存在 `backend/data.sqlite3`。首次启动会自动导入原有 `backend/data.json` 并保留原文件。启动本地后台只会让浏览器管理页面使用本地数据；app 当前仍固定连接线上域名 `https://tvparental.mediainsight360.com`，不会因为启动本地后台而自动切换。修改 `backend/web/` 后刷新浏览器即可看到变化，无需重启 Python。
+管理员用户名和加盐密码散列、题库、规则、设备及使用记录均保存在 `backend/data.sqlite3`。忘记密码时可运行 `python backend/server.py --set-admin` 重设。首次启动会用默认规则、种子题库和 `admin/admin` 初始化 SQLite，不会自动导入旧 JSON。启动本地后台只会让浏览器管理页面使用本地数据；app 当前仍固定连接线上域名 `https://tvparental.mediainsight360.com`，不会因为启动本地后台而自动切换。修改 `backend/web/` 后刷新浏览器即可看到变化，无需重启 Python。
 
 题库支持 DeepSeek AI 出题：古诗词类别输入作品名（可附作者），数学、地理历史和科学类别可直接随机出题。每次生成 1–10 道四选一题目，预览并勾选后批量入库。AI 与手动出题的难度统一为“低、中、高”，默认“中”；已有题库的“小学、初中、高中”读取时分别对应“低、中、高”。需要在服务环境中配置 `DEEPSEEK_API_KEY`；Key 配置和使用步骤见[部署文档](docs/DEPLOY_ECS.md#deepseek-ai-出题)。
 
@@ -70,7 +66,7 @@ python backend/server.py
 
 复用 ECS 上已有的 Caddy，为新域名增加 `reverse_proxy 127.0.0.1:8080`，Python 后台由 systemd 托管。按 [部署文档](docs/DEPLOY_ECS.md) 完成一次性初始化后，推送后台或种子题库到 `main`，GitHub Actions 就会测试、同步代码、重启后台并检查 HTTPS 接口。
 
-管理页面为 https://tvparental.mediainsight360.com/ 。代码位于 `/var/www/html/tvparental`，管理员账号散列保存在 `backend/data/admin.json`，题库、规则、设备和记录保存在 `backend/data/state.sqlite3`；自动发布会保留这些运行数据，请另外备份。旧版令牌不再用于登录，升级后设置管理员账号的步骤见部署文档。应用端口 8080 只监听本机，无需在安全组开放。
+管理页面为 https://tvparental.mediainsight360.com/ 。代码位于 `/var/www/html/tvparental`，管理员账号散列、题库、规则、设备和记录保存在 `backend/data/state.sqlite3`；自动发布会保留这些运行数据，请另外备份。新数据库默认账号为 `admin/admin`，首次登录后应在页面右上角修改密码。应用端口 8080 只监听本机，无需在安全组开放。
 
 已有宿主机 Caddy 时不要运行仓库的 `backend/compose.yaml`，其中自带的 Caddy 会争用 80/443 端口。
 

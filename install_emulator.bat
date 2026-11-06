@@ -8,7 +8,14 @@ echo ================================
 echo.
 
 rem 检查 APK 是否存在
-set APK_FILE=app\build\outputs\parental\Parental-TV.apk
+set "APP_VERSION="
+for /f "usebackq delims=" %%V in ("VERSION") do if not defined APP_VERSION set "APP_VERSION=%%V"
+if not defined APP_VERSION (
+    echo 错误: 无法读取根目录 VERSION 文件。
+    pause
+    exit /b 1
+)
+set "APK_FILE=app\build\outputs\parental\Parental-TV-v%APP_VERSION%.apk"
 if not exist "%APK_FILE%" (
     echo ❌ 错误: 找不到 APK 文件
     echo.

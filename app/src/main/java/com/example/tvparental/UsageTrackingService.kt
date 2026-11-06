@@ -95,6 +95,8 @@ class UsageTrackingService : Service() {
             wasInteractive = powerManager().isInteractive
             refreshTrackedState()
         } else {
+            wasInteractive = powerManager().isInteractive
+            refreshTrackedState()
             syncRemoteIfDue(force = true)
         }
         return START_STICKY

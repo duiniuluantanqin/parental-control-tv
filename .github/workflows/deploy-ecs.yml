@@ -6,6 +6,7 @@ on:
     paths:
       - "backend/**"
       - "app/src/main/assets/questions.json"
+      - "VERSION"
       - ".github/workflows/deploy-ecs.yml"
   workflow_dispatch:
 
@@ -76,6 +77,7 @@ jobs:
           rsync -az --delete \
             --exclude='.env' --exclude='data/' --exclude='data.json*' --exclude='__pycache__/' \
             backend/ "tvparental-ecs:$DEPLOY_DIR/backend/"
+          rsync -az VERSION "tvparental-ecs:$DEPLOY_DIR/VERSION"
           rsync -az \
             app/src/main/assets/questions.json \
             "tvparental-ecs:$DEPLOY_DIR/app/src/main/assets/questions.json"

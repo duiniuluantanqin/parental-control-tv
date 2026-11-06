@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
+import sqlite3
 import sys
 import tempfile
 import threading
 import time
 import unittest
+from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 from http.cookiejar import CookieJar
 from http.server import ThreadingHTTPServer
@@ -29,8 +30,10 @@ class AdminApiTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.previous_store = server.STORE
         self.previous_auth = server.AUTH
-        server.STORE = server.StateStore(Path(self.temp_dir.name) / "state.sqlite3")
-        server.AUTH = server.AdminAuth(Path(self.temp_dir.name) / "admin.json")
+        database_path = Path(self.temp_dir.name) / "state.sqlite3"
+        server.STORE = server.StateStore(database_path)
+        server.AUTH = server.AdminAuth(database_path)
+        server.STORE.snapshot()
         server.AUTH.set_password("admin", "test-password-123")
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.RequestHandler)
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
@@ -72,6 +75,7 @@ class AdminApiTests(unittest.TestCase):
     def test_device_state_starts_with_fifty_questions_and_default_rules(self) -> None:
         status, state = self.request("/api/v1/device/state", authenticated=False)
         self.assertEqual(status, 200)
+        self.assertEqual(server.BACKEND_VERSION, (server.ROOT / "VERSION").read_text(encoding="utf-8").strip())
         self.assertEqual(state["version"], server.BACKEND_VERSION)
         self.assertEqual(len(state["questions"]), 50)
         self.assertEqual(state["settings"], server.DEFAULT_SETTINGS)
@@ -502,16 +506,79 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(status, 401)
         self.assertIn("error", body)
 
-    def test_unreadable_admin_file_returns_json_error(self) -> None:
-        with patch("server.Path.read_text", side_effect=PermissionError("admin.json unreadable")):
-            status, body = self.request(
-                "/api/v1/admin/login", method="POST",
-                body={"username": "admin", "password": "test-password-123"},
-            )
-            self.assertEqual(status, 503)
-            self.assertIn("error", body)
-            status, _ = self.request("/api/v1/admin/state")
-            self.assertEqual(status, 401)
+    def test_new_database_seeds_admin_admin_in_sqlite(self) -> None:
+        database_path = Path(self.temp_dir.name) / "fresh.sqlite3"
+        server.StateStore(database_path).snapshot()
+        auth = server.AdminAuth(database_path)
+        status, session = auth.login("admin", "admin")
+        self.assertEqual(status, 200)
+        self.assertTrue(session)
+        with closing(sqlite3.connect(database_path)) as connection:
+            username, salt, iterations, password_hash = connection.execute(
+                "SELECT username, salt, iterations, password_hash FROM admin_account WHERE id = 1",
+            ).fetchone()
+        self.assertEqual(username, "admin")
+        self.assertNotEqual(password_hash, "admin")
+        self.assertEqual(len(bytes.fromhex(salt)), 16)
+        self.assertEqual(iterations, server.PASSWORD_ITERATIONS)
+
+    def test_admin_can_change_password_and_revoke_other_sessions(self) -> None:
+        other_cookies = CookieJar()
+        other_opener = build_opener(HTTPCookieProcessor(other_cookies))
+        request = Request(
+            f"{self.base_url}/api/v1/admin/login",
+            data=json.dumps({"username": "admin", "password": "test-password-123"}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with other_opener.open(request, timeout=3) as response:
+            self.assertEqual(response.status, 200)
+        other_cookie = next(iter(other_cookies))
+
+        status, result = self.request(
+            "/api/v1/admin/password/change", method="POST",
+            body={
+                "currentPassword": "test-password-123",
+                "newPassword": "replacement-password",
+                "confirmPassword": "replacement-password",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(result["changed"])
+        self.assertEqual(self.request("/api/v1/admin/state")[0], 200)
+        self.assertEqual(self.request(
+            "/api/v1/admin/state", authenticated=False,
+            headers={"Cookie": f"{other_cookie.name}={other_cookie.value}"},
+        )[0], 401)
+        self.assertEqual(self.request(
+            "/api/v1/admin/login", method="POST", authenticated=False,
+            body={"username": "admin", "password": "test-password-123"},
+        )[0], 401)
+        self.assertEqual(self.request(
+            "/api/v1/admin/login", method="POST", authenticated=False,
+            body={"username": "admin", "password": "replacement-password"},
+        )[0], 200)
+
+    def test_password_change_requires_current_password_and_matching_confirmation(self) -> None:
+        status, _ = self.request(
+            "/api/v1/admin/password/change", method="POST",
+            body={
+                "currentPassword": "wrong-password",
+                "newPassword": "replacement-password",
+                "confirmPassword": "replacement-password",
+            },
+        )
+        self.assertEqual(status, 400)
+        status, _ = self.request(
+            "/api/v1/admin/password/change", method="POST",
+            body={
+                "currentPassword": "test-password-123",
+                "newPassword": "replacement-password",
+                "confirmPassword": "different-password",
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(self.request("/api/v1/admin/state")[0], 200)
 
     def test_wrong_password_and_old_bearer_are_rejected(self) -> None:
         status, _ = self.request(
@@ -551,12 +618,14 @@ class AdminApiTests(unittest.TestCase):
             status, _ = self.request("/api/v1/admin/state")
         self.assertEqual(status, 401)
         self.request("/api/v1/admin/login", method="POST", body={"username": "admin", "password": "test-password-123"})
-        # A separate CLI process resets the password in the same credentials file.
+        # A separate CLI process resets the password in the same SQLite database.
         server.AdminAuth(server.AUTH.path).set_password("admin", "replacement-password")
         status, _ = self.request("/api/v1/admin/state")
         self.assertEqual(status, 401)
-        contents = server.AUTH.path.read_text(encoding="utf-8")
-        self.assertNotIn("replacement-password", contents)
+        self.assertEqual(server.AUTH.login("admin", "replacement-password")[0], 200)
+        with closing(sqlite3.connect(server.AUTH.path)) as connection:
+            password_hash = connection.execute("SELECT password_hash FROM admin_account WHERE id = 1").fetchone()[0]
+        self.assertNotEqual(password_hash, "replacement-password")
 
     def test_cross_origin_writes_are_rejected(self) -> None:
         status, _ = self.request(
@@ -584,15 +653,17 @@ class AdminApiTests(unittest.TestCase):
             )
         self.assertEqual(status, 200)
 
-    def test_device_sync_works_before_admin_is_configured(self) -> None:
-        server.AUTH = server.AdminAuth(Path(self.temp_dir.name) / "not-configured.json")
+    def test_device_sync_works_with_default_admin_on_new_database(self) -> None:
+        database_path = Path(self.temp_dir.name) / "new-state.sqlite3"
+        server.STORE = server.StateStore(database_path)
+        server.AUTH = server.AdminAuth(database_path)
         status, _ = self.request("/api/v1/device/state", authenticated=False)
         self.assertEqual(status, 200)
         status, _ = self.request(
             "/api/v1/admin/login", method="POST", authenticated=False,
-            body={"username": "admin", "password": "test-password-123"},
+            body={"username": "admin", "password": "admin"},
         )
-        self.assertEqual(status, 503)
+        self.assertEqual(status, 200)
 
     def test_admin_can_update_settings_and_add_questions(self) -> None:
         settings = {
@@ -814,21 +885,6 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(statuses, [201] * 12)
         _, state = self.request("/api/v1/device/state", authenticated=False)
         self.assertEqual(len(state["questions"]), 62)
-
-
-class AdminCredentialFileTests(unittest.TestCase):
-    @unittest.skipUnless(hasattr(os, "geteuid") and os.geteuid() == 0, "requires POSIX root")
-    def test_root_setup_keeps_credentials_owned_by_data_directory_user(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            data = Path(directory) / "data"
-            data.mkdir()
-            os.chown(data, 65534, 65534)
-            auth = server.AdminAuth(data / "admin.json")
-            auth.set_password("admin", "test-password-123")
-            self.assertEqual(auth.path.stat().st_uid, 65534)
-            self.assertEqual(auth.path.stat().st_gid, 65534)
-            self.assertEqual(auth.path.stat().st_mode & 0o777, 0o600)
-            self.assertEqual(auth.login("admin", "test-password-123")[0], 200)
 
 
 if __name__ == "__main__":

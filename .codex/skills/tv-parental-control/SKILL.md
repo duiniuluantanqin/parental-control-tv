@@ -18,6 +18,7 @@ Use this skill for Android or backend work in this repository. The target is a T
 ## Change scope
 
 - This app is not formally released. New changes do not need backward compatibility or migration paths; use the simplest implementation that meets the current requirements, and do not preserve old behavior solely for compatibility.
+- Keep app `versionName` and backend version in the root `VERSION` file. Increment Android `versionCode` separately for each installable APK, and include the shared version in the APK filename.
 
 ## Product behavior
 
@@ -28,6 +29,7 @@ Use this skill for Android or backend work in this repository. The target is a T
 - Every submitted answer (correct or incorrect) is queued locally until reported. The device reports cumulative daily screen-on usage to the backend once per minute.
 - Device records use `Settings.Secure.ANDROID_ID` as the stable device ID; emulator names come from `ro.kernel.qemu.avd_name`, with manufacturer/model as the physical-device fallback.
 - Parents can add/delete questions and change usage rules in the Web admin page. Device sync reads `/api/v1/device/state`; admin access uses a username/password session. Never put admin credentials in the Android app.
+- The SQLite database initializes the single admin account as `admin/admin`; the admin can change its password in the Web UI, and `python backend/server.py --set-admin` resets it. Store only salted password hashes in the SQLite database.
 - The authenticated admin `/records` page displays per-day device usage and answer history.
 - The launcher supports setting the backend URL, manual sync, a usage summary, permission access, and an immediate test question.
 

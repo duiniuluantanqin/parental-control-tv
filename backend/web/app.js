@@ -521,6 +521,38 @@ async function login(event) {
   }
 }
 
+async function changePassword(event) {
+  event.preventDefault();
+  const button = document.querySelector("#submitChangePassword");
+  const notice = document.querySelector("#changePasswordNotice");
+  const newPassword = document.querySelector("#newPasswordInput").value;
+  button.disabled = true;
+  notice.textContent = "";
+  notice.classList.remove("error");
+  if (newPassword !== document.querySelector("#confirmPasswordInput").value) {
+    notice.textContent = "两次输入的新密码不一致";
+    notice.classList.add("error");
+    button.disabled = false;
+    return;
+  }
+  try {
+    await api("/api/v1/admin/password/change", {
+      method: "POST",
+      body: JSON.stringify({
+        currentPassword: document.querySelector("#currentPasswordInput").value,
+        newPassword,
+        confirmPassword: document.querySelector("#confirmPasswordInput").value,
+      }),
+    });
+    document.querySelector("#changePasswordDialog").close();
+    setNotice("管理员密码已修改");
+  } catch (error) {
+    handleError(error, notice);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function saveSettings(event) {
   event.preventDefault();
   const button = document.querySelector("#saveSettings");
@@ -741,6 +773,7 @@ async function initialize() {
       return;
     }
     adminView.hidden = false;
+    document.querySelector("#changePasswordButton").hidden = false;
     document.querySelector("#logoutButton").hidden = false;
     document.querySelector(`#${page}Page`).hidden = false;
     document.querySelector(`[data-page="${page}"]`).setAttribute("aria-current", "page");
@@ -767,6 +800,20 @@ async function initialize() {
 }
 
 document.querySelector("#loginForm").addEventListener("submit", login);
+document.querySelector("#changePasswordButton").addEventListener("click", () => {
+  document.querySelector("#changePasswordNotice").textContent = "";
+  const dialog = document.querySelector("#changePasswordDialog");
+  dialog.showModal();
+  document.querySelector("#currentPasswordInput").focus();
+});
+document.querySelector("#changePasswordForm").addEventListener("submit", changePassword);
+for (const id of ["closeChangePassword", "cancelChangePassword"]) {
+  document.getElementById(id).addEventListener("click", () => document.querySelector("#changePasswordDialog").close());
+}
+document.querySelector("#changePasswordDialog").addEventListener("close", () => {
+  document.querySelector("#changePasswordForm").reset();
+  document.querySelector("#changePasswordButton").focus();
+});
 document.querySelector("#settingsForm").addEventListener("submit", saveSettings);
 document.querySelector("#recordsDate").addEventListener("change", () => loadRecords().catch(handleError));
 document.querySelector("#previousRecordsDate").addEventListener("click", () => shiftRecordsDate(-1));

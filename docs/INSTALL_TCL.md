@@ -5,7 +5,7 @@
 ## 升级前
 
 1. 电视开机，并与电脑连接同一网络。
-2. 保持包名 `com.example.tvparental` 不变。当前版本为 `0.9.11`（`versionCode` 31）；每次改动都在 `app/build.gradle.kts` 中把 `versionCode` 增加 1，并同步更新 `versionName`。不要更换用于签名的电脑/Android Studio 用户配置，否则电视可能拒绝覆盖安装。
+2. 保持包名 `com.example.tvparental` 不变。版本名统一读取根目录 `VERSION`，Android 的 `versionCode` 每次递增 1。不要更换用于签名的电脑/Android Studio 用户配置，否则电视可能拒绝覆盖安装。
 3. 在项目根目录打开 PowerShell。以下命令优先使用 PATH 中的 ADB；如果未加入 PATH，可将 `$adb` 设置为当前电脑 Android SDK `platform-tools` 目录下的 `adb.exe`。仓库安装器 `install_device.bat` 会自动从 Android SDK 环境变量、`local.properties` 或 PATH 定位 ADB。
 
 ## 构建并推送
@@ -22,7 +22,9 @@ $pushDir = Join-Path (Get-Location) '.tools\tv-parental-push'
 & .\build.bat
 if ($LASTEXITCODE -ne 0) { throw 'Android build failed.' }
 New-Item -ItemType Directory -Force -Path $pushDir | Out-Null
-Copy-Item '.\app\build\outputs\parental\Parental-TV.apk' (Join-Path $pushDir 'TvParental.apk') -Force
+$appVersion = (Get-Content '.\VERSION' -Raw).Trim()
+$apkPath = ".\app\build\outputs\parental\Parental-TV-v$appVersion.apk"
+Copy-Item $apkPath (Join-Path $pushDir 'TvParental.apk') -Force
 Invoke-WebRequest -Uri 'https://aerial.qust.me/tools/tcast-push.py' -UseBasicParsing -OutFile (Join-Path $pushDir 'tcast-push.py')
 
 & $adb version
@@ -56,7 +58,7 @@ try {
 }
 ```
 
-脚本运行后，看电视右上角的“多屏互动”提示：用遥控器按“右”选中“同意”，再按 OK。等待电脑端输出 `Installed.`。如果希望测试纯 ADB 覆盖安装，可先运行 `& $adb -s $adbTarget install -r '.\app\build\outputs\parental\Parental-TV.apk'`；当前电视固件返回 `install apk has be disabled from pm by system default!`，所以应继续使用 TCL 推送流程。若超时且电视没有出现提示，可重新执行推送命令；先确认 HTTP 服务和 ADB reverse 仍正常。
+脚本运行后，看电视右上角的“多屏互动”提示：用遥控器按“右”选中“同意”，再按 OK。等待电脑端输出 `Installed.`。如果希望测试纯 ADB 覆盖安装，可先运行 `& $adb -s $adbTarget install -r $apkPath`；当前电视固件返回 `install apk has be disabled from pm by system default!`，所以应继续使用 TCL 推送流程。若超时且电视没有出现提示，可重新执行推送命令；先确认 HTTP 服务和 ADB reverse 仍正常。
 
 ## 验证
 
@@ -77,7 +79,7 @@ try {
 & $adb -s $adbTarget shell appops set com.example.tvparental APP_ASSOC_START allow
 ```
 
-打开应用，确认首页显示的每日额度、题目间隔和题库数量。默认每日额度为 60 分钟、答题间隔为 10 分钟、答错锁定为 10 分钟；题库包含 50 道初中难度题目并随机抽取。首次打开应用会自动跳转到悬浮窗权限页，请用遥控器允许；随后在首页选择“设置解锁密码”，用方向键输入两次 6 位密码。按“立即答题测试”验证居中悬浮框；四个选项分成 2×2，方向键移动并高亮，按 OK 提交，没有单独的提交按钮。答错后应显示 10 分钟倒计时，期间遥控器不能关闭锁定页，只能用方向键输入正确密码提前解锁。升级后通常会保留已授予的悬浮窗权限。
+打开应用，确认首页显示的每日额度、题目间隔和题库数量。默认每日额度为 60 分钟、答题间隔为 10 分钟、答错锁定为 10 分钟；题库包含 50 道初中难度题目并随机抽取。首次打开应用会自动跳转到悬浮窗权限页，请用遥控器允许；随后在首页选择“设置解锁密码”，用方向键输入两次 6 位密码。手动“Test question”只显示一道测试题，不记录答案、不消耗题目，也不会触发锁定。启动时答题使用正式五题挑战，五题中至少答对四题即可解锁；全部作答后正确数少于四题才开始答错锁定。四个选项分成 2×2，方向键移动并高亮，按 OK 提交，没有单独的提交按钮。升级后通常会保留已授予的悬浮窗权限。
 
 应用启动后自动从 `https://tvparental.mediainsight360.com` 获取题库和规则，无需在电视配置地址、用户名或密码。升级后也固定使用该域名，不再读取旧版保存的后台地址。可在首页选择“立即同步题目和规则”进行验证。管理页面和部署方式见项目根目录的 `README.md`。设备默认每 5 分钟同步一次，同步间隔可在后台调整为 1–60 分钟。
 

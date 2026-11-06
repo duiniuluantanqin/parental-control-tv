@@ -6,7 +6,6 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 8080
-      TV_PARENTAL_ADMIN_FILE: /data/admin.json
       TV_PARENTAL_DATA_FILE: /data/state.sqlite3
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
     expose:
