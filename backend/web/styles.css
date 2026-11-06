@@ -109,8 +109,8 @@ td:nth-child(3) { color: #39675b; width: 200px; }
 .usage-record-table { min-width: 0; table-layout: fixed; }
 .usage-record-table .usage-col-device { width: 34%; }
 .usage-record-table .usage-col-total { width: 18%; }
-.usage-record-table .usage-col-report { width: 28%; }
-.usage-record-table .usage-col-action { width: 20%; }
+.usage-record-table .usage-col-report { width: 34%; }
+.usage-record-table .usage-col-action { width: 14%; }
 .usage-record-table th, .usage-record-table td { padding: 12px 16px; }
 .usage-record-table th:first-child, .usage-record-table td:first-child,
 .usage-record-table th:last-child, .usage-record-table td:last-child { width: auto; }
@@ -119,9 +119,6 @@ td:nth-child(3) { color: #39675b; width: 200px; }
 .usage-total-cell { color: #2d6659; }
 .usage-report-cell { color: #71817b; font-size: 13px; }
 .usage-record-table td:last-child { text-align: right; }
-.usage-actions { display: flex; justify-content: flex-end; align-items: center; gap: 14px; }
-.delete-record-button { color: #984b3f; }
-.delete-record-button:hover { color: #75372f; }
 .usage-detail-dialog { width: min(560px, calc(100% - 32px)); }
 .usage-detail-dialog .form-heading { margin-bottom: 18px; }
 .usage-interval-table { min-width: 0; table-layout: fixed; }
@@ -162,6 +159,8 @@ td:nth-child(3) { color: #39675b; width: 200px; }
 .challenge-question-result.timeout, .challenge-question-result.reboot { color: #835229; }
 .challenge-question-result.not-shown { color: #89958f; }
 .challenge-question-answer { grid-column: 2 / 4; color: #71817b; font-size: 13px; overflow-wrap: anywhere; }
+.challenge-question-restore-status, .restore-question-button { grid-column: 2 / 4; justify-self: start; font-size: 13px; }
+.challenge-question-restore-status { color: #71817b; }
 .challenge-empty { padding: 36px; color: #71817c; text-align: center; }
 .delete-button { padding: 5px 9px; color: #984b3f; background: transparent; border: 1px solid #d9b2aa; border-radius: 4px; font-size: 12px; }
 .delete-button:hover { background: #f9e9e5; }
@@ -228,6 +227,7 @@ dialog::backdrop { background: #102c296b; backdrop-filter: blur(3px); }
   .challenge-question { grid-template-columns: 24px minmax(0, 1fr); }
   .challenge-question-result { grid-column: 2; }
   .challenge-question-answer { grid-column: 2; }
+  .challenge-question-restore-status, .restore-question-button { grid-column: 2; }
   .usage-interval-table { min-width: 0; }
   .login-view { padding-top: 32px; }
   .login-card { padding: 24px; }

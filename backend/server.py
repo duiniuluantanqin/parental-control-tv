@@ -223,8 +223,7 @@ def default_state() -> dict[str, object]:
 
 class StateStore:
     def __init__(self, path: Path) -> None:
-        self.legacy_path = path if path.suffix.lower() == ".json" else path.with_suffix(".json")
-        self.path = path.with_suffix(".sqlite3") if path.suffix.lower() == ".json" else path
+        self.path = path
         self.lock = threading.RLock()
         self.refill_thread: threading.Thread | None = None
         self.refill_running = False
@@ -240,7 +239,7 @@ class StateStore:
                     "SELECT settings, password_reset FROM app_state WHERE id = 1",
                 ).fetchone()
                 if row is None:
-                    state = self._read_legacy_state()
+                    state = default_state()
                     self._write_state(connection, state)
                 else:
                     state = {
@@ -288,47 +287,6 @@ class StateStore:
                 self._create_schema(connection)
                 self._write_state(connection, state)
 
-    def delete_usage(self, device_id: str, record_date: str) -> bool:
-        with self.lock:
-            self.load()
-            with closing(sqlite3.connect(self.path, timeout=10)) as connection:
-                with connection:
-                    cursor = connection.execute(
-                        "DELETE FROM daily_usage WHERE device_id = ? AND record_date = ?",
-                        (device_id, record_date),
-                    )
-                    if cursor.rowcount:
-                        connection.execute(
-                            "INSERT OR IGNORE INTO usage_deletions(device_id, record_date) VALUES (?, ?)",
-                            (device_id, record_date),
-                        )
-                    return cursor.rowcount > 0
-
-    def is_usage_deleted(self, device_id: str, record_date: str) -> bool:
-        with self.lock:
-            self.load()
-            with closing(sqlite3.connect(self.path, timeout=10)) as connection:
-                return connection.execute(
-                    "SELECT 1 FROM usage_deletions WHERE device_id = ? AND record_date = ?",
-                    (device_id, record_date),
-                ).fetchone() is not None
-
-    def _read_legacy_state(self) -> dict[str, object]:
-        if not self.legacy_path.exists():
-            return default_state()
-        state = json.loads(self.legacy_path.read_text(encoding="utf-8"))
-        if not isinstance(state, dict) or not isinstance(state.get("questions"), list):
-            raise RuntimeError("legacy backend state file has an invalid format")
-        return {
-            "settings": validate_settings(state.get("settings", DEFAULT_SETTINGS)),
-            "questions": [validate_question(item) for item in state["questions"]],
-            "passwordReset": validate_password_reset(state.get("passwordReset")),
-            "dailyUsage": state.get("dailyUsage", []),
-            "answerRecords": state.get("answerRecords", []),
-            "challengeRecords": state.get("challengeRecords", []),
-            "devices": state.get("devices", {}),
-        }
-
     @staticmethod
     def _create_schema(connection: sqlite3.Connection) -> None:
         connection.executescript("""
@@ -347,11 +305,6 @@ class StateStore:
                 record_date TEXT NOT NULL,
                 usage_millis INTEGER NOT NULL,
                 intervals TEXT NOT NULL,
-                PRIMARY KEY (device_id, record_date)
-            );
-            CREATE TABLE IF NOT EXISTS usage_deletions (
-                device_id TEXT NOT NULL,
-                record_date TEXT NOT NULL,
                 PRIMARY KEY (device_id, record_date)
             );
             CREATE TABLE IF NOT EXISTS answer_records (
@@ -626,6 +579,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                         if (item.get("date") == record_date or item.get("challengeId") in challenge_ids)
                         and (not device_id or item.get("deviceId") == device_id)
                     ]
+                    question_ids = {item["id"] for item in state["questions"]}
+                    seed_question_ids = {item["id"] for item in json.loads(SEED_FILE.read_text(encoding="utf-8"))}
                 self.send_json(200, {
                     "date": record_date,
                     "devices": device_ids,
@@ -633,8 +588,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "usage": sorted(usage, key=lambda item: item["deviceId"]),
                     "answers": [
                         {
-                            **{key: value for key, value in item.items() if key != "correctAnswer"},
+                            **{key: value for key, value in item.items() if key not in ("correctAnswer", "question")},
                             "deviceName": state["devices"].get(item.get("deviceId"), {}).get("name", item["deviceId"]),
+                            "restorable": isinstance(item.get("question"), dict) or item.get("questionId") in seed_question_ids,
+                            "inQuestionBank": item.get("questionId") in question_ids,
                         }
                         for item in sorted(answers, key=lambda item: item["answeredAt"], reverse=True)
                     ],
@@ -697,14 +654,6 @@ class RequestHandler(BaseHTTPRequestHandler):
                     name = payload.get("deviceName")
                     if isinstance(name, str) and 1 <= len(name.strip()) <= 100:
                         device["name"] = name.strip()
-                    if STORE.is_usage_deleted(device_id, record_date):
-                        device["lastSeen"] = now_ms
-                        device["lastUsageAt"] = now_ms
-                        device["lastUsageMillis"] = usage_millis
-                        devices[device_id] = device
-                        STORE.save(state)
-                        self.send_json(200, {"accepted": True, "usageMillis": usage_millis})
-                        return
                     previous_total = device.get("lastUsageMillis", 0)
                     previous_at = device.get("lastUsageAt", 0)
                     delta = max(0, usage_millis - previous_total)
@@ -867,6 +816,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                             "answered": answered,
                             "correctAnswer": question["answer"] if question else "",
                             "correct": bool(correct),
+                            "question": question,
                         })
                         if correct:
                             state["questions"] = [item for item in state["questions"] if item["id"] != question_id]
@@ -920,6 +870,36 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self.read_json()
+            if path == "/api/v1/admin/answers/restore":
+                attempt_id = payload.get("attemptId")
+                if not isinstance(attempt_id, str) or not 1 <= len(attempt_id) <= 80:
+                    raise ValueError("无效的答题记录 ID")
+                with STORE.lock:
+                    state = STORE.load()
+                    record = next((item for item in state["answerRecords"] if item.get("attemptId") == attempt_id), None)
+                    if record is None or not record.get("correct"):
+                        self.send_json(404, {"error": "找不到答对的题目记录"})
+                        return
+                    questions = state["questions"]
+                    if any(item["id"] == record.get("questionId") for item in questions):
+                        self.send_json(200, {"restored": False, "inQuestionBank": True})
+                        return
+                    snapshot = record.get("question")
+                    if not isinstance(snapshot, dict):
+                        snapshot = next(
+                            (item for item in json.loads(SEED_FILE.read_text(encoding="utf-8")) if item.get("id") == record.get("questionId")),
+                            None,
+                        )
+                    if not isinstance(snapshot, dict):
+                        self.send_json(409, {"error": "该答题记录没有完整题目，无法恢复"})
+                        return
+                    question = validate_question(snapshot)
+                    if question["id"] != record.get("questionId"):
+                        raise ValueError("题目快照与答题记录不匹配")
+                    questions.append(question)
+                    STORE.save(state)
+                self.send_json(200, {"restored": True, "inQuestionBank": False})
+                return
             if path == "/api/v1/admin/questions/generate":
                 category = payload.get("category", "古诗词")
                 title, count = payload.get("title"), payload.get("count", 5)
@@ -998,26 +978,6 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         path = urlsplit(self.path).path
-        if path == "/api/v1/admin/records/usage":
-            if not self.same_origin() or not self.require_admin():
-                return
-            params = parse_qs(urlsplit(self.path).query)
-            device_id = params.get("deviceId", [""])[0]
-            record_date = params.get("date", [""])[0]
-            try:
-                if not isinstance(device_id, str) or not 1 <= len(device_id) <= 80:
-                    raise ValueError("无效的设备 ID")
-                if not isinstance(record_date, str) or date.fromisoformat(record_date).isoformat() != record_date:
-                    raise ValueError("日期格式必须为 YYYY-MM-DD")
-            except ValueError as error:
-                self.send_json(400, {"error": str(error)})
-                return
-            if not STORE.delete_usage(device_id, record_date):
-                self.send_json(404, {"error": "当天没有该设备的使用记录"})
-                return
-            self.send_json(200, {"deleted": True, "deviceId": device_id, "date": record_date})
-            return
-
         prefix = "/api/v1/admin/questions/"
         if not path.startswith(prefix):
             self.send_json(404, {"error": "请求地址不存在"})

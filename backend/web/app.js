@@ -300,22 +300,13 @@ function renderRecords(records) {
     }
     row.append(reported);
     const detailCell = document.createElement("td");
-    const actions = document.createElement("div");
-    actions.className = "usage-actions";
     const detailButton = document.createElement("button");
     detailButton.className = "text-button";
     detailButton.type = "button";
     detailButton.textContent = "详情";
     detailButton.setAttribute("aria-label", `查看${deviceName}的使用详情`);
     detailButton.addEventListener("click", () => showUsageDetails(record, deviceName));
-    const deleteButton = document.createElement("button");
-    deleteButton.className = "text-button delete-record-button";
-    deleteButton.type = "button";
-    deleteButton.textContent = "删除";
-    deleteButton.setAttribute("aria-label", `删除${deviceName}在${record.date}的使用记录`);
-    deleteButton.addEventListener("click", () => deleteUsageRecord(record, deviceName, deleteButton));
-    actions.append(detailButton, deleteButton);
-    detailCell.append(actions);
+    detailCell.append(detailButton);
     row.append(detailCell);
     usageRows.append(row);
   }
@@ -413,6 +404,21 @@ function renderChallengeRecords(records, deviceNames) {
         answer.textContent = `作答：${attempt.selectedAnswer}`;
         row.append(answer);
       }
+      if (attempt?.correct) {
+        if (attempt.restorable && !attempt.inQuestionBank) {
+          const restoreButton = document.createElement("button");
+          restoreButton.className = "text-button restore-question-button";
+          restoreButton.type = "button";
+          restoreButton.textContent = "放回题库";
+          restoreButton.addEventListener("click", () => restoreAnsweredQuestion(attempt, restoreButton));
+          row.append(restoreButton);
+        } else {
+          const restoreStatus = document.createElement("span");
+          restoreStatus.className = "challenge-question-restore-status";
+          restoreStatus.textContent = attempt.inQuestionBank ? "已在题库" : "题目内容不可恢复";
+          row.append(restoreStatus);
+        }
+      }
       questions.append(row);
     }
     pane.append(questions);
@@ -467,18 +473,21 @@ async function loadRecords() {
   renderRecords(records);
 }
 
-async function deleteUsageRecord(record, deviceName, button) {
-  if (!window.confirm(`确定删除 ${deviceName} 在 ${record.date} 的每日使用记录吗？答题记录和设备信息不会删除。`)) return;
+async function restoreAnsweredQuestion(answer, button) {
   button.disabled = true;
   try {
-    await api(`/api/v1/admin/records/usage?${new URLSearchParams({ deviceId: record.deviceId, date: record.date })}`, {
-      method: "DELETE",
+    const result = await api("/api/v1/admin/answers/restore", {
+      method: "POST",
+      body: JSON.stringify({ attemptId: answer.attemptId }),
     });
-    setNotice("每日使用记录已删除");
-    await loadRecords();
+    answer.inQuestionBank = true;
+    const status = document.createElement("span");
+    status.className = "challenge-question-restore-status";
+    status.textContent = result.inQuestionBank ? "已在题库" : "已放回题库";
+    button.replaceWith(status);
+    setNotice(result.inQuestionBank ? "该题已在题库中" : "题目已放回题库");
   } catch (error) {
     handleError(error);
-  } finally {
     button.disabled = false;
   }
 }

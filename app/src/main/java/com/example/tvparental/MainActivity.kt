@@ -544,6 +544,7 @@ class MainActivity : Activity() {
         }
         val intent = Intent(this, QuestionOverlayService::class.java)
             .setAction(QuestionOverlayService.ACTION_SHOW_QUESTION)
+            .putExtra(QuestionOverlayService.EXTRA_TEST_QUESTION, true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
     }
 

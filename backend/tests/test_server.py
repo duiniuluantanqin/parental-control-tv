@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import sys
 import tempfile
 import threading
 import time
 import unittest
-from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 from http.cookiejar import CookieJar
 from http.server import ThreadingHTTPServer
@@ -31,7 +29,7 @@ class AdminApiTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.previous_store = server.STORE
         self.previous_auth = server.AUTH
-        server.STORE = server.StateStore(Path(self.temp_dir.name) / "state.json")
+        server.STORE = server.StateStore(Path(self.temp_dir.name) / "state.sqlite3")
         server.AUTH = server.AdminAuth(Path(self.temp_dir.name) / "admin.json")
         server.AUTH.set_password("admin", "test-password-123")
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.RequestHandler)
@@ -151,60 +149,12 @@ class AdminApiTests(unittest.TestCase):
             {"start": 100, "end": 121_000},
         ])
 
-    def test_usage_record_can_be_deleted_for_one_device_and_date(self) -> None:
-        self.request(
-            "/api/v1/device/usage", method="POST", authenticated=False,
-            body={"deviceId": "tv-01", "deviceName": "Family TV", "date": "2026-11-05", "usageMillis": 60_000},
+    def test_usage_record_delete_endpoint_is_removed(self) -> None:
+        status, _ = self.request(
+            "/api/v1/admin/records/usage?deviceId=tv-01&date=2026-11-05",
+            method="DELETE",
         )
-        path = "/api/v1/admin/records/usage?deviceId=tv-01&date=2026-11-05"
-        status, _ = self.request(path, method="DELETE", authenticated=False)
-        self.assertEqual(status, 401)
-
-        status, result = self.request(path, method="DELETE")
-        self.assertEqual(status, 200)
-        self.assertTrue(result["deleted"])
-        _, records = self.request("/api/v1/admin/records?date=2026-11-05")
-        self.assertEqual(records["usage"], [])
-        self.assertEqual(records["deviceDetails"][0]["name"], "Family TV")
-        self.request(
-            "/api/v1/device/usage", method="POST", authenticated=False,
-            body={"deviceId": "tv-01", "deviceName": "Family TV", "date": "2026-11-05", "usageMillis": 120_000},
-        )
-        _, records = self.request("/api/v1/admin/records?date=2026-11-05")
-        self.assertEqual(records["usage"], [])
-        status, _ = self.request(path, method="DELETE")
         self.assertEqual(status, 404)
-
-    def test_json_state_is_imported_once_into_sqlite_and_left_as_backup(self) -> None:
-        legacy_path = Path(self.temp_dir.name) / "state.json"
-        state = server.default_state()
-        state["settings"]["questionIntervalMinutes"] = 15
-        state["dailyUsage"] = [{
-            "deviceId": "tv-01", "date": "2026-11-05", "usageMillis": 120_000,
-            "intervals": [{"start": 1_000, "end": 121_000}],
-        }]
-        state["answerRecords"] = [{"attemptId": "answer-1", "deviceId": "tv-01", "date": "2026-11-05", "answeredAt": 2_000}]
-        state["challengeRecords"] = [{"sessionId": "challenge-1", "deviceId": "tv-01", "date": "2026-11-05", "startedAt": 1_000}]
-        state["devices"] = {"tv-01": {"name": "Family TV", "lastSeen": 1_000}}
-        legacy_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-
-        store = server.StateStore(legacy_path)
-        imported = store.load()
-
-        self.assertEqual(store.path, legacy_path.with_suffix(".sqlite3"))
-        self.assertEqual(imported["settings"]["questionIntervalMinutes"], 15)
-        self.assertEqual(imported["dailyUsage"], state["dailyUsage"])
-        self.assertEqual(imported["answerRecords"], state["answerRecords"])
-        self.assertEqual(imported["challengeRecords"], state["challengeRecords"])
-        self.assertEqual(imported["devices"], state["devices"])
-        self.assertTrue(legacy_path.exists())
-        with closing(sqlite3.connect(store.path)) as connection:
-            self.assertEqual(connection.execute("PRAGMA integrity_check").fetchone()[0], "ok")
-
-        imported["settings"]["questionIntervalMinutes"] = 20
-        store.save(imported)
-        self.assertEqual(server.StateStore(store.path).load()["settings"]["questionIntervalMinutes"], 20)
-        self.assertEqual(json.loads(legacy_path.read_text(encoding="utf-8"))["settings"]["questionIntervalMinutes"], 15)
 
     def test_answer_attempts_record_correctness_and_retry_without_duplicates(self) -> None:
         question = server.STORE.load()["questions"][0]
@@ -235,6 +185,38 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual([item["correct"] for item in records["answers"]], [True, False])
         self.assertTrue(all("correctAnswer" not in item for item in records["answers"]))
         self.assertEqual(len(server.STORE.load()["questions"]), 49)
+
+    def test_admin_can_restore_a_correct_answer_to_the_question_bank(self) -> None:
+        question = server.STORE.load()["questions"][0]
+        self.request(
+            "/api/v1/device/answers", method="POST", authenticated=False,
+            body={
+                "attemptId": "restore-attempt", "deviceId": "tv-01", "date": "2026-11-05",
+                "answeredAt": 1793836800000, "questionId": question["id"],
+                "challengeId": "restore-challenge", "selectedAnswer": question["answer"],
+                "question": question,
+            },
+        )
+        state = server.STORE.load()
+        state["answerRecords"][0].pop("question")
+        server.STORE.save(state)
+        _, records = self.request("/api/v1/admin/records?date=2026-11-05")
+        answer = records["answers"][0]
+        self.assertTrue(answer["restorable"])
+        self.assertFalse(answer["inQuestionBank"])
+        self.assertNotIn("question", answer)
+
+        path = "/api/v1/admin/answers/restore"
+        status, _ = self.request(path, method="POST", authenticated=False, body={"attemptId": "restore-attempt"})
+        self.assertEqual(status, 401)
+        status, result = self.request(path, method="POST", body={"attemptId": "restore-attempt"})
+        self.assertEqual(status, 200)
+        self.assertTrue(result["restored"])
+        self.assertIn(question["id"], {item["id"] for item in server.STORE.load()["questions"]})
+        status, result = self.request(path, method="POST", body={"attemptId": "restore-attempt"})
+        self.assertEqual(status, 200)
+        self.assertFalse(result["restored"])
+        self.assertTrue(result["inQuestionBank"])
 
     def test_admin_records_filter_usage_and_answers_by_device(self) -> None:
         question = server.STORE.load()["questions"][0]
