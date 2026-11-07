@@ -58,6 +58,7 @@ class MainActivity : Activity() {
     private lateinit var syncButton: Button
     private var autoOpenedOverlaySettings = false
     private var startupQuestionPending = false
+    private var remoteButtonStatus: TextView? = null
 
     companion object {
         private const val REQUEST_CODE_ENABLE_ADMIN = 1001
@@ -82,6 +83,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        refreshRemoteButtonStatus()
         registerSyncReceiver()
         statusHandler.removeCallbacks(statusRefresh)
         statusRefresh.run()
@@ -406,12 +408,49 @@ class MainActivity : Activity() {
             }
         }
         box.addView(alwaysShowRemainingTime, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(64)))
+        val blockRecentWatch = Switch(this).apply {
+            text = "Block Recent Watch button"
+            textSize = 18f
+            setTextColor(Color.rgb(235, 241, 237))
+            isChecked = ControlState.blockRecentWatch(this@MainActivity)
+            setOnCheckedChangeListener { _, enabled ->
+                ControlState.setBlockRecentWatch(this@MainActivity, enabled)
+                refreshRemoteButtonStatus()
+                if (enabled && !RecentWatchGuardService.hasAccess(this@MainActivity)) {
+                    Toast.makeText(this@MainActivity, "Select Accessibility access and enable Parental TV remote button control.", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        box.addView(blockRecentWatch, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(64)))
+        remoteButtonStatus = TextView(this).apply {
+            textSize = 14f
+            setTextColor(Color.rgb(185, 199, 191))
+            setPadding(0, dp(4), 0, dp(8))
+        }
+        box.addView(remoteButtonStatus, centeredParams())
+        refreshRemoteButtonStatus()
+        box.addView(menuButton("Accessibility access", android.R.drawable.ic_menu_preferences) {
+            try {
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            } catch (_: ActivityNotFoundException) {
+                Toast.makeText(this, "Enable Parental TV remote button control in the TV's accessibility settings.", Toast.LENGTH_LONG).show()
+            }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(58)))
         box.addView(menuButton("Done", android.R.drawable.ic_menu_close_clear_cancel) { dialog.dismiss() },
             LinearLayout.LayoutParams(dp(220), dp(58)).apply { topMargin = dp(18) })
+        dialog.setOnDismissListener { remoteButtonStatus = null }
         dialog.setContentView(box)
         dialog.setOnShowListener { startupQuestion.requestFocus() }
         dialog.show()
         dialog.window?.setLayout(dp(760), ViewGroup.LayoutParams.WRAP_CONTENT)
+    }
+
+    private fun refreshRemoteButtonStatus() {
+        remoteButtonStatus?.text = when {
+            !ControlState.blockRecentWatch(this) -> "Off. The Recent Watch button works normally."
+            !RecentWatchGuardService.hasAccess(this) -> "Not active yet. Enable Parental TV remote button control in Accessibility access."
+            else -> "On. Some TVs may briefly show Recent Watch before it closes."
+        }
     }
 
     private fun enterNewPassword() {

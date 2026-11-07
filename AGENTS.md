@@ -39,6 +39,7 @@
 
 - Android sources are under `app/`; the 50-question seed bank is `app/src/main/assets/questions.json`.
 - The launcher displays today's use and supports manual sync and an immediate test question. The backend URL is fixed in `ControlState.BACKEND_URL`.
+- PIN-protected Advanced settings has a local `Block Recent Watch button` switch (on by default; preserves an explicit off choice). `RecentWatchGuardService` requires accessibility access, consumes TCL scan code 613 when delivered, and closes only the confirmed TCL Recent Watch plugin activity as a firmware fallback. See `docs/REMOTE_BUTTON_CONTROL.md`; preserve Aerial and other accessibility services when testing.
 - The challenge unlocks after 4 correct answers out of 5. Every submitted answer is queued locally and reported to the backend; daily cumulative screen-on usage is reported once per minute.
 - The admin `/records` page displays daily usage and answer history. Backend state persists these records in its ignored runtime data file.
 - The Web admin has separate `/settings` and `/questions` pages and a modal question form. SQLite initializes the single admin as `admin/admin`; change its password from the admin page or reset it with `python backend/server.py --set-admin`. Password hashes share `backend/data/state.sqlite3` with application state.

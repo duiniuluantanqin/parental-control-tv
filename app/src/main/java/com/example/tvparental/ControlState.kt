@@ -43,6 +43,7 @@ object ControlState {
     private const val SYNC_INTERVAL_KEY = "sync_interval_minutes"
     private const val ALWAYS_SHOW_REMAINING_TIME_KEY = "always_show_remaining_time"
     private const val SHOW_QUESTION_ON_STARTUP_KEY = "show_question_on_startup"
+    const val BLOCK_RECENT_WATCH_KEY = "block_recent_watch"
     private const val MILLIS_PER_MINUTE = 60_000L
     private const val TEMP_EXTENSION_KEY = "temp_extension_millis"
     const val TEN_MINUTE_REMINDER_MINUTES = 10
@@ -94,6 +95,21 @@ object ControlState {
 
     fun setShowQuestionOnStartup(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(SHOW_QUESTION_ON_STARTUP_KEY, enabled).apply()
+    }
+
+    fun blockRecentWatch(context: Context): Boolean =
+        prefs(context).getBoolean(BLOCK_RECENT_WATCH_KEY, true)
+
+    fun setBlockRecentWatch(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(BLOCK_RECENT_WATCH_KEY, enabled).apply()
+    }
+
+    fun observeRemoteButtonSetting(context: Context, listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener) {
+        prefs(context).registerOnSharedPreferenceChangeListener(listener)
+    }
+
+    fun stopObservingRemoteButtonSetting(context: Context, listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener) {
+        prefs(context).unregisterOnSharedPreferenceChangeListener(listener)
     }
 
     @Synchronized
