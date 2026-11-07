@@ -251,6 +251,16 @@ async function loadState() {
   document.querySelector("#questionInterval").value = state.settings.questionIntervalMinutes;
   document.querySelector("#wrongLock").value = state.settings.wrongLockMinutes;
   document.querySelector("#syncInterval").value = state.settings.syncIntervalMinutes;
+  if (page === "settings" && !isLoginPage) {
+    const { devices } = await api("/api/v1/admin/devices");
+    const select = document.querySelector("#usageResetDevice");
+    const previous = select.value;
+    select.replaceChildren();
+    for (const device of devices) select.add(new Option(`${device.name} (${device.deviceId})`, device.deviceId));
+    if (devices.some(device => device.deviceId === previous)) select.value = previous;
+    if (!devices.length) select.add(new Option("暂无设备，请先让电视同步", ""));
+    document.querySelector("#resetDeviceUsage").disabled = !devices.length;
+  }
   questions = state.questions;
   renderCategories();
   renderQuestions();
@@ -843,6 +853,26 @@ document.querySelector("#resetDevicePin").addEventListener("click", async () => 
     await api("/api/v1/admin/password/reset", { method: "POST", body: JSON.stringify({}) });
     document.querySelector("#passwordResetStatus").textContent = "重置指令已发送，电视将在下次同步时应用。";
     setNotice("电视 PIN 重置指令已排队");
+  } catch (error) {
+    handleError(error);
+  } finally {
+    button.disabled = false;
+  }
+});
+document.querySelector("#resetDeviceUsage").addEventListener("click", async () => {
+  const select = document.querySelector("#usageResetDevice");
+  if (!select.value) return;
+  const deviceId = select.value;
+  const name = select.selectedOptions[0].textContent;
+  if (!window.confirm(`确认清零 ${name} 今天的使用时长和临时加时？电视下次同步后恢复当天配置额度，允许时段和答题规则仍然生效。`)) return;
+  const button = document.querySelector("#resetDeviceUsage");
+  button.disabled = true;
+  try {
+    const now = new Date();
+    const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    await api("/api/v1/admin/usage/reset", { method: "POST", body: JSON.stringify({ deviceId, date }) });
+    document.querySelector("#passwordResetStatus").textContent = `${name}：${date} 使用时长重置指令已发送，电视将在下次同步时应用。`;
+    setNotice("使用时长重置指令已排队");
   } catch (error) {
     handleError(error);
   } finally {

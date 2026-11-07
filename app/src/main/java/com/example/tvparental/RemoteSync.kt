@@ -9,8 +9,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
-import java.text.SimpleDateFormat
-import java.util.Date
+import java.net.URLEncoder
 import java.util.Locale
 
 data class SyncResult(
@@ -114,7 +113,9 @@ object RemoteSync {
                     report.disconnect()
                 }
             }
-            connection = URL("${ControlState.BACKEND_URL}/api/v1/device/state").openConnection() as HttpURLConnection
+            val usageDate = ControlState.usageReportSnapshot(context).getString("date")
+            val deviceQuery = URLEncoder.encode(deviceId(context), "UTF-8")
+            connection = URL("${ControlState.BACKEND_URL}/api/v1/device/state?deviceId=$deviceQuery&date=$usageDate").openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
             connection.connectTimeout = 5_000
             connection.readTimeout = 5_000
@@ -152,6 +153,12 @@ object RemoteSync {
             val parsed = QuestionBank.parseQuestions(questions.toString())
             val settingsChanged = ControlState.settings(context) != settings
             ControlState.updateSettings(context, settings)
+            state.optJSONObject("usageReset")?.let { command ->
+                if (ControlState.applyRemoteUsageReset(context, command.getString("id"), command.getString("date"))) {
+                    QuestionAlarmReceiver.scheduleForCurrentState(context)
+                    context.sendBroadcast(Intent(ACTION_USAGE_RESET).setPackage(context.packageName))
+                }
+            }
             check(ControlState.saveRemoteQuestions(context, JSONArray(parsed.map { QuestionBank.toJsonObject(it) }))) {
                 "Could not save the question bank. It will retry later."
             }
@@ -199,12 +206,9 @@ object RemoteSync {
             connection.readTimeout = 5_000
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            val now = System.currentTimeMillis()
-            val body = JSONObject()
+            val body = ControlState.usageReportSnapshot(context)
                 .put("deviceId", deviceId(context))
                 .put("deviceName", deviceName())
-                .put("date", SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(now)))
-                .put("usageMillis", ControlState.usedMillis(context))
                 .toString().toByteArray(Charsets.UTF_8)
             connection.setFixedLengthStreamingMode(body.size)
             connection.outputStream.use { it.write(body) }
@@ -244,4 +248,5 @@ object RemoteSync {
 
     const val ACTION_SYNC_COMPLETED = "com.example.tvparental.action.SYNC_COMPLETED"
     const val ACTION_PASSWORD_RESET = "com.example.tvparental.action.PASSWORD_RESET"
+    const val ACTION_USAGE_RESET = "com.example.tvparental.action.USAGE_RESET"
 }

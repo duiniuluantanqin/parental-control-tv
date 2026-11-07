@@ -29,6 +29,8 @@ object ControlState {
     private const val PREFERENCES = "parental_control"
     private const val DAY_KEY = "usage_day"
     private const val USED_MILLIS_KEY = "used_millis"
+    private const val USAGE_RESET_ID_KEY = "usage_reset_id"
+    private const val USAGE_RESET_AT_KEY = "usage_reset_at"
     private const val LOCKOUT_UNTIL_KEY = "lockout_until"
     private const val LOCKOUT_STARTED_AT_KEY = "lockout_started_at"
     private const val QUESTION_STARTED_AT_KEY = "question_started_at"
@@ -167,11 +169,38 @@ object ControlState {
         editor.apply()
     }
 
+    @Synchronized
     fun usedMillis(context: Context): Long {
         resetForNewDay(context)
         return prefs(context).getLong(USED_MILLIS_KEY, 0L).coerceAtLeast(0L)
     }
 
+    @Synchronized
+    fun usageReportSnapshot(context: Context): JSONObject {
+        resetForNewDay(context)
+        val preferences = prefs(context)
+        return JSONObject()
+            .put("date", preferences.getString(DAY_KEY, ""))
+            .put("usageMillis", preferences.getLong(USED_MILLIS_KEY, 0L).coerceAtLeast(0L))
+            .put("usageResetId", preferences.getString(USAGE_RESET_ID_KEY, ""))
+    }
+
+    @Synchronized
+    fun applyRemoteUsageReset(context: Context, commandId: String, date: String): Boolean {
+        resetForNewDay(context)
+        val preferences = prefs(context)
+        if (commandId.isBlank() || commandId.length > 64 || date != preferences.getString(DAY_KEY, null)) return false
+        if (preferences.getString(USAGE_RESET_ID_KEY, "") == commandId) return false
+        check(preferences.edit()
+            .putLong(USED_MILLIS_KEY, 0L)
+            .putLong(TEMP_EXTENSION_KEY, 0L)
+            .putString(USAGE_RESET_ID_KEY, commandId)
+            .putLong(USAGE_RESET_AT_KEY, System.currentTimeMillis())
+            .commit()) { "Could not reset today's usage. It will retry later." }
+        return true
+    }
+
+    @Synchronized
     fun addScreenTime(context: Context, elapsedMillis: Long) {
         if (elapsedMillis <= 0L) return
         resetForNewDay(context)
@@ -182,7 +211,7 @@ object ControlState {
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
-        val start = maxOf(now - elapsedMillis, todayStart)
+        val start = maxOf(now - elapsedMillis, todayStart, prefs(context).getLong(USAGE_RESET_AT_KEY, 0L))
         val countedMillis = allowedUsageMillis(settings(context), start, now)
         if (countedMillis == 0L) return
         val current = prefs(context).getLong(USED_MILLIS_KEY, 0L).coerceAtLeast(0L)
@@ -213,11 +242,13 @@ object ControlState {
     fun millisUntilNextUsageWindowBoundary(context: Context): Long? =
         nextUsageWindowTransition(settings(context), System.currentTimeMillis())
 
+    @Synchronized
     fun tempExtension(context: Context): Long {
         resetForNewDay(context)
         return prefs(context).getLong(TEMP_EXTENSION_KEY, 0L).coerceAtLeast(0L)
     }
 
+    @Synchronized
     fun grantPasswordExtension(context: Context) {
         resetForNewDay(context)
         prefs(context).edit()
@@ -433,6 +464,7 @@ object ControlState {
     fun getDeviceAdminComponent(context: Context): ComponentName =
         ComponentName(context, ParentalDeviceAdminReceiver::class.java)
 
+    @Synchronized
     private fun resetForNewDay(context: Context) {
         val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(System.currentTimeMillis())
         val preferences = prefs(context)
@@ -441,6 +473,8 @@ object ControlState {
                 .putString(DAY_KEY, today)
                 .putLong(USED_MILLIS_KEY, 0L)
                 .putLong(TEMP_EXTENSION_KEY, 0L)
+                .remove(USAGE_RESET_ID_KEY)
+                .remove(USAGE_RESET_AT_KEY)
                 .apply()
         }
     }

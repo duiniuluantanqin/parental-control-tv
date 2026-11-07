@@ -24,6 +24,7 @@ import android.view.WindowManager
 import android.widget.GridLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
@@ -88,7 +89,7 @@ class QuestionOverlayService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun showQuestion(testQuestion: Boolean = false) {
+    private fun showQuestion(testQuestion: Boolean = false, force: Boolean = false) {
         if (!Settings.canDrawOverlays(this)) {
             stopSelf()
             return
@@ -97,12 +98,13 @@ class QuestionOverlayService : Service() {
             ControlState.isDailyLimitReached(this) -> return showDailyLock()
             ControlState.lockoutUntil(this) > System.currentTimeMillis() -> return showLockout()
             !ControlState.isUsageWindowAllowed(this) -> return showUsageWindowLock()
-            currentMode == MODE_QUESTION && overlayView != null && !answerSubmitted -> return
+            !force && currentMode == MODE_QUESTION && overlayView != null && !answerSubmitted -> return
         }
         if (!testQuestion) ControlState.clearWrongAnswerLock(this)
         handler.removeCallbacks(lockTicker)
         removeOverlay()
         currentMode = MODE_QUESTION
+        pinEntryActive = false
         answerSubmitted = false
         isTestQuestion = testQuestion
 
@@ -232,18 +234,41 @@ class QuestionOverlayService : Service() {
         }
         root.addView(status, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52)))
         lockCountdown = status
+        addUnlockButton(root, MODE_QUESTION)
+        unlockButton?.apply {
+            setOnFocusChangeListener { _, hasFocus ->
+                renderPinButtonFocus(this, hasFocus)
+                if (hasFocus) renderOptionSelection(optionViews, -1)
+            }
+            setOnKeyListener { _, keyCode, event ->
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_UP -> {
+                        if (event.action == KeyEvent.ACTION_DOWN) {
+                            optionViews[if (selectedIndex >= 2) selectedIndex else 2].requestFocus()
+                        }
+                        true
+                    }
+                    KeyEvent.KEYCODE_BACK -> true
+                    else -> false
+                }
+            }
+        }
 
         moveFocus = { index, keyCode ->
-            val nextIndex = when (keyCode) {
-                KeyEvent.KEYCODE_DPAD_LEFT -> if (index % 2 == 1) index - 1 else index
-                KeyEvent.KEYCODE_DPAD_RIGHT -> if (index % 2 == 0) index + 1 else index
-                KeyEvent.KEYCODE_DPAD_UP -> if (index >= 2) index - 2 else index
-                KeyEvent.KEYCODE_DPAD_DOWN -> if (index < 2) index + 2 else index
-                else -> index
+            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN && index >= 2 && !answerSubmitted) {
+                unlockButton?.requestFocus()
+            } else {
+                val nextIndex = when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> if (index % 2 == 1) index - 1 else index
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> if (index % 2 == 0) index + 1 else index
+                    KeyEvent.KEYCODE_DPAD_UP -> if (index >= 2) index - 2 else index
+                    KeyEvent.KEYCODE_DPAD_DOWN -> if (index < 2) index + 2 else index
+                    else -> index
+                }
+                selectedIndex = nextIndex
+                optionViews[nextIndex].requestFocus()
+                renderOptionSelection(optionViews, selectedIndex)
             }
-            selectedIndex = nextIndex
-            optionViews[nextIndex].requestFocus()
-            renderOptionSelection(optionViews, selectedIndex)
         }
         renderOptionSelection(optionViews, selectedIndex)
         MediaPlaybackController.pauseActivePlayback(this)
@@ -259,6 +284,7 @@ class QuestionOverlayService : Service() {
             return
         }
         answerSubmitted = true
+        unlockButton?.isEnabled = false
         if (!testQuestion) ControlState.clearQuestionTimeout(this)
         handler.removeCallbacks(lockTicker)
         lockCountdown?.text = ""
@@ -290,15 +316,13 @@ class QuestionOverlayService : Service() {
             showLockout()
             return
         }
-        (root as? LinearLayout)?.let { layout ->
-            (layout.getChildAt(layout.childCount - 1) as? TextView)?.apply {
-                text = when {
-                    progress.passed -> "${progress.correctCount}/${QuestionBank.CHALLENGE_QUESTION_COUNT} correct - access unlocked"
-                    selected == question.answer -> "Correct answer - ${progress.correctCount}/${QuestionBank.CHALLENGE_REQUIRED_CORRECT} needed"
-                    else -> "Incorrect answer - ${progress.correctCount}/${QuestionBank.CHALLENGE_REQUIRED_CORRECT} needed"
-                }
-                setTextColor(if (selected == question.answer) Color.rgb(185, 222, 119) else Color.rgb(238, 154, 131))
+        lockCountdown?.apply {
+            text = when {
+                progress.passed -> "${progress.correctCount}/${QuestionBank.CHALLENGE_QUESTION_COUNT} correct - access unlocked"
+                selected == question.answer -> "Correct answer - ${progress.correctCount}/${QuestionBank.CHALLENGE_REQUIRED_CORRECT} needed"
+                else -> "Incorrect answer - ${progress.correctCount}/${QuestionBank.CHALLENGE_REQUIRED_CORRECT} needed"
             }
+            setTextColor(if (selected == question.answer) Color.rgb(185, 222, 119) else Color.rgb(238, 154, 131))
         }
         root.postDelayed({
             if (ControlState.isDailyLimitReached(this)) {
@@ -471,7 +495,7 @@ class QuestionOverlayService : Service() {
     }
 
     private fun addUnlockButton(root: LinearLayout, mode: Int) {
-        if (!ControlState.hasUnlockPassword(this)) {
+        if (mode != MODE_QUESTION && !ControlState.hasUnlockPassword(this)) {
             root.addView(TextView(this).apply {
                 text = "Set a parent PIN on the home screen."
                 setTextColor(Color.rgb(150, 160, 152))
@@ -481,7 +505,7 @@ class QuestionOverlayService : Service() {
             return
         }
         val button = TextView(this).apply {
-            text = "Unlock with PIN"
+            text = if (mode == MODE_QUESTION) "SKIP" else "Unlock with PIN"
             setTextColor(Color.rgb(155, 165, 156))
             textSize = 14f
             gravity = Gravity.CENTER
@@ -490,22 +514,33 @@ class QuestionOverlayService : Service() {
             isFocusableInTouchMode = true
             isClickable = true
             setOnFocusChangeListener { _, hasFocus ->
-                setTextColor(if (hasFocus) Color.rgb(210, 239, 111) else Color.rgb(155, 165, 156))
-                setTypeface(null, if (hasFocus) Typeface.BOLD else Typeface.NORMAL)
-                paintFlags = if (hasFocus) paintFlags or Paint.UNDERLINE_TEXT_FLAG
-                else paintFlags and Paint.UNDERLINE_TEXT_FLAG.inv()
+                renderPinButtonFocus(this, hasFocus)
             }
             background = null
-            setOnClickListener { showPasswordEntry(mode) }
+            setOnClickListener {
+                if (mode == MODE_QUESTION && answerSubmitted) return@setOnClickListener
+                if (ControlState.hasUnlockPassword(this@QuestionOverlayService)) {
+                    showPasswordEntry(mode)
+                } else {
+                    Toast.makeText(this@QuestionOverlayService, "Set a parent PIN on the home screen first.", Toast.LENGTH_LONG).show()
+                }
+            }
         }
         unlockButton = button
         root.addView(button, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT,
+            if (mode == MODE_QUESTION) dp(96) else LinearLayout.LayoutParams.WRAP_CONTENT,
+            if (mode == MODE_QUESTION) dp(40) else LinearLayout.LayoutParams.WRAP_CONTENT,
         ).apply {
             gravity = Gravity.CENTER_HORIZONTAL
-            topMargin = dp(12)
+            topMargin = dp(if (mode == MODE_QUESTION) 0 else 12)
         })
+    }
+
+    private fun renderPinButtonFocus(button: TextView, hasFocus: Boolean) {
+        button.setTextColor(if (hasFocus) Color.rgb(210, 239, 111) else Color.rgb(155, 165, 156))
+        button.setTypeface(null, if (hasFocus) Typeface.BOLD else Typeface.NORMAL)
+        button.paintFlags = if (hasFocus) button.paintFlags or Paint.UNDERLINE_TEXT_FLAG
+        else button.paintFlags and Paint.UNDERLINE_TEXT_FLAG.inv()
     }
 
     private fun showPasswordEntry(mode: Int) {
@@ -520,7 +555,7 @@ class QuestionOverlayService : Service() {
         }
         addRemainingTimeLabel(root)
         root.addView(TextView(this).apply {
-            text = "Unlock with PIN"
+            text = if (mode == MODE_QUESTION) "Skip with parent PIN" else "Unlock with PIN"
             setTextColor(Color.rgb(220, 235, 222))
             textSize = 28f
             gravity = Gravity.CENTER
@@ -528,12 +563,17 @@ class QuestionOverlayService : Service() {
         addLockCountdown(root)
         val pad = PasswordPad(this, true, onBack = {
             pinEntryActive = false
-            renderLock(mode, force = true)
+            if (mode == MODE_QUESTION) showQuestion(isTestQuestion, force = true)
+            else renderLock(mode, force = true)
         }, onComplete = { entered ->
             if (ControlState.verifyUnlockPassword(this, entered)) {
                 failedAttempts = 0
                 pinCooldownUntil = 0L
-                if (mode == MODE_DAILY_LOCK) unlockDailyLimit() else unlockWrongLock()
+                when (mode) {
+                    MODE_QUESTION -> skipChallenge()
+                    MODE_DAILY_LOCK -> unlockDailyLimit()
+                    else -> unlockWrongLock()
+                }
             } else {
                 failedAttempts++
                 unlockPad?.reset()
@@ -567,7 +607,8 @@ class QuestionOverlayService : Service() {
         }
         root.addView(pinHint, matchParams())
         root.addView(TextView(this).apply {
-            text = "Press Back to return to the lock screen."
+            text = if (mode == MODE_QUESTION) "Press Back to return to the question."
+            else "Press Back to return to the lock screen."
             setTextColor(Color.rgb(193, 203, 194))
             textSize = 16f
             gravity = Gravity.CENTER
@@ -580,6 +621,29 @@ class QuestionOverlayService : Service() {
         attachOverlay(root)
         updateLockCountdown()
         root.post { pad.requestFocus() }
+    }
+
+    private fun skipChallenge() {
+        if (currentMode != MODE_QUESTION || !pinEntryActive || answerSubmitted) return
+        if (isTestQuestion) {
+            hideOverlay(preserveQuestionTimeout = true)
+            return
+        }
+        when {
+            ControlState.isDailyLimitReached(this) -> return showDailyLock()
+            ControlState.lockoutUntil(this) > System.currentTimeMillis() -> return showLockout()
+            !ControlState.isUsageWindowAllowed(this) -> return showUsageWindowLock()
+        }
+        answerSubmitted = true
+        // Use the existing parent-override completion path without recording any answers.
+        QuestionBank.finishChallenge(this)
+        ControlState.clearQuestionTimeout(this)
+        ControlState.clearWrongAnswerLock(this)
+        QuestionAlarmReceiver.scheduleNext(this)
+        hideOverlay()
+        RemoteSync.syncAsync(applicationContext) { result ->
+            if (result.settingsChanged) QuestionAlarmReceiver.scheduleForCurrentState(applicationContext)
+        }
     }
 
     private fun unlockDailyLimit() {

@@ -289,6 +289,26 @@ class StateStore:
                 self._create_schema(connection)
                 self._write_state(connection, state)
 
+    def queue_usage_reset(self, device_id: str, record_date: str) -> dict[str, str]:
+        if not isinstance(device_id, str) or not 1 <= len(device_id) <= 80:
+            raise ValueError("请选择要重置的设备")
+        if not isinstance(record_date, str) or date.fromisoformat(record_date).isoformat() != record_date:
+            raise ValueError("日期格式必须为 YYYY-MM-DD")
+        with self.lock:
+            state = self.load()
+            device = state["devices"].get(device_id)
+            if device is None:
+                raise ValueError("设备尚未上报使用时长，请先让电视同步")
+            command = {"id": uuid.uuid4().hex, "date": record_date}
+            device.setdefault("usageResets", {})[record_date] = command
+            for record in state["dailyUsage"]:
+                if record["deviceId"] == device_id and record["date"] == record_date:
+                    record.update(usageMillis=0, intervals=[])
+            if device.get("lastUsageDate", record_date) == record_date:
+                device.update(lastUsageMillis=0, lastUsageAt=0)
+            self.save(state)
+            return command
+
     @staticmethod
     def _create_schema(connection: sqlite3.Connection) -> None:
         connection.executescript("""
@@ -389,7 +409,7 @@ class StateStore:
                 [(device_id, encoded(item)) for device_id, item in state["devices"].items()],
             )
 
-    def snapshot(self) -> dict[str, object]:
+    def snapshot(self, device_id: str = "", record_date: str = "") -> dict[str, object]:
         with self.lock:
             state = self.load()
             if not state["questions"]:
@@ -398,6 +418,7 @@ class StateStore:
                 "settings": state["settings"],
                 "questions": state["questions"],
                 "passwordReset": state["passwordReset"],
+                "usageReset": state["devices"].get(device_id, {}).get("usageResets", {}).get(record_date),
                 "version": BACKEND_VERSION,
                 "refill": {"running": self.refill_running, "error": self.refill_error},
             }
@@ -585,7 +606,8 @@ class RequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
         if path == "/api/v1/device/state":
-            self.send_json(200, STORE.snapshot())
+            params = parse_qs(urlsplit(self.path).query)
+            self.send_json(200, STORE.snapshot(params.get("deviceId", [""])[0], params.get("date", [""])[0]))
         elif path == "/api/v1/admin/state":
             if self.require_admin():
                 self.send_json(200, STORE.snapshot())
@@ -709,11 +731,17 @@ class RequestHandler(BaseHTTPRequestHandler):
                     now_ms = int(time.time() * 1000)
                     devices = state["devices"]
                     device = devices.get(device_id, {"name": device_id, "lastSeen": 0, "lastUsageMillis": 0, "lastUsageAt": 0})
+                    reset = device.get("usageResets", {}).get(record_date)
+                    expected_reset_id = reset["id"] if reset else ""
+                    if payload.get("usageResetId", "") != expected_reset_id:
+                        self.send_json(409, {"accepted": False, "error": "使用时长已重置，请先同步电视", "resetRequired": True})
+                        return
                     name = payload.get("deviceName")
                     if isinstance(name, str) and 1 <= len(name.strip()) <= 100:
                         device["name"] = name.strip()
-                    previous_total = device.get("lastUsageMillis", 0)
-                    previous_at = device.get("lastUsageAt", 0)
+                    same_day = device.get("lastUsageDate", record_date) == record_date
+                    previous_total = device.get("lastUsageMillis", 0) if same_day else 0
+                    previous_at = device.get("lastUsageAt", 0) if same_day else 0
                     delta = max(0, usage_millis - previous_total)
                     elapsed = now_ms - previous_at if isinstance(previous_at, int) and previous_at else 0
                     if delta and elapsed > 0:
@@ -727,6 +755,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     device["lastSeen"] = now_ms
                     device["lastUsageAt"] = now_ms
                     device["lastUsageMillis"] = usage_millis
+                    device["lastUsageDate"] = record_date
                     devices[device_id] = device
                     if record is None:
                         record = {"deviceId": device_id, "date": record_date, "usageMillis": usage_millis}
@@ -1035,6 +1064,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             if path == "/api/v1/admin/password/reset":
                 command = STORE.queue_password_reset()
                 self.send_json(202, {"queued": True, "id": command["id"]})
+                return
+            if path == "/api/v1/admin/usage/reset":
+                command = STORE.queue_usage_reset(payload.get("deviceId"), payload.get("date"))
+                self.send_json(202, {"queued": True, **command})
                 return
             with STORE.lock:
                 state = STORE.load()

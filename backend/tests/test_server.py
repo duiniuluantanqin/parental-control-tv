@@ -101,6 +101,65 @@ class AdminApiTests(unittest.TestCase):
         self.assertTrue(records["usage"][0]["intervals"])
         self.assertGreater(records["usage"][0]["lastReportedAt"], 0)
 
+    def test_usage_reset_is_scoped_persistent_and_rejects_stale_reports(self) -> None:
+        today, yesterday = "2026-11-07", "2026-11-06"
+        for device_id, day, amount in (("tv-01", yesterday, 40_000), ("tv-02", today, 90_000), ("tv-01", today, 120_000)):
+            self.request("/api/v1/device/usage", method="POST", authenticated=False,
+                         body={"deviceId": device_id, "date": day, "usageMillis": amount})
+        before = server.STORE.load()
+        payload = {"deviceId": "tv-01", "date": today}
+        status, _ = self.request("/api/v1/admin/usage/reset", method="POST", authenticated=False, body=payload)
+        self.assertEqual(status, 401)
+        status, command = self.request("/api/v1/admin/usage/reset", method="POST", body=payload)
+        self.assertEqual(status, 202)
+        self.assertTrue(command["queued"])
+        query = f"/api/v1/device/state?deviceId=tv-01&date={today}"
+        _, synced = self.request(query, authenticated=False)
+        self.assertEqual(synced["usageReset"], {"id": command["id"], "date": today})
+        reopened = server.StateStore(server.STORE.path)
+        self.assertEqual(reopened.snapshot("tv-01", today)["usageReset"], synced["usageReset"])
+        self.assertIsNone(reopened.snapshot("tv-02", today)["usageReset"])
+        self.assertIsNone(reopened.snapshot("tv-01", yesterday)["usageReset"])
+        after = reopened.load()
+        totals = {(item["deviceId"], item["date"]): item["usageMillis"] for item in after["dailyUsage"]}
+        self.assertEqual(totals, {("tv-01", today): 0, ("tv-01", yesterday): 40_000, ("tv-02", today): 90_000})
+        for key in ("passwordReset", "settings", "questions", "answerRecords", "challengeRecords"):
+            self.assertEqual(after[key], before[key])
+        report = {**payload, "usageMillis": 150_000}
+        status, result = self.request("/api/v1/device/usage", method="POST", authenticated=False, body=report)
+        self.assertEqual(status, 409)
+        self.assertFalse(result["accepted"])
+        self.assertEqual(server.STORE.load(), after)
+        report.update(usageMillis=15_000, usageResetId=command["id"])
+        status, result = self.request("/api/v1/device/usage", method="POST", authenticated=False, body=report)
+        self.assertEqual(status, 200)
+        self.assertEqual(result["usageMillis"], 15_000)
+        # Reading the same command does not zero accepted reports again.
+        for _ in range(2):
+            self.request(query, authenticated=False)
+        current = next(item for item in server.STORE.load()["dailyUsage"] if item["deviceId"] == "tv-01" and item["date"] == today)
+        self.assertEqual(current["usageMillis"], 15_000)
+        _, second = self.request("/api/v1/admin/usage/reset", method="POST", body=payload)
+        self.assertNotEqual(second["id"], command["id"])
+        status, _ = self.request("/api/v1/device/usage", method="POST", authenticated=False, body=report)
+        self.assertEqual(status, 409)
+        report.update(usageMillis=0, usageResetId=second["id"])
+        status, result = self.request("/api/v1/device/usage", method="POST", authenticated=False, body=report)
+        self.assertEqual((status, result["usageMillis"]), (200, 0))
+        # An old command cannot reset the next calendar day's allowance.
+        status, result = self.request("/api/v1/device/usage", method="POST", authenticated=False,
+                                     body={"deviceId": "tv-01", "date": "2026-11-08", "usageMillis": 30_000})
+        self.assertEqual((status, result["usageMillis"]), (200, 30_000))
+
+    def test_usage_reset_validates_device_and_date_without_changing_state(self) -> None:
+        before = server.STORE.load()
+        for payload in ({}, {"deviceId": "unknown", "date": "2026-11-07"},
+                        {"deviceId": "tv-01", "date": "2026-02-30"},
+                        {"deviceId": "tv-01", "date": "20261107"}):
+            status, _ = self.request("/api/v1/admin/usage/reset", method="POST", body=payload)
+            self.assertEqual(status, 400)
+            self.assertEqual(server.STORE.load(), before)
+
     def test_device_registry_includes_name_and_online_status(self) -> None:
         payload = {
             "deviceId": "device-uuid-123", "deviceName": "TCL Thunderbird TV",

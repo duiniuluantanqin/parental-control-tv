@@ -43,6 +43,14 @@ class UsageTrackingService : Service() {
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == RemoteSync.ACTION_USAGE_RESET) {
+                lastSample = SystemClock.elapsedRealtime()
+                lastUsageReport = 0L
+                wasInteractive = powerManager().isInteractive
+                refreshTrackedState()
+                reportUsageIfDue()
+                return
+            }
             if (intent?.action == RemoteSync.ACTION_SYNC_COMPLETED) {
                 wasInteractive = powerManager().isInteractive
                 refreshTrackedState()
@@ -81,6 +89,7 @@ class UsageTrackingService : Service() {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(RemoteSync.ACTION_SYNC_COMPLETED)
+            addAction(RemoteSync.ACTION_USAGE_RESET)
         }
         registerReceiver(screenReceiver, filter)
         receiverRegistered = true

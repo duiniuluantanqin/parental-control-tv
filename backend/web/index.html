@@ -66,9 +66,16 @@
       </form>
       <section class="settings-panel password-reset-panel" aria-labelledby="passwordResetTitle">
         <div class="weekly-heading">
-          <div><h2 id="passwordResetTitle">电视 PIN 重置</h2><p>重置后默认 PIN 为“上下左右上上”。电视将在下次云端同步时应用。</p></div>
+          <div><h2 id="passwordResetTitle">电视重置</h2><p>重置 PIN 后默认密码为“上下左右上上”。重置使用时长会清零所选设备今天的计时和临时加时，恢复当天配置额度；允许时段和答题规则仍然生效。电视将在下次云端同步时应用。</p></div>
         </div>
-        <div class="settings-footer"><p id="passwordResetStatus">重置指令仅在管理员确认后发送。</p><button id="resetDevicePin" class="button secondary" type="button">重置电视 PIN</button></div>
+        <div class="reset-device-field"><label for="usageResetDevice">重置时长的设备</label><select id="usageResetDevice"><option value="">正在载入设备…</option></select></div>
+        <div class="settings-footer">
+          <p id="passwordResetStatus" role="status">重置指令仅在管理员确认后发送。</p>
+          <div class="reset-actions">
+            <button id="resetDevicePin" class="button secondary" type="button">重置电视 PIN</button>
+            <button id="resetDeviceUsage" class="button secondary" type="button" disabled>重置使用时长</button>
+          </div>
+        </div>
       </section>
     </section>
 
