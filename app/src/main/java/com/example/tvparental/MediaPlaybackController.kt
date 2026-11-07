@@ -7,8 +7,6 @@ import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.provider.Settings
 
-class MediaControlListenerService : android.service.notification.NotificationListenerService()
-
 object MediaPlaybackController {
     fun hasAccess(context: Context): Boolean {
         val component = ComponentName(context, MediaControlListenerService::class.java)

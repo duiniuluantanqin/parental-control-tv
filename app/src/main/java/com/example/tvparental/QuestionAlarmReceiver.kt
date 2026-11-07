@@ -54,6 +54,15 @@ class QuestionAlarmReceiver : BroadcastReceiver() {
             }
         }
 
+        fun restoreScheduled(context: Context) {
+            val scheduledAt = alarmPreferences(context).getLong(ALARM_AT_KEY, 0L)
+            if (scheduledAt > 0L) {
+                scheduleAfter(context, scheduledAt - System.currentTimeMillis())
+            } else {
+                scheduleForCurrentState(context)
+            }
+        }
+
         fun scheduleForCurrentState(context: Context) {
             val now = System.currentTimeMillis()
             when {

@@ -23,6 +23,8 @@ import android.view.WindowManager
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import java.io.FileDescriptor
+import java.io.PrintWriter
 
 class UsageTrackingService : Service() {
     private val handler = Handler(Looper.getMainLooper())
@@ -71,6 +73,7 @@ class UsageTrackingService : Service() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification())
+        isRunning = true
         wasInteractive = powerManager().isInteractive
         overlayPaused = ControlState.isQuestionOverlayActive(this)
         lastSample = SystemClock.elapsedRealtime()
@@ -103,6 +106,7 @@ class UsageTrackingService : Service() {
     }
 
     override fun onDestroy() {
+        isRunning = false
         handler.removeCallbacks(ticker)
         hideUsageReminder()
         if (receiverRegistered) unregisterReceiver(screenReceiver)
@@ -110,6 +114,11 @@ class UsageTrackingService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun dump(fd: FileDescriptor?, writer: PrintWriter, args: Array<out String>?) {
+        writer.println("Usage tracking: running=$isRunning lastSampleElapsed=$lastSample")
+        writer.println("interactive=$wasInteractive overlayPaused=$overlayPaused")
+    }
 
     private fun accountElapsedTime() {
         val now = SystemClock.elapsedRealtime()
@@ -146,7 +155,8 @@ class UsageTrackingService : Service() {
         val notification = buildNotification(
             "Used today: ${ControlState.todayUsageLabel(this)} / ${ControlState.todayDailyLimitMinutes(this)} min",
         )
-        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification)
+        // Keep notification updates tied to foreground status, including after recovery.
+        startForeground(NOTIFICATION_ID, notification)
     }
 
     private fun nextSampleDelay(): Long {
@@ -340,6 +350,9 @@ class UsageTrackingService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
 
     companion object {
+        var isRunning = false
+            private set
+
         const val ACTION_START = "com.example.tvparental.action.START_USAGE_TRACKING"
         const val ACTION_REFRESH_DISPLAY = "com.example.tvparental.action.REFRESH_USAGE_DISPLAY"
         const val ACTION_SET_OVERLAY_PAUSED = "com.example.tvparental.action.SET_OVERLAY_PAUSED"

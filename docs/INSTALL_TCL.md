@@ -79,6 +79,15 @@ try {
 & $adb -s $adbTarget shell appops set com.example.tvparental APP_ASSOC_START allow
 ```
 
+答题弹窗前暂停播放还需要本应用的“通知使用权”，与悬浮窗及自启动权限分别设置。可在应用首页选择 `Allow media pause`，进入系统设置开启；这台 TCL Android 9 电视也支持通过 ADB 授权：
+
+```powershell
+& $adb -s $adbTarget shell cmd notification allow_listener com.example.tvparental/com.example.tvparental.MediaControlListenerService 0
+& $adb -s $adbTarget shell settings get secure enabled_notification_listeners
+```
+
+回读结果应包含 `com.example.tvparental/com.example.tvparental.MediaControlListenerService`。该授权允许应用查询媒体会话并发送暂停命令，播放器需要提供可控的 Android 媒体会话。卸载重装后应重新检查此授权；当前安装脚本只自动设置上述三个 app-op。
+
 打开应用，确认首页显示的每日额度、题目间隔和题库数量。默认每日额度为 60 分钟、答题间隔为 10 分钟、答错锁定为 10 分钟；题库包含 50 道初中难度题目并随机抽取。首次打开应用会自动跳转到悬浮窗权限页，请用遥控器允许；随后在首页选择“设置解锁密码”，用方向键输入两次 6 位密码。手动“Test question”只显示一道测试题，不记录答案、不消耗题目，也不会触发锁定。启动时答题使用正式五题挑战，五题中至少答对四题即可解锁；全部作答后正确数少于四题才开始答错锁定。四个选项分成 2×2，方向键移动并高亮，按 OK 提交，没有单独的提交按钮。升级后通常会保留已授予的悬浮窗权限。
 
 应用启动后自动从 `https://tvparental.mediainsight360.com` 获取题库和规则，无需在电视配置地址、用户名或密码。升级后也固定使用该域名，不再读取旧版保存的后台地址。可在首页选择“立即同步题目和规则”进行验证。管理页面和部署方式见项目根目录的 `README.md`。设备默认每 5 分钟同步一次，同步间隔可在后台调整为 1–60 分钟。

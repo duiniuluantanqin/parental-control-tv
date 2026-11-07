@@ -61,6 +61,7 @@ class QuestionOverlayService : Service() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification())
+        isRunning = true
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -77,6 +78,7 @@ class QuestionOverlayService : Service() {
     }
 
     override fun onDestroy() {
+        isRunning = false
         handler.removeCallbacks(lockTicker)
         handler.removeCallbacks(pinCooldown)
         removeOverlay()
@@ -824,6 +826,9 @@ class QuestionOverlayService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
 
     companion object {
+        var isRunning = false
+            private set
+
         const val ACTION_SHOW_QUESTION = "com.example.tvparental.action.SHOW_QUESTION"
         const val ACTION_DAILY_LIMIT = "com.example.tvparental.action.DAILY_LIMIT"
         const val ACTION_LOCKOUT = "com.example.tvparental.action.LOCKOUT"
