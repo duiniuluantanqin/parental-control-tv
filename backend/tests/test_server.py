@@ -81,6 +81,53 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(state["settings"], server.DEFAULT_SETTINGS)
         self.assertIsNone(state["passwordReset"])
 
+    def test_question_priority_requires_admin_and_survives_sync_and_reload(self) -> None:
+        original = server.STORE.load()["questions"][0]
+        self.assertFalse(original["priority"])
+        path = f"/api/v1/admin/questions/{original['id']}/priority"
+        status, _ = self.request(path, method="POST", authenticated=False)
+        self.assertEqual(status, 401)
+        for enabled in (True, True, False):
+            status, result = self.request(path, method="POST", body={"priority": enabled})
+            self.assertEqual(status, 200)
+            self.assertEqual(result["question"], {**original, "priority": enabled})
+            reopened = server.StateStore(server.STORE.path)
+            self.assertEqual(reopened.load()["questions"][0]["priority"], enabled)
+            _, synced = self.request("/api/v1/device/state", authenticated=False)
+            self.assertEqual(synced["questions"][0]["priority"], enabled)
+            self.assertEqual(len(synced["questions"]), 50)
+            self.assertTrue(all(not item["priority"] for item in synced["questions"][1:]))
+
+    def test_question_priority_rejects_invalid_values_and_missing_questions(self) -> None:
+        before = server.STORE.load()
+        question = before["questions"][0]
+        path = f"/api/v1/admin/questions/{question['id']}/priority"
+        for value in (None, 0, 1, "true", [], {}):
+            status, _ = self.request(path, method="POST", body={"priority": value})
+            self.assertEqual(status, 400)
+            with self.assertRaises(ValueError):
+                server.validate_question({**question, "priority": value})
+            self.assertEqual(server.STORE.load(), before)
+        status, _ = self.request("/api/v1/admin/questions/missing/priority", method="POST", body={"priority": True})
+        self.assertEqual(status, 404)
+        self.assertEqual(server.STORE.load(), before)
+        legacy = {key: value for key, value in question.items() if key != "priority"}
+        self.assertFalse(server.validate_question(legacy)["priority"])
+
+    def test_question_priority_is_preserved_when_correct_answer_is_restored(self) -> None:
+        question = server.STORE.load()["questions"][0]
+        self.request(f"/api/v1/admin/questions/{question['id']}/priority", method="POST", body={"priority": True})
+        status, _ = self.request("/api/v1/device/answers", method="POST", authenticated=False, body={
+            "attemptId": "priority-answer", "deviceId": "tv-01", "date": "2026-11-08",
+            "answeredAt": 1794096000000, "questionId": question["id"], "selectedAnswer": question["answer"],
+        })
+        self.assertEqual(status, 200)
+        self.assertNotIn(question["id"], {item["id"] for item in server.STORE.load()["questions"]})
+        status, _ = self.request("/api/v1/admin/answers/restore", method="POST", body={"attemptId": "priority-answer"})
+        self.assertEqual(status, 200)
+        restored = next(item for item in server.STORE.load()["questions"] if item["id"] == question["id"])
+        self.assertTrue(restored["priority"])
+
     def test_device_usage_reports_are_daily_cumulative_and_admin_only(self) -> None:
         payload = {"deviceId": "tv-01", "date": "2026-11-05", "usageMillis": 60_000}
         for amount in (60_000, 120_000, 90_000):

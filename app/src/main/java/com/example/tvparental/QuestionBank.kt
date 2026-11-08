@@ -16,6 +16,7 @@ data class TvQuestion(
     val answer: String,
     val category: String,
     val difficulty: String,
+    val priority: Boolean = false,
 )
 
 data class ChallengeProgress(
@@ -99,12 +100,7 @@ object QuestionBank {
                 val available = all(context)
                 if (available.size < CHALLENGE_QUESTION_COUNT) return null
                 val previousId = preferences.getString(LAST_QUESTION_ID, null)
-                val candidates = if (available.size > CHALLENGE_QUESTION_COUNT) {
-                    available.filterNot { it.id == previousId }
-                } else {
-                    available
-                }
-                candidates.shuffled().take(CHALLENGE_QUESTION_COUNT)
+                selectQuestions(available, CHALLENGE_QUESTION_COUNT, previousId)
             }
             val startedAt = System.currentTimeMillis()
             val sessionId = UUID.randomUUID().toString()
@@ -350,6 +346,20 @@ object QuestionBank {
             .apply()
     }
 
+    internal fun selectQuestions(available: List<TvQuestion>, count: Int, previousId: String? = null): List<TvQuestion> {
+        val (priority, regular) = available.partition { it.priority }
+        val ordered = (priority.shuffled() + regular.shuffled()).toMutableList()
+        // Avoid an immediate repeat without dropping a priority question from the challenge.
+        if (ordered.size > 1 && ordered.first().id == previousId) {
+            val first = ordered[0]
+            ordered[0] = ordered[1]
+            ordered[1] = first
+        }
+        return ordered.take(count)
+    }
+
+    fun testQuestion(context: Context): TvQuestion? = selectQuestions(all(context), 1).firstOrNull()
+
     fun parseQuestions(json: String): List<TvQuestion> {
         val array = JSONArray(json)
         return (0 until array.length()).map { index ->
@@ -363,6 +373,7 @@ object QuestionBank {
                 answer = item.getString("answer"),
                 category = item.optString("category", "Other"),
                 difficulty = item.optString("difficulty", "Middle school"),
+                priority = item.optBoolean("priority", false),
             )
             require(question.id.isNotBlank() && question.prompt.isNotBlank())
             require(question.options.size == 4 && question.options.distinct().size == 4)
@@ -378,6 +389,7 @@ object QuestionBank {
         .put("answer", question.answer)
         .put("category", question.category)
         .put("difficulty", question.difficulty)
+        .put("priority", question.priority)
 
     fun displayCategory(category: String): String = when (category) {
         "古诗词" -> "Classical poetry"

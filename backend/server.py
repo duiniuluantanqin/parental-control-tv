@@ -19,7 +19,7 @@ from contextlib import closing
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from deepseek import (
     ENGLISH_WORD_PATTERN,
@@ -153,6 +153,9 @@ def validate_question(value: object, *, require_id: bool = True) -> dict[str, ob
     answer = value.get("answer")
     category = value.get("category", "其他")
     difficulty = value.get("difficulty", "中")
+    priority = value.get("priority", False)
+    if not isinstance(priority, bool):
+        raise ValueError("优先选项必须为布尔值")
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt.strip()) > 240:
         raise ValueError("题目内容长度必须为 1 到 240 个字符")
     if not isinstance(options, list) or len(options) != 4:
@@ -177,6 +180,7 @@ def validate_question(value: object, *, require_id: bool = True) -> dict[str, ob
         "id": question_id.strip() if isinstance(question_id, str) and question_id.strip() else f"q-{uuid.uuid4().hex[:12]}",
         "category": category.strip(),
         "difficulty": difficulty,
+        "priority": priority,
         "prompt": prompt.strip(),
         "options": normalized_options,
         "answer": answer,
@@ -964,6 +968,22 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self.read_json()
+            priority_prefix = "/api/v1/admin/questions/"
+            if path.startswith(priority_prefix) and path.endswith("/priority"):
+                question_id = unquote(path[len(priority_prefix):-len("/priority")])
+                priority = payload.get("priority")
+                if not isinstance(priority, bool):
+                    raise ValueError("优先选项必须为布尔值")
+                with STORE.lock:
+                    state = STORE.load()
+                    question = next((item for item in state["questions"] if item["id"] == question_id), None)
+                    if question is None:
+                        self.send_json(404, {"error": "题目不存在或已被答对移出题库"})
+                        return
+                    question["priority"] = priority
+                    STORE.save(state)
+                self.send_json(200, {"question": question})
+                return
             if path == "/api/v1/admin/password/change":
                 current_password = payload.get("currentPassword")
                 new_password = payload.get("newPassword")

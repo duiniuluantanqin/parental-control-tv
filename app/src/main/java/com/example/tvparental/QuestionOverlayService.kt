@@ -108,7 +108,7 @@ class QuestionOverlayService : Service() {
         answerSubmitted = false
         isTestQuestion = testQuestion
 
-        val question = (if (testQuestion) QuestionBank.all(this).randomOrNull() else QuestionBank.currentOrNext(this)) ?: run {
+        val question = (if (testQuestion) QuestionBank.testQuestion(this) else QuestionBank.currentOrNext(this)) ?: run {
             if (!testQuestion) {
                 RemoteSync.syncAsync(applicationContext) { result ->
                     if (result.settingsChanged) QuestionAlarmReceiver.scheduleForCurrentState(applicationContext)

@@ -13,7 +13,7 @@ android {
         applicationId = "com.example.tvparental"
         minSdk = 28
         targetSdk = 28
-        versionCode = 47
+        versionCode = 48
         versionName = appVersion
     }
 
@@ -27,6 +27,10 @@ android {
         }
     }
 
+}
+
+dependencies {
+    testImplementation("junit:junit:4.13.2")
 }
 
 val copyDebugApk by tasks.registering(Copy::class) {

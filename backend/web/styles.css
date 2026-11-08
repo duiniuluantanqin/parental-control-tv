@@ -165,6 +165,10 @@ td:nth-child(3) { color: #39675b; width: 200px; }
 .challenge-empty { padding: 36px; color: #71817c; text-align: center; }
 .delete-button { padding: 5px 9px; color: #984b3f; background: transparent; border: 1px solid #d9b2aa; border-radius: 4px; font-size: 12px; }
 .delete-button:hover { background: #f9e9e5; }
+#questionsPage th:last-child, #questionsPage td:last-child { width: 170px; }
+.question-actions { display: flex; justify-content: flex-end; align-items: center; gap: 16px; }
+.question-priority { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; cursor: pointer; font-size: 13px; }
+.question-priority input { width: 16px; height: 16px; min-height: 0; padding: 0; margin: 0; accent-color: #267467; }
 .loading { margin: 64px auto; text-align: center; color: #61746c; }
 .login-view { max-width: 500px; padding-top: 64px; }
 .login-card { padding: 36px; background: #fff; border: 1px solid #d1dbd6; border-top: 4px solid #267467; border-radius: 8px; }

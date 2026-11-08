@@ -110,12 +110,23 @@ function renderQuestions() {
       tr.append(td);
     }
     const action = document.createElement("td");
+    const actions = document.createElement("div");
+    actions.className = "question-actions";
+    const priorityLabel = document.createElement("label");
+    priorityLabel.className = "question-priority";
+    const priority = document.createElement("input");
+    priority.type = "checkbox";
+    priority.checked = Boolean(question.priority);
+    priority.setAttribute("aria-label", `优先出题：${question.prompt}`);
+    priorityLabel.append(priority, "优先");
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "delete-button";
     remove.textContent = "删除";
     remove.addEventListener("click", () => deleteQuestion(question, remove));
-    action.append(remove);
+    priority.addEventListener("change", () => setQuestionPriority(question, priority, remove));
+    actions.append(priorityLabel, remove);
+    action.append(actions);
     tr.append(action);
     rows.append(tr);
   }
@@ -774,6 +785,24 @@ async function importAiQuestions() {
     generateButton.disabled = false;
     for (const checkbox of checkboxes) checkbox.disabled = false;
     updateAiSelection();
+  }
+}
+
+async function setQuestionPriority(question, input, removeButton) {
+  input.disabled = true;
+  removeButton.disabled = true;
+  try {
+    const result = await api(`/api/v1/admin/questions/${encodeURIComponent(question.id)}/priority`, {
+      method: "POST", body: JSON.stringify({ priority: input.checked }),
+    });
+    question.priority = result.question.priority;
+    setNotice(question.priority ? "已设为优先出题，电视下次同步后生效" : "已取消优先出题，电视下次同步后生效");
+  } catch (error) {
+    handleError(error);
+  } finally {
+    input.checked = Boolean(question.priority);
+    input.disabled = false;
+    removeButton.disabled = false;
   }
 }
 
