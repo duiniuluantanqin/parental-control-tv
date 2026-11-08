@@ -422,6 +422,20 @@ class MainActivity : Activity() {
             }
         }
         box.addView(blockRecentWatch, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(64)))
+        val blockLiveTv = Switch(this).apply {
+            text = "Block Live TV button"
+            textSize = 18f
+            setTextColor(Color.rgb(235, 241, 237))
+            isChecked = ControlState.blockLiveTv(this@MainActivity)
+            setOnCheckedChangeListener { _, enabled ->
+                ControlState.setBlockLiveTv(this@MainActivity, enabled)
+                refreshRemoteButtonStatus()
+                if (enabled && !RecentWatchGuardService.hasAccess(this@MainActivity)) {
+                    Toast.makeText(this@MainActivity, "Select Accessibility access and enable Parental TV remote button control.", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        box.addView(blockLiveTv, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(64)))
         remoteButtonStatus = TextView(this).apply {
             textSize = 14f
             setTextColor(Color.rgb(185, 199, 191))
@@ -447,9 +461,10 @@ class MainActivity : Activity() {
 
     private fun refreshRemoteButtonStatus() {
         remoteButtonStatus?.text = when {
-            !ControlState.blockRecentWatch(this) -> "Off. The Recent Watch button works normally."
+            !ControlState.blockRecentWatch(this) && !ControlState.blockLiveTv(this) -> "Off. Both remote shortcut buttons work normally."
             !RecentWatchGuardService.hasAccess(this) -> "Not active yet. Enable Parental TV remote button control in Accessibility access."
-            else -> "On. Some TVs may briefly show Recent Watch before it closes."
+            else -> "Recent Watch: ${if (ControlState.blockRecentWatch(this)) "blocked" else "allowed"}. " +
+                "Live TV: ${if (ControlState.blockLiveTv(this)) "blocked" else "allowed"}."
         }
     }
 

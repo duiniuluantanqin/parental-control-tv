@@ -12,15 +12,16 @@ import android.view.accessibility.AccessibilityEvent
 import java.io.FileDescriptor
 import java.io.PrintWriter
 
-/** Only filters TCL's Recent Watch key and its confirmed destination; never reads window content. */
+/** Filters the configured remote shortcuts; never reads window content. */
 class RecentWatchGuardService : AccessibilityService() {
     private var blockedPresses = 0
+    private var blockedLivePresses = 0
     private var closedPages = 0
     private var lastKeyCode = -1
     private var lastScanCode = -1
     private var lastCloseAt = Long.MIN_VALUE / 2
     private val settingChanged = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == ControlState.BLOCK_RECENT_WATCH_KEY) updateKeyFilter()
+        if (key == ControlState.BLOCK_RECENT_WATCH_KEY || key == ControlState.BLOCK_LIVE_TV_KEY) updateKeyFilter()
     }
 
     override fun onServiceConnected() {
@@ -32,18 +33,24 @@ class RecentWatchGuardService : AccessibilityService() {
     private fun updateKeyFilter() {
         val info = serviceInfo ?: return
         val filter = AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
-        info.flags = if (ControlState.blockRecentWatch(this)) info.flags or filter else info.flags and filter.inv()
+        val enabled = ControlState.blockRecentWatch(this) || ControlState.blockLiveTv(this)
+        info.flags = if (enabled) info.flags or filter else info.flags and filter.inv()
         serviceInfo = info
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
-        if (!ControlState.blockRecentWatch(this)) return false
         lastKeyCode = event.keyCode
         lastScanCode = event.scanCode
         val recentWatch = event.scanCode == TCL_RECENT_WATCH_SCAN_CODE ||
             KeyEvent.keyCodeToString(event.keyCode) == "KEYCODE_TCL_RECENT_WATCH"
-        if (!recentWatch) return false
-        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) blockedPresses++
+        val liveTv = event.scanCode == TCL_LIVE_TV_SCAN_CODE || event.keyCode == KeyEvent.KEYCODE_TV
+        val blockRecent = recentWatch && ControlState.blockRecentWatch(this)
+        val blockLive = liveTv && ControlState.blockLiveTv(this)
+        if (!blockRecent && !blockLive) return false
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            if (blockRecent) blockedPresses++
+            if (blockLive) blockedLivePresses++
+        }
         return true // Swallow both down and up; pass Home, navigation, volume and app-switch through.
     }
 
@@ -70,11 +77,13 @@ class RecentWatchGuardService : AccessibilityService() {
 
     override fun dump(fd: FileDescriptor?, writer: PrintWriter, args: Array<out String>?) {
         writer.println("Recent Watch guard: enabled=${ControlState.blockRecentWatch(this)}")
+        writer.println("Live TV guard: enabled=${ControlState.blockLiveTv(this)} blockedPresses=$blockedLivePresses")
         writer.println("blockedPresses=$blockedPresses closedPages=$closedPages lastKeyCode=$lastKeyCode lastScanCode=$lastScanCode")
     }
 
     companion object {
         private const val TCL_RECENT_WATCH_SCAN_CODE = 613
+        private const val TCL_LIVE_TV_SCAN_CODE = 377
         private const val TCL_LAUNCHER = "com.tcl.cyberui"
         private const val RECENT_WATCH_PAGE = "com.tcl.cyberui.recents.PluginMainActivity"
 

@@ -46,6 +46,7 @@ object ControlState {
     private const val ALWAYS_SHOW_REMAINING_TIME_KEY = "always_show_remaining_time"
     private const val SHOW_QUESTION_ON_STARTUP_KEY = "show_question_on_startup"
     const val BLOCK_RECENT_WATCH_KEY = "block_recent_watch"
+    const val BLOCK_LIVE_TV_KEY = "block_live_tv"
     private const val MILLIS_PER_MINUTE = 60_000L
     private const val TEMP_EXTENSION_KEY = "temp_extension_millis"
     const val TEN_MINUTE_REMINDER_MINUTES = 10
@@ -104,6 +105,13 @@ object ControlState {
 
     fun setBlockRecentWatch(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(BLOCK_RECENT_WATCH_KEY, enabled).apply()
+    }
+
+    fun blockLiveTv(context: Context): Boolean =
+        prefs(context).getBoolean(BLOCK_LIVE_TV_KEY, true)
+
+    fun setBlockLiveTv(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(BLOCK_LIVE_TV_KEY, enabled).apply()
     }
 
     fun observeRemoteButtonSetting(context: Context, listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener) {
@@ -181,6 +189,7 @@ object ControlState {
         val preferences = prefs(context)
         return JSONObject()
             .put("date", preferences.getString(DAY_KEY, ""))
+            .put("utcOffsetMinutes", java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60_000)
             .put("usageMillis", preferences.getLong(USED_MILLIS_KEY, 0L).coerceAtLeast(0L))
             .put("usageResetId", preferences.getString(USAGE_RESET_ID_KEY, ""))
     }

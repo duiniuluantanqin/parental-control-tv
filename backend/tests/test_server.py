@@ -102,12 +102,13 @@ class AdminApiTests(unittest.TestCase):
         self.assertGreater(records["usage"][0]["lastReportedAt"], 0)
 
     def test_usage_reset_is_scoped_persistent_and_rejects_stale_reports(self) -> None:
-        today, yesterday = "2026-11-07", "2026-11-06"
+        today_date = server.datetime.now(server.timezone.utc).date()
+        today, yesterday = today_date.isoformat(), (today_date - server.timedelta(days=1)).isoformat()
         for device_id, day, amount in (("tv-01", yesterday, 40_000), ("tv-02", today, 90_000), ("tv-01", today, 120_000)):
             self.request("/api/v1/device/usage", method="POST", authenticated=False,
-                         body={"deviceId": device_id, "date": day, "usageMillis": amount})
+                         body={"deviceId": device_id, "date": day, "usageMillis": amount, "utcOffsetMinutes": 0})
         before = server.STORE.load()
-        payload = {"deviceId": "tv-01", "date": today}
+        payload = {"deviceId": "tv-01"}
         status, _ = self.request("/api/v1/admin/usage/reset", method="POST", authenticated=False, body=payload)
         self.assertEqual(status, 401)
         status, command = self.request("/api/v1/admin/usage/reset", method="POST", body=payload)
@@ -125,7 +126,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(totals, {("tv-01", today): 0, ("tv-01", yesterday): 40_000, ("tv-02", today): 90_000})
         for key in ("passwordReset", "settings", "questions", "answerRecords", "challengeRecords"):
             self.assertEqual(after[key], before[key])
-        report = {**payload, "usageMillis": 150_000}
+        report = {**payload, "date": today, "usageMillis": 150_000}
         status, result = self.request("/api/v1/device/usage", method="POST", authenticated=False, body=report)
         self.assertEqual(status, 409)
         self.assertFalse(result["accepted"])
@@ -148,15 +149,38 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual((status, result["usageMillis"]), (200, 0))
         # An old command cannot reset the next calendar day's allowance.
         status, result = self.request("/api/v1/device/usage", method="POST", authenticated=False,
-                                     body={"deviceId": "tv-01", "date": "2026-11-08", "usageMillis": 30_000})
+                                     body={"deviceId": "tv-01", "date": (today_date + server.timedelta(days=1)).isoformat(), "usageMillis": 30_000})
         self.assertEqual((status, result["usageMillis"]), (200, 30_000))
 
-    def test_usage_reset_validates_device_and_date_without_changing_state(self) -> None:
+    def test_usage_reset_validates_device_and_requires_its_timezone(self) -> None:
+        self.request("/api/v1/device/usage", method="POST", authenticated=False,
+                     body={"deviceId": "tv-01", "date": "2026-11-07", "usageMillis": 60_000})
         before = server.STORE.load()
-        for payload in ({}, {"deviceId": "unknown", "date": "2026-11-07"},
-                        {"deviceId": "tv-01", "date": "2026-02-30"},
-                        {"deviceId": "tv-01", "date": "20261107"}):
+        for payload in ({}, {"deviceId": "unknown"}, {"deviceId": "tv-01"}):
             status, _ = self.request("/api/v1/admin/usage/reset", method="POST", body=payload)
+            self.assertEqual(status, 400)
+            self.assertEqual(server.STORE.load(), before)
+
+    def test_usage_reset_uses_current_device_timezone_instead_of_browser_date(self) -> None:
+        # At 16:30 UTC, UTC+8 is already the next calendar day.
+        timestamp = server.datetime(2026, 11, 7, 16, 30, tzinfo=server.timezone.utc).timestamp()
+        for offset, expected_day in ((480, "2026-11-08"), (-480, "2026-11-07")):
+            with self.subTest(offset=offset):
+                self.request("/api/v1/device/usage", method="POST", authenticated=False,
+                             body={"deviceId": "tv-01", "date": "2026-11-06", "usageMillis": 60_000, "utcOffsetMinutes": offset})
+                with patch("server.time.time", return_value=timestamp):
+                    status, command = self.request("/api/v1/admin/usage/reset", method="POST",
+                                                   body={"deviceId": "tv-01", "date": "2099-01-01"})
+                self.assertEqual(status, 202)
+                self.assertEqual(command["date"], expected_day)
+                self.assertIsNone(server.STORE.snapshot("tv-01", "2099-01-01")["usageReset"])
+                self.assertIsNotNone(server.STORE.snapshot("tv-01", expected_day)["usageReset"])
+
+    def test_usage_report_rejects_invalid_timezone_offset(self) -> None:
+        before = server.STORE.load()
+        for offset in (True, "480", 1.5, -841, 841):
+            status, _ = self.request("/api/v1/device/usage", method="POST", authenticated=False,
+                                     body={"deviceId": "tv-01", "date": "2026-11-07", "usageMillis": 1, "utcOffsetMinutes": offset})
             self.assertEqual(status, 400)
             self.assertEqual(server.STORE.load(), before)
 

@@ -868,9 +868,7 @@ document.querySelector("#resetDeviceUsage").addEventListener("click", async () =
   const button = document.querySelector("#resetDeviceUsage");
   button.disabled = true;
   try {
-    const now = new Date();
-    const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    await api("/api/v1/admin/usage/reset", { method: "POST", body: JSON.stringify({ deviceId, date }) });
+    const { date } = await api("/api/v1/admin/usage/reset", { method: "POST", body: JSON.stringify({ deviceId }) });
     document.querySelector("#passwordResetStatus").textContent = `${name}：${date} 使用时长重置指令已发送，电视将在下次同步时应用。`;
     setNotice("使用时长重置指令已排队");
   } catch (error) {

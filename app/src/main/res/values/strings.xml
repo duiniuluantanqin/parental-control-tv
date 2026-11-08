@@ -1,5 +1,5 @@
 <resources>
     <string name="app_name">Parental TV</string>
     <string name="remote_button_control">Parental TV remote button control</string>
-    <string name="remote_button_control_description">Blocks the TCL Recent Watch button when enabled in Advanced settings. On some TVs, closes the Recent Watch page after it opens. Does not read screen content.</string>
+    <string name="remote_button_control_description">Blocks the TCL Recent Watch and Live TV buttons when enabled in Advanced settings. On some TVs, closes the Recent Watch page after it opens. Does not read screen content.</string>
 </resources>

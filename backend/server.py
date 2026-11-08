@@ -10,7 +10,7 @@ import hmac
 import json
 import os
 import sqlite3
-from datetime import date, datetime, time as datetime_time
+from datetime import date, datetime, time as datetime_time, timedelta, timezone
 import secrets
 import threading
 import time
@@ -289,16 +289,18 @@ class StateStore:
                 self._create_schema(connection)
                 self._write_state(connection, state)
 
-    def queue_usage_reset(self, device_id: str, record_date: str) -> dict[str, str]:
+    def queue_usage_reset(self, device_id: str) -> dict[str, str]:
         if not isinstance(device_id, str) or not 1 <= len(device_id) <= 80:
             raise ValueError("请选择要重置的设备")
-        if not isinstance(record_date, str) or date.fromisoformat(record_date).isoformat() != record_date:
-            raise ValueError("日期格式必须为 YYYY-MM-DD")
         with self.lock:
             state = self.load()
             device = state["devices"].get(device_id)
             if device is None:
                 raise ValueError("设备尚未上报使用时长，请先让电视同步")
+            offset = device.get("utcOffsetMinutes")
+            if isinstance(offset, bool) or not isinstance(offset, int) or not -840 <= offset <= 840:
+                raise ValueError("尚未获取电视时区，请升级电视应用并同步后重试")
+            record_date = datetime.fromtimestamp(time.time(), timezone(timedelta(minutes=offset))).date().isoformat()
             command = {"id": uuid.uuid4().hex, "date": record_date}
             device.setdefault("usageResets", {})[record_date] = command
             for record in state["dailyUsage"]:
@@ -724,6 +726,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                     raise ValueError("日期格式必须为 YYYY-MM-DD")
                 if isinstance(usage_millis, bool) or not isinstance(usage_millis, int) or not 0 <= usage_millis <= 172_800_000:
                     raise ValueError("使用时长无效")
+                offset = payload.get("utcOffsetMinutes")
+                if offset is not None and (isinstance(offset, bool) or not isinstance(offset, int) or not -840 <= offset <= 840):
+                    raise ValueError("电视时区偏移无效")
                 with STORE.lock:
                     state = STORE.load()
                     usage = state["dailyUsage"]
@@ -734,7 +739,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     reset = device.get("usageResets", {}).get(record_date)
                     expected_reset_id = reset["id"] if reset else ""
                     if payload.get("usageResetId", "") != expected_reset_id:
-                        self.send_json(409, {"accepted": False, "error": "使用时长已重置，请先同步电视", "resetRequired": True})
+                        self.send_json(409, {"accepted": False, "error": "使用时长已重置，请先同步电视"})
                         return
                     name = payload.get("deviceName")
                     if isinstance(name, str) and 1 <= len(name.strip()) <= 100:
@@ -756,6 +761,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     device["lastUsageAt"] = now_ms
                     device["lastUsageMillis"] = usage_millis
                     device["lastUsageDate"] = record_date
+                    if offset is not None:
+                        device["utcOffsetMinutes"] = offset
                     devices[device_id] = device
                     if record is None:
                         record = {"deviceId": device_id, "date": record_date, "usageMillis": usage_millis}
@@ -1066,7 +1073,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json(202, {"queued": True, "id": command["id"]})
                 return
             if path == "/api/v1/admin/usage/reset":
-                command = STORE.queue_usage_reset(payload.get("deviceId"), payload.get("date"))
+                command = STORE.queue_usage_reset(payload.get("deviceId"))
                 self.send_json(202, {"queued": True, **command})
                 return
             with STORE.lock:
