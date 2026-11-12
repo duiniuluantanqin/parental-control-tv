@@ -17,6 +17,13 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.StaticLayout
+import android.text.TextPaint
+import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
+import android.text.style.StyleSpan
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
@@ -24,7 +31,6 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.GridLayout
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import kotlin.math.ceil
@@ -448,24 +454,42 @@ class QuestionOverlayService : Service() {
         val root = createRoot().apply {
             gravity = Gravity.CENTER
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(48), dp(32), dp(48), dp(32))
+            if (mode == MODE_WRONG_LOCK) setPadding(dp(24), dp(16), dp(24), dp(16))
+            else setPadding(dp(48), dp(32), dp(48), dp(32))
             setOnKeyListener { _, _, _ -> true }
         }
-        addRemainingTimeLabel(root)
-        val title = TextView(this).apply {
-            text = when (mode) {
-                MODE_DAILY_LOCK -> "Today's screen-time limit has been reached"
-                MODE_USAGE_WINDOW -> "Outside allowed hours"
-                else -> "Incorrect answer"
+        if (mode == MODE_WRONG_LOCK) {
+            val status = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
             }
-            setTextColor(Color.rgb(220, 235, 222))
-            textSize = 28f
-            gravity = Gravity.CENTER
+            addLockCountdown(status, heightDp = 28, textSizeSp = 16f)
+            lockCountdown?.apply {
+                gravity = Gravity.START or Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, dp(28), 1f)
+            }
+            addRemainingTimeLabel(status, heightDp = 28)
+            remainingTimeLabel?.apply {
+                textSize = 14f
+                gravity = Gravity.END or Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(28))
+            }
+            root.addView(status, matchParams().apply { bottomMargin = dp(6) })
+        } else {
+            addRemainingTimeLabel(root)
+            val title = TextView(this).apply {
+                text = if (mode == MODE_DAILY_LOCK) "Today's screen-time limit has been reached"
+                else "Outside allowed hours"
+                setTextColor(Color.rgb(220, 235, 222))
+                textSize = 28f
+                gravity = Gravity.CENTER
+            }
+            root.addView(title, matchParams())
         }
-        root.addView(title, matchParams())
 
-        val poemScroll = if (mode == MODE_WRONG_LOCK) addLockPoem(root) else null
-        if (poemScroll == null) {
+        if (mode == MODE_WRONG_LOCK) {
+            addLockPoem(root)
+        } else {
             val message = TextView(this).apply {
                 text = if (mode == MODE_DAILY_LOCK) {
                     "Today's allowance is used. Access returns tomorrow."
@@ -478,7 +502,7 @@ class QuestionOverlayService : Service() {
             root.addView(message, weightedParams(1f))
         }
 
-        if (mode != MODE_DAILY_LOCK) addLockCountdown(root)
+        if (mode == MODE_USAGE_WINDOW) addLockCountdown(root)
         if (mode == MODE_USAGE_WINDOW) {
             root.addView(TextView(this).apply {
                 text = "TV access resumes at the next allowed time."
@@ -488,89 +512,103 @@ class QuestionOverlayService : Service() {
             }, matchParams())
         } else {
             addUnlockButton(root, mode)
-            if (poemScroll != null) unlockButton?.setOnKeyListener { _, keyCode, event ->
-                if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
-                    if (event.action == KeyEvent.ACTION_DOWN) poemScroll.requestFocus()
-                    true
-                } else false
-            }
         }
         attachOverlay(root)
         updateLockCountdown()
-        val initialFocus = poemScroll ?: unlockButton
-        initialFocus?.let { view -> root.post { view.requestFocus() } }
+        unlockButton?.let { view -> root.post { view.requestFocus() } }
     }
 
-    private fun addLockPoem(root: LinearLayout): ScrollView {
+    private fun addLockPoem(root: LinearLayout) {
         val poem = ControlState.wrongAnswerLockPoem(this)
-        val scroll = ScrollView(this).apply {
-            isFocusable = true
-            isFocusableInTouchMode = true
-            descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
-            isFillViewport = true
-            setPadding(dp(20), dp(12), dp(20), dp(12))
-            setOnFocusChangeListener { view, focused ->
-                view.background = GradientDrawable().apply {
-                    setColor(Color.rgb(25, 30, 28))
-                    setStroke(dp(2), if (focused) Color.rgb(210, 239, 111) else Color.rgb(70, 84, 76))
-                    cornerRadius = dp(12).toFloat()
-                }
-            }
-            setOnKeyListener { _, keyCode, event ->
-                when (keyCode) {
-                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
-                        if (event.action == KeyEvent.ACTION_DOWN) {
-                            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN && !canScrollVertically(1)) {
-                                unlockButton?.requestFocus()
-                            } else {
-                                smoothScrollBy(0, dp(72) * if (keyCode == KeyEvent.KEYCODE_DPAD_UP) -1 else 1)
-                            }
-                        }
-                        true
-                    }
-                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
-                    KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_BUTTON_A -> {
-                        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) unlockButton?.requestFocus()
-                        true
-                    }
-                    KeyEvent.KEYCODE_BACK -> true
-                    else -> false
-                }
-            }
-        }
-        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        content.addView(TextView(this).apply {
+        val title = TextView(this).apply {
             text = poem.title
             textSize = 28f
             setTextColor(Color.rgb(220, 235, 222))
             setTypeface(null, Typeface.BOLD)
             gravity = Gravity.CENTER
-        }, matchParams())
-        content.addView(TextView(this).apply {
+        }
+        val author = TextView(this).apply {
             text = poem.author
             textSize = 18f
             setTextColor(Color.rgb(193, 203, 194))
             gravity = Gravity.CENTER
             setPadding(0, dp(6), 0, dp(14))
-        }, matchParams())
-        content.addView(TextView(this).apply {
+        }
+        val body = TextView(this).apply {
             text = poem.content
             textSize = 26f
             setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             setLineSpacing(dp(8).toFloat(), 1f)
-        }, matchParams())
-        scroll.addView(content)
-        root.addView(scroll, weightedParams(1f))
-        root.addView(TextView(this).apply {
-            text = if (ControlState.hasUnlockPassword(this@QuestionOverlayService)) {
-                "Up/Down: scroll · OK: select parent PIN"
-            } else "Use Up/Down to scroll."
-            textSize = 16f
-            setTextColor(Color.rgb(193, 203, 194))
-            gravity = Gravity.CENTER
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(28)))
-        return scroll
+        }
+        val titlePaint = TextPaint(title.paint)
+        val authorPaint = TextPaint(author.paint)
+        val bodyPaint = TextPaint(body.paint)
+        val content = object : LinearLayout(this) {
+            private var lastWidth = 0
+            private var lastHeight = 0
+            private var compact = false
+
+            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                val width = MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight
+                val height = MeasureSpec.getSize(heightMeasureSpec) - paddingTop - paddingBottom
+                if (width > 0 && height > 0 && (width != lastWidth || height != lastHeight)) {
+                    lastWidth = width
+                    lastHeight = height
+                    fun textHeight(text: String, paint: TextPaint, spacing: Float = 0f): Int =
+                        StaticLayout.Builder.obtain(text, 0, text.length, paint, width)
+                            .setIncludePad(true)
+                            .setBreakStrategy(body.breakStrategy)
+                            .setHyphenationFrequency(body.hyphenationFrequency)
+                            .setLineSpacing(spacing, 1f)
+                            .build().height
+                    val normalHeight = textHeight(poem.title, titlePaint) +
+                        textHeight(poem.author, authorPaint) + author.paddingTop + author.paddingBottom +
+                        textHeight(poem.content, bodyPaint, dp(8).toFloat())
+                    val needsCompact = normalHeight > height
+                    if (needsCompact != compact) {
+                        compact = needsCompact
+                        author.visibility = if (compact) View.GONE else View.VISIBLE
+                        title.setTypeface(null, if (compact) Typeface.NORMAL else Typeface.BOLD)
+                        title.text = if (compact) SpannableString("${poem.title}  ${poem.author}").apply {
+                            setSpan(StyleSpan(Typeface.BOLD), 0, poem.title.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                            val start = poem.title.length + 2
+                            setSpan(RelativeSizeSpan(0.5f), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                            setSpan(ForegroundColorSpan(Color.rgb(193, 203, 194)), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                        } else poem.title
+                        body.text = if (compact) poem.content.lineSequence().filter { it.isNotBlank() }.joinToString("\n")
+                        else poem.content
+                        if (compact) {
+                            body.setLineSpacing(0f, 1f)
+                            val scaledDensity = resources.displayMetrics.scaledDensity
+                            body.setAutoSizeTextTypeUniformWithConfiguration(
+                                scaledDensity.roundToInt().coerceAtLeast(1),
+                                (26f * scaledDensity).roundToInt(),
+                                1,
+                                TypedValue.COMPLEX_UNIT_PX,
+                            )
+                        } else {
+                            body.setAutoSizeTextTypeWithDefaults(TextView.AUTO_SIZE_TEXT_TYPE_NONE)
+                            body.textSize = 26f
+                            body.setLineSpacing(dp(8).toFloat(), 1f)
+                        }
+                    }
+                }
+                super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+            }
+        }.apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(12), dp(20), dp(12))
+            background = GradientDrawable().apply {
+                setColor(Color.rgb(25, 30, 28))
+                setStroke(dp(2), Color.rgb(70, 84, 76))
+                cornerRadius = dp(12).toFloat()
+            }
+            addView(title, matchParams())
+            addView(author, matchParams())
+            addView(body, weightedParams(1f))
+        }
+        root.addView(content, weightedParams(1f))
     }
 
     private fun addLockCountdown(root: LinearLayout, heightDp: Int = 56, textSizeSp: Float = 28f) {
@@ -629,9 +667,12 @@ class QuestionOverlayService : Service() {
             root.addView(TextView(this).apply {
                 text = "Set a parent PIN on the home screen."
                 setTextColor(Color.rgb(150, 160, 152))
-                textSize = 18f
+                textSize = if (mode == MODE_WRONG_LOCK) 14f else 18f
                 gravity = Gravity.CENTER
-            }, matchParams())
+            }, if (mode == MODE_WRONG_LOCK) LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ) else matchParams())
             return
         }
         val button = TextView(this).apply {
@@ -662,7 +703,7 @@ class QuestionOverlayService : Service() {
             if (mode == MODE_QUESTION) dp(40) else LinearLayout.LayoutParams.WRAP_CONTENT,
         ).apply {
             gravity = Gravity.CENTER_HORIZONTAL
-            topMargin = dp(if (mode == MODE_QUESTION) 0 else 12)
+            topMargin = dp(if (mode == MODE_QUESTION || mode == MODE_WRONG_LOCK) 0 else 12)
         })
     }
 
@@ -854,7 +895,8 @@ class QuestionOverlayService : Service() {
                 }
                 return
             }
-            lockCountdown?.text = "Unlocks in ${formatRemaining(remaining)}"
+            lockCountdown?.text = if (pinEntryActive) "Unlocks in ${formatRemaining(remaining)}"
+            else "Locked · Unlocks in ${formatRemaining(remaining)}"
         } else {
             lockCountdown?.text = ""
         }
