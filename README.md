@@ -18,6 +18,7 @@ Windows 新环境准备、JDK/SDK 定位和安装流程见 [README_BUILD.md](REA
 $androidSdk = "$env:LOCALAPPDATA\Android\Sdk"
 $emulator = Join-Path $androidSdk "emulator\emulator.exe"
 & $emulator -list-avds
+& $emulator -avd Television_1080p
 & $emulator -avd "AVD_NAME"
 ```
 

@@ -1,5 +1,6 @@
 package com.example.tvparental
 
+import android.animation.ObjectAnimator
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -36,6 +37,8 @@ class QuestionOverlayService : Service() {
     private var lockCountdown: TextView? = null
     private var remainingTimeLabel: TextView? = null
     private var answerSubmitted = false
+    private var answerTransition: Runnable? = null
+    private var wrongAnswerAnimator: ObjectAnimator? = null
     private var unlockPad: PasswordPad? = null
     private var unlockButton: TextView? = null
     private var pinHint: TextView? = null
@@ -98,11 +101,17 @@ class QuestionOverlayService : Service() {
             ControlState.isDailyLimitReached(this) -> return showDailyLock()
             ControlState.lockoutUntil(this) > System.currentTimeMillis() -> return showLockout()
             !ControlState.isUsageWindowAllowed(this) -> return showUsageWindowLock()
-            !force && currentMode == MODE_QUESTION && overlayView != null && !answerSubmitted -> return
+            !force && currentMode == MODE_QUESTION && overlayView != null -> return
         }
         if (!testQuestion) ControlState.clearWrongAnswerLock(this)
         handler.removeCallbacks(lockTicker)
-        removeOverlay()
+        val existingRoot = (overlayView as? LinearLayout)?.takeIf { currentMode == MODE_QUESTION }
+        if (existingRoot != null) {
+            clearOverlayState()
+            existingRoot.removeAllViews()
+        } else {
+            removeOverlay()
+        }
         currentMode = MODE_QUESTION
         pinEntryActive = false
         answerSubmitted = false
@@ -128,7 +137,8 @@ class QuestionOverlayService : Service() {
         var selectedIndex = 0
         lateinit var moveFocus: (Int, Int) -> Unit
 
-        val root = createRoot().apply {
+        val root = (existingRoot ?: createRoot()).apply {
+            gravity = Gravity.TOP or Gravity.START
             setPadding(dp(36), dp(18), dp(36), dp(18))
         }
         addRemainingTimeLabel(root, 28)
@@ -174,12 +184,13 @@ class QuestionOverlayService : Service() {
                 isFocusable = true
                 isFocusableInTouchMode = true
                 setOnFocusChangeListener { _, hasFocus ->
-                    if (hasFocus) {
+                    if (hasFocus && !answerSubmitted) {
                         selectedIndex = index
                         renderOptionSelection(optionViews, selectedIndex)
                     }
                 }
                 setOnKeyListener { _, keyCode, event ->
+                    if (answerSubmitted) return@setOnKeyListener true
                     when (keyCode) {
                         KeyEvent.KEYCODE_DPAD_LEFT,
                         KeyEvent.KEYCODE_DPAD_RIGHT,
@@ -194,7 +205,7 @@ class QuestionOverlayService : Service() {
                         KeyEvent.KEYCODE_NUMPAD_ENTER,
                         KeyEvent.KEYCODE_BUTTON_A -> {
                             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                                submitAnswer(question, optionTexts[selectedIndex], root, testQuestion)
+                                submitAnswer(question, optionTexts[selectedIndex], root, optionViews, testQuestion)
                             }
                             true
                         }
@@ -272,12 +283,14 @@ class QuestionOverlayService : Service() {
         }
         renderOptionSelection(optionViews, selectedIndex)
         MediaPlaybackController.pauseActivePlayback(this)
-        attachOverlay(root)
+        if (overlayView !== root) attachOverlay(root)
         updateLockCountdown()
-        root.post { optionViews.first().requestFocus() }
+        root.post {
+            if (currentQuestion === question && !pinEntryActive) optionViews.first().requestFocus()
+        }
     }
 
-    private fun submitAnswer(question: TvQuestion, selected: String, root: View, testQuestion: Boolean) {
+    private fun submitAnswer(question: TvQuestion, selected: String, root: View, options: List<TextView>, testQuestion: Boolean) {
         if (answerSubmitted) return
         if (!testQuestion && ControlState.questionTimeoutAt(this) <= System.currentTimeMillis()) {
             handleQuestionTimeout(question)
@@ -289,15 +302,25 @@ class QuestionOverlayService : Service() {
         handler.removeCallbacks(lockTicker)
         lockCountdown?.text = ""
         currentQuestion = null
+        val correct = selected == question.answer
+        if (!correct) showWrongAnswerFeedback(question, selected, options)
         if (testQuestion) {
-            lockCountdown?.apply {
-                text = if (selected == question.answer) "Correct answer" else "Incorrect answer"
-                setTextColor(if (selected == question.answer) Color.rgb(185, 222, 119) else Color.rgb(238, 154, 131))
+            if (correct) lockCountdown?.apply {
+                text = "Correct answer"
+                setTextColor(Color.rgb(185, 222, 119))
             }
-            root.postDelayed({ hideOverlay(preserveQuestionTimeout = true) }, 1_200)
+            val transition = Runnable {
+                if (overlayView === root) hideOverlay(preserveQuestionTimeout = true)
+            }
+            answerTransition = transition
+            handler.postDelayed(transition, if (correct) 1_200L else WRONG_ANSWER_FEEDBACK_MS)
             return
         }
         val progress = QuestionBank.recordAnswer(this, question, selected)
+        if (progress.complete && !progress.passed) {
+            val until = ControlState.startWrongAnswerLock(this)
+            QuestionAlarmReceiver.scheduleAfter(this, until - System.currentTimeMillis())
+        }
         if (progress.complete) {
             QuestionBank.finishChallenge(this, QuestionBank.STATUS_ANSWERED)
         } else if (ControlState.isDailyLimitReached(this)) {
@@ -310,31 +333,57 @@ class QuestionOverlayService : Service() {
             showDailyLock()
             return
         }
-        if (progress.complete && !progress.passed) {
-            val until = ControlState.startWrongAnswerLock(this)
-            QuestionAlarmReceiver.scheduleAfter(this, until - System.currentTimeMillis())
+        if (correct && progress.complete && !progress.passed) {
             showLockout()
             return
         }
-        lockCountdown?.apply {
-            text = when {
-                progress.passed -> "${progress.correctCount}/${QuestionBank.CHALLENGE_QUESTION_COUNT} correct - access unlocked"
-                selected == question.answer -> "Correct answer - ${progress.correctCount}/${QuestionBank.CHALLENGE_REQUIRED_CORRECT} needed"
-                else -> "Incorrect answer - ${progress.correctCount}/${QuestionBank.CHALLENGE_REQUIRED_CORRECT} needed"
+        if (correct) lockCountdown?.apply {
+            text = if (progress.passed) {
+                "${progress.correctCount}/${QuestionBank.CHALLENGE_QUESTION_COUNT} correct - access unlocked"
+            } else {
+                "Correct answer - ${progress.correctCount}/${QuestionBank.CHALLENGE_REQUIRED_CORRECT} needed"
             }
-            setTextColor(if (selected == question.answer) Color.rgb(185, 222, 119) else Color.rgb(238, 154, 131))
+            setTextColor(Color.rgb(185, 222, 119))
         }
-        root.postDelayed({
+        val transition = Runnable {
+            if (overlayView !== root) return@Runnable
+            answerTransition = null
             if (ControlState.isDailyLimitReached(this)) {
                 showDailyLock()
+            } else if (progress.complete && !progress.passed) {
+                showLockout()
             } else if (progress.passed) {
                 ControlState.clearWrongAnswerLock(this)
                 QuestionAlarmReceiver.scheduleNext(this)
                 hideOverlay()
             } else {
-                showQuestion()
+                showQuestion(force = true)
             }
-        }, 450)
+        }
+        answerTransition = transition
+        handler.postDelayed(transition, if (correct) 450L else WRONG_ANSWER_FEEDBACK_MS)
+    }
+
+    private fun showWrongAnswerFeedback(question: TvQuestion, selected: String, options: List<TextView>) {
+        lockCountdown?.apply {
+            text = "Incorrect answer · Correct answer: ${question.answer}"
+            setTextColor(Color.rgb(238, 154, 131))
+        }
+        options.filter { it.text.toString() == selected || it.text.toString() == question.answer }.forEach { option ->
+            val correct = option.text.toString() == question.answer
+            option.background = GradientDrawable().apply {
+                setColor(if (correct) Color.rgb(185, 222, 119) else Color.rgb(238, 154, 131))
+                setStroke(dp(3), if (correct) Color.rgb(210, 239, 111) else Color.rgb(255, 96, 80))
+                cornerRadius = dp(6).toFloat()
+            }
+            option.setTextColor(Color.rgb(24, 31, 25))
+        }
+        val correctOption = options.first { it.text.toString() == question.answer }
+        wrongAnswerAnimator = ObjectAnimator.ofFloat(correctOption, View.ALPHA, 1f, 0.82f, 1f).apply {
+            duration = 1_000L
+            repeatCount = 4
+            start()
+        }
     }
 
     private fun showDailyLock() {
@@ -356,6 +405,7 @@ class QuestionOverlayService : Service() {
 
     private fun showLockout() {
         if (ControlState.isDailyLimitReached(this)) return showDailyLock()
+        if (currentMode == MODE_QUESTION && overlayView != null && answerTransition != null) return
         if (ControlState.lockoutUntil(this) <= System.currentTimeMillis()) {
             ControlState.clearWrongAnswerLock(this)
             return refreshBlockingState()
@@ -815,14 +865,22 @@ class QuestionOverlayService : Service() {
         }
     }
 
-    private fun removeOverlay() {
-        overlayView?.let { view -> runCatching { windowManager?.removeViewImmediate(view) } }
-        overlayView = null
+    private fun clearOverlayState() {
+        answerTransition?.let { handler.removeCallbacks(it) }
+        answerTransition = null
+        wrongAnswerAnimator?.cancel()
+        wrongAnswerAnimator = null
         lockCountdown = null
         remainingTimeLabel = null
         unlockPad = null
         unlockButton = null
         pinHint = null
+    }
+
+    private fun removeOverlay() {
+        clearOverlayState()
+        overlayView?.let { view -> runCatching { windowManager?.removeViewImmediate(view) } }
+        overlayView = null
     }
 
     private fun hideOverlay(preserveQuestionTimeout: Boolean = false) {
@@ -910,5 +968,6 @@ class QuestionOverlayService : Service() {
         private const val MODE_USAGE_WINDOW = 4
         private const val MAX_PASSWORD_ATTEMPTS = 5
         private const val PASSWORD_COOLDOWN_MS = 30_000L
+        private const val WRONG_ANSWER_FEEDBACK_MS = 5_000L
     }
 }
