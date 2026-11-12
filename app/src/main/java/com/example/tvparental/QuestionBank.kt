@@ -9,6 +9,12 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
+data class Poem(
+    val title: String,
+    val author: String,
+    val content: String,
+)
+
 data class TvQuestion(
     val id: String,
     val prompt: String,
@@ -17,6 +23,7 @@ data class TvQuestion(
     val category: String,
     val difficulty: String,
     val priority: Boolean = false,
+    val poem: Poem? = null,
 )
 
 data class ChallengeProgress(
@@ -63,6 +70,7 @@ object QuestionBank {
     private const val CHALLENGE_ACTIVE = "challenge_active"
     private const val CHALLENGE_ANSWER_COUNT = "challenge_answer_count"
     private const val CHALLENGE_CORRECT_COUNT = "challenge_correct_count"
+    private const val CHALLENGE_WRONG_QUESTION_IDS = "challenge_wrong_question_ids"
     private const val CHALLENGE_QUESTIONS = "challenge_questions"
     private const val CHALLENGE_INDEX = "challenge_index"
     private const val CHALLENGE_SESSION_ID = "challenge_session_id"
@@ -79,15 +87,21 @@ object QuestionBank {
 
     fun all(context: Context): List<TvQuestion> {
         val answered = pendingCorrectAnswers(context).map { it.id }.toSet()
+        return bankQuestions(context).filterNot { it.id in answered }
+    }
+
+    private fun bankQuestions(context: Context): List<TvQuestion> {
         val remote = ControlState.remoteQuestions(context)
         if (!remote.isNullOrBlank()) {
             runCatching { parseQuestions(remote) }
                 .getOrNull()
-                ?.let { return it.filterNot { question -> question.id in answered } }
+                ?.let { return it }
         }
-        val bundled = context.assets.open("questions.json").bufferedReader().use { it.readText() }
-        return parseQuestions(bundled).filterNot { it.id in answered }
+        return bundledQuestions(context)
     }
+
+    private fun bundledQuestions(context: Context): List<TvQuestion> =
+        context.assets.open("questions.json").bufferedReader().use { parseQuestions(it.readText()) }
 
     @Synchronized
     fun currentOrNext(context: Context): TvQuestion? {
@@ -108,6 +122,7 @@ object QuestionBank {
                 .putBoolean(CHALLENGE_ACTIVE, true)
                 .putInt(CHALLENGE_ANSWER_COUNT, 0)
                 .putInt(CHALLENGE_CORRECT_COUNT, 0)
+                .remove(CHALLENGE_WRONG_QUESTION_IDS)
                 .putInt(CHALLENGE_INDEX, 0)
                 .putString(CHALLENGE_SESSION_ID, sessionId)
                 .putLong(CHALLENGE_STARTED_AT, startedAt)
@@ -144,6 +159,7 @@ object QuestionBank {
             .putBoolean(CHALLENGE_ACTIVE, false)
             .putInt(CHALLENGE_ANSWER_COUNT, 0)
             .putInt(CHALLENGE_CORRECT_COUNT, 0)
+            .remove(CHALLENGE_WRONG_QUESTION_IDS)
             .putInt(CHALLENGE_INDEX, 0)
             .putBoolean(REUSE_CACHED_QUESTIONS, false)
             .remove(CHALLENGE_SESSION_ID)
@@ -163,6 +179,7 @@ object QuestionBank {
             .putBoolean(CHALLENGE_ACTIVE, false)
             .putInt(CHALLENGE_ANSWER_COUNT, 0)
             .putInt(CHALLENGE_CORRECT_COUNT, 0)
+            .remove(CHALLENGE_WRONG_QUESTION_IDS)
             .putInt(CHALLENGE_INDEX, 0)
             .putBoolean(REUSE_CACHED_QUESTIONS, questions.size == CHALLENGE_QUESTION_COUNT)
             .remove(CHALLENGE_SESSION_ID)
@@ -197,6 +214,9 @@ object QuestionBank {
         if (correct) {
             val pendingCorrect = pendingCorrectAnswers(context).filterNot { it.id == question.id } + question
             editor.putString(PENDING_CORRECT_ANSWERS, JSONArray(pendingCorrect.map { toJsonObject(it) }).toString())
+        } else {
+            val wrongIds = wrongQuestionIds(preferences) + question.id
+            editor.putString(CHALLENGE_WRONG_QUESTION_IDS, JSONArray(wrongIds.toList()).toString())
         }
         check(editor.commit()) { "Could not save the challenge answer." }
         queueChallengeRecord(context, STATUS_ACTIVE)
@@ -360,6 +380,49 @@ object QuestionBank {
 
     fun testQuestion(context: Context): TvQuestion? = selectQuestions(all(context), 1).firstOrNull()
 
+    private fun wrongQuestionIds(preferences: SharedPreferences): Set<String> {
+        val ids = JSONArray(preferences.getString(CHALLENGE_WRONG_QUESTION_IDS, "[]") ?: "[]")
+        return (0 until ids.length()).map { ids.getString(it) }.toSet()
+    }
+
+    fun poemForWrongAnswerLock(context: Context): Poem {
+        val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        val wrongIds = wrongQuestionIds(preferences)
+        val incorrect = storedChallengeQuestions(preferences).filter { it.id in wrongIds }
+        return checkNotNull(selectLockoutPoem(incorrect, bankQuestions(context), bundledQuestions(context))) {
+            "No complete poems are available."
+        }
+    }
+
+    internal fun selectLockoutPoem(
+        incorrectQuestions: List<TvQuestion>,
+        bank: List<TvQuestion>,
+        bundled: List<TvQuestion>,
+    ): Poem? {
+        fun poems(questions: List<TvQuestion>) = questions
+            .filter { it.category in setOf("古诗词", "Classical poetry", "Poetry") }
+            .mapNotNull { question ->
+                fun sameQuestion(candidate: TvQuestion) =
+                    candidate.id == question.id && candidate.prompt == question.prompt && candidate.category == question.category
+                question.poem ?: bank.firstOrNull { sameQuestion(it) }?.poem
+                    ?: bundled.firstOrNull { sameQuestion(it) }?.poem
+            }
+            .distinct()
+        return poems(incorrectQuestions).randomOrNull()
+            ?: poems(bank).randomOrNull()
+            ?: poems(bundled).randomOrNull()
+    }
+
+    internal fun parsePoem(item: JSONObject?): Poem? = item?.let {
+        Poem(it.optString("title"), it.optString("author"), it.optString("content"))
+            .takeIf { poem -> poem.title.isNotBlank() && poem.author.isNotBlank() && poem.content.isNotBlank() }
+    }
+
+    internal fun poemToJsonObject(poem: Poem): JSONObject = JSONObject()
+        .put("title", poem.title)
+        .put("author", poem.author)
+        .put("content", poem.content)
+
     fun parseQuestions(json: String): List<TvQuestion> {
         val array = JSONArray(json)
         return (0 until array.length()).map { index ->
@@ -374,6 +437,7 @@ object QuestionBank {
                 category = item.optString("category", "Other"),
                 difficulty = item.optString("difficulty", "Middle school"),
                 priority = item.optBoolean("priority", false),
+                poem = parsePoem(item.optJSONObject("poem")),
             )
             require(question.id.isNotBlank() && question.prompt.isNotBlank())
             require(question.options.size == 4 && question.options.distinct().size == 4)
@@ -390,6 +454,7 @@ object QuestionBank {
         .put("category", question.category)
         .put("difficulty", question.difficulty)
         .put("priority", question.priority)
+        .apply { question.poem?.let { put("poem", poemToJsonObject(it)) } }
 
     fun displayCategory(category: String): String = when (category) {
         "古诗词" -> "Classical poetry"

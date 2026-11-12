@@ -13,14 +13,16 @@ import deepseek  # noqa: E402
 
 
 class DeepSeekTests(unittest.TestCase):
+    poem = {"title": "静夜思", "author": "李白", "content": "床前明月光，疑是地上霜。\n举头望明月，低头思故乡。"}
+
     def completion(self, content, *, finish_reason="stop"):
         return io.BytesIO(json.dumps({"choices": [{"finish_reason": finish_reason, "message": {"content": content}}]}).encode())
 
     def test_sends_server_key_and_requests_json_for_one_poem(self):
-        poem = {"title": "静夜思", "author": "李白", "questions": [{"prompt": "第一题"}, {"prompt": "第二题"}]}
+        poem = {**self.poem, "questions": [{"prompt": "第一题"}, {"prompt": "第二题"}]}
         with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("deepseek.urlopen", return_value=self.completion(json.dumps(poem))) as request:
             result = deepseek.generate_poem_questions("静夜思（李白）", 2)
-        self.assertEqual(result, poem)
+        self.assertEqual(result, {**poem, "questions": [{**question, "poem": self.poem} for question in poem["questions"]]})
         outbound = request.call_args.args[0]
         self.assertEqual(outbound.full_url, "https://api.deepseek.com/chat/completions")
         self.assertEqual(outbound.get_header("Authorization"), "Bearer test-key")
@@ -36,7 +38,7 @@ class DeepSeekTests(unittest.TestCase):
         self.assertNotIn("test-key", json.dumps(payload))
 
     def test_selected_difficulty_is_sent_to_provider(self):
-        poem = {"title": "静夜思", "author": "李白", "questions": [{}]}
+        poem = {**self.poem, "questions": [{}]}
         for difficulty in ("低", "中", "高"):
             with self.subTest(difficulty=difficulty), patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("deepseek.urlopen", return_value=self.completion(json.dumps(poem))) as request:
                 deepseek.generate_poem_questions("静夜思", 1, difficulty)
@@ -107,6 +109,37 @@ class DeepSeekTests(unittest.TestCase):
                 with self.assertRaises(deepseek.DeepSeekError):
                     deepseek.generate_random_questions(10, "中", [])
 
+    def test_existing_question_resolves_full_poem_or_prose_without_following_question_instructions(self):
+        work = {"title": "陋室铭", "author": "刘禹锡", "content": "山不在高，有仙则名。\r\n水不在深，有龙则灵。"}
+        with patch("deepseek._generate_json", return_value=work) as generate:
+            result = deepseek.generate_poem_for_question("《陋室铭》的作者是谁？", "刘禹锡")
+        self.assertEqual(result["content"], work["content"].replace("\r\n", "\n"))
+        messages = generate.call_args.args[0]
+        self.assertIn("文言文", messages[0]["content"])
+        self.assertIn("完整作品", messages[0]["content"])
+        self.assertEqual(json.loads(messages[1]["content"]), {"题干": "《陋室铭》的作者是谁？", "正确答案": "刘禹锡"})
+
+    def test_poem_results_reject_missing_or_invalid_full_text_without_exposing_provider_data(self):
+        for result in ({"error": "secret-key"}, {"title": "静夜思", "author": "李白"}, {**self.poem, "content": " "}, {**self.poem, "content": []}, {**self.poem, "content": "诗" * 20_001}):
+            with self.subTest(result=result), patch("deepseek._generate_json", return_value=result):
+                with self.assertRaises(deepseek.DeepSeekError) as error:
+                    deepseek.generate_poem_for_question("题目", "答案")
+                self.assertNotIn("secret-key", str(error.exception))
+        for content in (None, "", [], "诗" * 20_001):
+            with self.subTest(content=content), patch("deepseek._generate_json", return_value={**self.poem, "content": content, "questions": [{}]}):
+                with self.assertRaises(deepseek.DeepSeekError):
+                    deepseek.generate_poem_questions("静夜思", 1)
+
+    def test_random_poetry_questions_require_and_keep_full_work(self):
+        questions = [{"category": "古诗词", "prompt": "《静夜思》的作者是谁？", "poem": self.poem}]
+        with patch("deepseek._generate_json", return_value={"questions": questions}) as generate:
+            self.assertEqual(deepseek.generate_random_questions(1, "中", []), questions)
+        self.assertIn("整篇文言文", generate.call_args.args[0][0]["content"])
+        for poem in (None, {}, {**self.poem, "content": ""}):
+            with self.subTest(poem=poem), patch("deepseek._generate_json", return_value={"questions": [{"category": "古诗词", "poem": poem}]}):
+                with self.assertRaises(deepseek.DeepSeekError):
+                    deepseek.generate_random_questions(1, "中", [])
+
     def test_provider_errors_are_sanitized_and_not_retried(self):
         for status in (401, 402, 429, 500):
             with self.subTest(status=status), patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), patch("deepseek.urlopen", side_effect=HTTPError("https://api.deepseek.com", status, "test-key", {}, io.BytesIO(b"test-key"))) as request:
@@ -116,7 +149,7 @@ class DeepSeekTests(unittest.TestCase):
                 self.assertEqual(request.call_count, 1)
 
     def test_timeout_and_bad_or_incomplete_output_are_rejected(self):
-        valid = {"title": "静夜思", "author": "李白", "questions": [{}, {}]}
+        valid = {**self.poem, "questions": [{}, {}]}
         cases = [
             ("", "stop"), ("   ", "stop"), ("not json", "stop"),
             (json.dumps(valid), "length"), ("[]", "stop"),

@@ -24,6 +24,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.GridLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import kotlin.math.ceil
@@ -318,7 +319,8 @@ class QuestionOverlayService : Service() {
         }
         val progress = QuestionBank.recordAnswer(this, question, selected)
         if (progress.complete && !progress.passed) {
-            val until = ControlState.startWrongAnswerLock(this)
+            val poem = QuestionBank.poemForWrongAnswerLock(this)
+            val until = ControlState.startWrongAnswerLock(this, poem)
             QuestionAlarmReceiver.scheduleAfter(this, until - System.currentTimeMillis())
         }
         if (progress.complete) {
@@ -462,20 +464,19 @@ class QuestionOverlayService : Service() {
         }
         root.addView(title, matchParams())
 
-        val message = TextView(this).apply {
-            text = if (mode == MODE_DAILY_LOCK) {
-                "Today's allowance is used. Access returns tomorrow."
-            } else if (mode == MODE_USAGE_WINDOW) {
-                "Try again during an allowed time window."
-            } else {
-                "The 5-question challenge restarts after the lockout."
+        val poemScroll = if (mode == MODE_WRONG_LOCK) addLockPoem(root) else null
+        if (poemScroll == null) {
+            val message = TextView(this).apply {
+                text = if (mode == MODE_DAILY_LOCK) {
+                    "Today's allowance is used. Access returns tomorrow."
+                } else "Try again during an allowed time window."
+                setTextColor(Color.WHITE)
+                textSize = 38f
+                gravity = Gravity.CENTER
+                setPadding(0, dp(35), 0, dp(20))
             }
-            setTextColor(Color.WHITE)
-            textSize = 38f
-            gravity = Gravity.CENTER
-            setPadding(0, dp(35), 0, dp(20))
+            root.addView(message, weightedParams(1f))
         }
-        root.addView(message, weightedParams(1f))
 
         if (mode != MODE_DAILY_LOCK) addLockCountdown(root)
         if (mode == MODE_USAGE_WINDOW) {
@@ -487,10 +488,89 @@ class QuestionOverlayService : Service() {
             }, matchParams())
         } else {
             addUnlockButton(root, mode)
+            if (poemScroll != null) unlockButton?.setOnKeyListener { _, keyCode, event ->
+                if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
+                    if (event.action == KeyEvent.ACTION_DOWN) poemScroll.requestFocus()
+                    true
+                } else false
+            }
         }
         attachOverlay(root)
         updateLockCountdown()
-        unlockButton?.let { button -> root.post { button.requestFocus() } }
+        val initialFocus = poemScroll ?: unlockButton
+        initialFocus?.let { view -> root.post { view.requestFocus() } }
+    }
+
+    private fun addLockPoem(root: LinearLayout): ScrollView {
+        val poem = ControlState.wrongAnswerLockPoem(this)
+        val scroll = ScrollView(this).apply {
+            isFocusable = true
+            isFocusableInTouchMode = true
+            descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
+            isFillViewport = true
+            setPadding(dp(20), dp(12), dp(20), dp(12))
+            setOnFocusChangeListener { view, focused ->
+                view.background = GradientDrawable().apply {
+                    setColor(Color.rgb(25, 30, 28))
+                    setStroke(dp(2), if (focused) Color.rgb(210, 239, 111) else Color.rgb(70, 84, 76))
+                    cornerRadius = dp(12).toFloat()
+                }
+            }
+            setOnKeyListener { _, keyCode, event ->
+                when (keyCode) {
+                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                        if (event.action == KeyEvent.ACTION_DOWN) {
+                            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN && !canScrollVertically(1)) {
+                                unlockButton?.requestFocus()
+                            } else {
+                                smoothScrollBy(0, dp(72) * if (keyCode == KeyEvent.KEYCODE_DPAD_UP) -1 else 1)
+                            }
+                        }
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
+                    KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_BUTTON_A -> {
+                        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) unlockButton?.requestFocus()
+                        true
+                    }
+                    KeyEvent.KEYCODE_BACK -> true
+                    else -> false
+                }
+            }
+        }
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(TextView(this).apply {
+            text = poem.title
+            textSize = 28f
+            setTextColor(Color.rgb(220, 235, 222))
+            setTypeface(null, Typeface.BOLD)
+            gravity = Gravity.CENTER
+        }, matchParams())
+        content.addView(TextView(this).apply {
+            text = poem.author
+            textSize = 18f
+            setTextColor(Color.rgb(193, 203, 194))
+            gravity = Gravity.CENTER
+            setPadding(0, dp(6), 0, dp(14))
+        }, matchParams())
+        content.addView(TextView(this).apply {
+            text = poem.content
+            textSize = 26f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setLineSpacing(dp(8).toFloat(), 1f)
+        }, matchParams())
+        scroll.addView(content)
+        root.addView(scroll, weightedParams(1f))
+        root.addView(TextView(this).apply {
+            text = if (ControlState.hasUnlockPassword(this@QuestionOverlayService)) {
+                "Up/Down: scroll · OK: select parent PIN"
+            } else "Use Up/Down to scroll."
+            textSize = 16f
+            setTextColor(Color.rgb(193, 203, 194))
+            gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(28)))
+        return scroll
     }
 
     private fun addLockCountdown(root: LinearLayout, heightDp: Int = 56, textSizeSp: Float = 28f) {

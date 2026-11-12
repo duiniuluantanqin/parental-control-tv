@@ -27,6 +27,9 @@ class AdminApiTests(unittest.TestCase):
         key_patch = patch.dict("os.environ", {"DEEPSEEK_API_KEY": ""})
         key_patch.start()
         self.addCleanup(key_patch.stop)
+        enrichment_patch = patch.object(server.StateStore, "ensure_poem_enrichment")
+        enrichment_patch.start()
+        self.addCleanup(enrichment_patch.stop)
         self.temp_dir = tempfile.TemporaryDirectory()
         self.previous_store = server.STORE
         self.previous_auth = server.AUTH
@@ -53,6 +56,8 @@ class AdminApiTests(unittest.TestCase):
         self.thread.join(timeout=2)
         if server.STORE.refill_thread is not None:
             server.STORE.refill_thread.join(timeout=2)
+        if server.STORE.poem_thread is not None:
+            server.STORE.poem_thread.join(timeout=2)
         server.STORE = self.previous_store
         server.AUTH = self.previous_auth
         self.temp_dir.cleanup()
@@ -97,6 +102,45 @@ class AdminApiTests(unittest.TestCase):
             self.assertEqual(synced["questions"][0]["priority"], enabled)
             self.assertEqual(len(synced["questions"]), 50)
             self.assertTrue(all(not item["priority"] for item in synced["questions"][1:]))
+
+    def test_full_poem_survives_ai_preview_batch_sync_and_answer_restore(self) -> None:
+        poem = {"title": "静夜思", "author": "李白", "content": "床前明月光，疑是地上霜。\n举头望明月，低头思故乡。"}
+        generated = {**poem, "questions": [{"prompt": "《静夜思》全文预览测试", "options": ["甲", "乙", "丙", "丁"], "answer": "甲", "poem": poem}]}
+        with patch("server.generate_poem_questions", return_value=generated):
+            status, preview = self.request("/api/v1/admin/questions/generate", method="POST", body={"title": "静夜思", "count": 1})
+        self.assertEqual(status, 200)
+        self.assertEqual(preview["questions"][0]["poem"], poem)
+        self.assertEqual(len(server.STORE.load()["questions"]), 50)
+        status, _ = self.request("/api/v1/admin/questions/batch", method="POST", body={"questions": preview["questions"]})
+        self.assertEqual(status, 200)
+        _, state = self.request("/api/v1/device/state", authenticated=False)
+        question = state["questions"][-1]
+        self.assertEqual(question["poem"], poem)
+        self.assertEqual(server.StateStore(server.STORE.path).load()["questions"][-1]["poem"], poem)
+        status, _ = self.request("/api/v1/device/answers", method="POST", authenticated=False, body={
+            "attemptId": "poem-answer", "deviceId": "tv-01", "date": "2026-11-12", "answeredAt": 1794441600000,
+            "questionId": question["id"], "selectedAnswer": question["answer"], "question": question,
+        })
+        self.assertEqual(status, 200)
+        status, _ = self.request("/api/v1/admin/answers/restore", method="POST", body={"attemptId": "poem-answer"})
+        self.assertEqual(status, 200)
+        self.assertEqual(server.STORE.load()["questions"][-1]["poem"], poem)
+
+    def test_full_work_batches_allow_long_prose_and_reject_invalid_poem_atomically(self) -> None:
+        base = {"category": "古诗词", "options": ["甲", "乙", "丙", "丁"], "answer": "甲"}
+        poem = {"title": "长篇古文", "author": "作者", "content": "原文段落。\n" * 1_000}
+        questions = [{**base, "prompt": f"全文导入测试{index}", "poem": poem} for index in range(10)]
+        self.assertGreater(len(json.dumps({"questions": questions}).encode()), 64 * 1024)
+        status, result = self.request("/api/v1/admin/questions/batch", method="POST", body={"questions": questions})
+        self.assertEqual((status, result["added"]), (200, 10))
+        for invalid in ({}, "诗", {**poem, "content": ""}, {**poem, "author": []}, {**poem, "content": "诗" * 20_001}):
+            with self.subTest(invalid=invalid):
+                before = server.STORE.load()
+                status, _ = self.request("/api/v1/admin/questions/batch", method="POST", body={"questions": [
+                    {**base, "prompt": "合法题目", "poem": poem}, {**base, "prompt": "非法全文", "poem": invalid},
+                ]})
+                self.assertEqual(status, 400)
+                self.assertEqual(server.STORE.load(), before)
 
     def test_question_priority_rejects_invalid_values_and_missing_questions(self) -> None:
         before = server.STORE.load()

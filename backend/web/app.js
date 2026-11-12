@@ -148,6 +148,10 @@ function showQuestionDetail(question) {
     }
     options.append(item);
   }
+  const poemSection = document.querySelector("#questionDetailPoem");
+  poemSection.hidden = !question.poem;
+  document.querySelector("#questionDetailPoemTitle").textContent = question.poem ? `《${question.poem.title}》 · ${question.poem.author}` : "";
+  document.querySelector("#questionDetailPoemContent").textContent = question.poem?.content || "";
   questionDetailDialog.showModal();
 }
 
@@ -282,6 +286,12 @@ async function loadState() {
     const refill = state.refill || {};
     setNotice(refill.error ? `题库已空：${refill.error}` : refill.running ? "题库已空，AI 正在补充 50 道综合题…" : "题库已空，等待后台自动补题…", Boolean(refill.error));
     refillTimer = setTimeout(() => loadState().catch(handleError), 5000);
+  } else if (!isLoginPage && page === "questions" && state.poemEnrichment?.pending) {
+    const enrichment = state.poemEnrichment;
+    setNotice(enrichment.error
+      ? `还有 ${enrichment.pending} 道题缺少诗词全文：${enrichment.error}`
+      : `AI 正在补全诗词全文，还剩 ${enrichment.pending} 道题…`, Boolean(enrichment.error));
+    refillTimer = setTimeout(() => loadState().catch(handleError), enrichment.running ? 5000 : 60000);
   }
 }
 
@@ -694,6 +704,17 @@ function renderAiQuestions(result) {
       options.append(item);
     }
     card.append(label, options);
+    if (question.poem) {
+      const poem = document.createElement("details");
+      poem.className = "poem-reading";
+      const summary = document.createElement("summary");
+      summary.textContent = `诗词全文：《${question.poem.title}》 · ${question.poem.author}`;
+      const content = document.createElement("p");
+      content.className = "poem-content";
+      content.textContent = question.poem.content;
+      poem.append(summary, content);
+      card.append(poem);
+    }
     list.append(card);
   }
   aiPreview.hidden = false;

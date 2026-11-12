@@ -27,8 +27,10 @@ from deepseek import (
     DeepSeekError,
     generate_category_questions,
     generate_english_questions,
+    generate_poem_for_question,
     generate_poem_questions,
     generate_random_questions,
+    validate_poem,
 )
 
 
@@ -36,7 +38,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SEED_FILE = ROOT / "app" / "src" / "main" / "assets" / "questions.json"
 DATA_FILE = Path(os.environ.get("TV_PARENTAL_DATA_FILE", ROOT / "backend" / "data.sqlite3"))
 PORT = int(os.environ.get("PORT", "8765"))
-MAX_BODY_BYTES = 64 * 1024
+MAX_BODY_BYTES = 1024 * 1024
 SESSION_SECONDS = 12 * 60 * 60
 SESSION_COOKIE = "tvparental_session"
 PASSWORD_ITERATIONS = 600_000
@@ -176,7 +178,7 @@ def validate_question(value: object, *, require_id: bool = True) -> dict[str, ob
     question_id = value.get("id")
     if require_id and (not isinstance(question_id, str) or not question_id.strip()):
         raise ValueError("题目 ID 不能为空")
-    return {
+    question = {
         "id": question_id.strip() if isinstance(question_id, str) and question_id.strip() else f"q-{uuid.uuid4().hex[:12]}",
         "category": category.strip(),
         "difficulty": difficulty,
@@ -185,6 +187,9 @@ def validate_question(value: object, *, require_id: bool = True) -> dict[str, ob
         "options": normalized_options,
         "answer": answer,
     }
+    if value.get("poem") is not None:
+        question["poem"] = validate_poem(value["poem"])
+    return question
 
 
 def validate_question_batch(value: object) -> list[dict[str, object]]:
@@ -235,6 +240,11 @@ class StateStore:
         self.refill_running = False
         self.refill_error: str | None = None
         self.next_refill_attempt = 0.0
+        self.poem_thread: threading.Thread | None = None
+        self.poem_enrichment_running = False
+        self.poem_enrichment_error: str | None = None
+        self.next_poem_attempt = 0.0
+        self.poem_failures: dict[str, int] = {}
 
     def load(self) -> dict[str, object]:
         with self.lock:
@@ -420,6 +430,7 @@ class StateStore:
             state = self.load()
             if not state["questions"]:
                 self.ensure_refill()
+            self.ensure_poem_enrichment()
             return {
                 "settings": state["settings"],
                 "questions": state["questions"],
@@ -427,7 +438,58 @@ class StateStore:
                 "usageReset": state["devices"].get(device_id, {}).get("usageResets", {}).get(record_date),
                 "version": BACKEND_VERSION,
                 "refill": {"running": self.refill_running, "error": self.refill_error},
+                "poemEnrichment": {
+                    "running": self.poem_enrichment_running,
+                    "pending": sum(item["category"] == "古诗词" and not item.get("poem") for item in state["questions"]),
+                    "error": self.poem_enrichment_error,
+                },
             }
+
+    def ensure_poem_enrichment(self) -> None:
+        with self.lock:
+            if self.poem_enrichment_running or time.monotonic() < self.next_poem_attempt:
+                return
+            pending = [item for item in self.load()["questions"] if item["category"] == "古诗词" and not item.get("poem")]
+            if not pending:
+                self.poem_enrichment_error = None
+                return
+            if not os.environ.get("DEEPSEEK_API_KEY", "").strip():
+                self.poem_enrichment_error = "作品全文补全尚未配置，请设置 DeepSeek Key"
+                return
+            candidates = [item for item in pending if self.poem_failures.get(self.poem_source_key(item), 0) < 3]
+            if not candidates:
+                return
+            self.poem_enrichment_running = True
+            self.poem_thread = threading.Thread(target=self._enrich_poems, args=(candidates[:10],), daemon=True)
+            self.poem_thread.start()
+
+    @staticmethod
+    def poem_source_key(question: dict[str, object]) -> str:
+        return hashlib.sha256(json.dumps(question, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+    def _enrich_poems(self, questions: list[dict[str, object]]) -> None:
+        try:
+            for source in questions:
+                key = self.poem_source_key(source)
+                try:
+                    poem = validate_poem(generate_poem_for_question(source["prompt"], source["answer"]))
+                    with self.lock:
+                        state = self.load()
+                        question = next((item for item in state["questions"] if item["id"] == source["id"]), None)
+                        if question == source:
+                            question["poem"] = poem
+                            self.save(state)
+                        self.poem_failures.pop(key, None)
+                except (DeepSeekError, ValueError, OSError, sqlite3.Error):
+                    with self.lock:
+                        attempts = self.poem_failures.get(key, 0) + 1
+                        self.poem_failures[key] = attempts
+                        self.poem_enrichment_error = "作品全文补全失败，请检查题目中的作品名称和作者"
+                        self.next_poem_attempt = time.monotonic() + min(300 * 2 ** (attempts - 1), 1800)
+                    break
+        finally:
+            with self.lock:
+                self.poem_enrichment_running = False
 
     def ensure_refill(self) -> None:
         with self.lock:

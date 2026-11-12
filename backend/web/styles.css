@@ -196,6 +196,10 @@ dialog::backdrop { background: #102c296b; backdrop-filter: blur(3px); }
 .form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; padding-top: 20px; border-top: 1px solid #e2e9e5; }
 .question-detail-prompt { color: #183d38; font-size: 18px; font-weight: 600; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .question-detail-options { display: grid; gap: 10px; margin: 20px 0 0; padding: 0; list-style: none; white-space: pre-wrap; }
+.poem-reading { margin-top: 20px; padding-top: 16px; border-top: 1px solid #d1dbd6; color: #183d38; }
+.poem-reading h3, .poem-reading summary { margin: 0; font-size: 16px; line-height: 1.6; }
+.poem-reading summary { cursor: pointer; }
+.poem-content { margin: 12px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 20px/1.9 "STKaiti", "KaiTi", serif; }
 .ai-dialog { width: min(780px, calc(100% - 32px)); }
 .ai-fields { display: grid; grid-template-columns: minmax(140px, .8fr) minmax(200px, 1.2fr) 100px 100px; gap: 16px; }
 .ai-fields.random-category { grid-template-columns: minmax(180px, 1fr) 100px 100px; }

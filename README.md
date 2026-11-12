@@ -36,6 +36,8 @@ $emulator = Join-Path $androidSdk "emulator\emulator.exe"
 
 屏幕亮起时长按 30 秒采样，额度临近耗尽时会缩短采样间隔。后台服务在开机后恢复；TCL 固件还需要通过 ADB 放行 `APP_AUTO_START` 与 `APP_ASSOC_START`。完整安装升级步骤见 [docs/INSTALL_TCL.md](docs/INSTALL_TCL.md)。
 
+答错锁定期间会显示诗词全文：优先从本轮答错的古诗词题中选一篇，否则从题库中随机选择。长篇可用遥控器上下滚动，倒计时和 PIN 入口保持可用；锁定恢复后仍显示同一篇。内置古诗文已附全文，离线时可作为后备。后台通过 DeepSeek 自动补全旧古诗词题缺失的作品全文并保存，之后随题目同步到电视；新 AI 古诗词题也会附全文，管理页的题目详情和 AI 预览均可查看。后台需已配置 `DEEPSEEK_API_KEY`，电视端不保存密钥或直接调用模型。
+
 ## 本机后台
 
 需要 Python 3.11 或更高版本，无第三方 Python 依赖。在项目根目录打开 PowerShell，首次启动会在 SQLite 中创建默认管理员 `admin/admin`。

@@ -33,6 +33,7 @@ object ControlState {
     private const val USAGE_RESET_AT_KEY = "usage_reset_at"
     private const val LOCKOUT_UNTIL_KEY = "lockout_until"
     private const val LOCKOUT_STARTED_AT_KEY = "lockout_started_at"
+    private const val LOCKOUT_POEM_KEY = "lockout_poem"
     private const val QUESTION_STARTED_AT_KEY = "question_started_at"
     private const val QUESTION_TIMEOUT_AT_KEY = "question_timeout_at"
     private const val QUESTION_OVERLAY_ACTIVE_KEY = "question_overlay_active"
@@ -165,6 +166,7 @@ object ControlState {
             editor.putLong(LOCKOUT_STARTED_AT_KEY, lockStartedAt)
             if (adjustedLockUntil <= now) {
                 editor.remove(LOCKOUT_UNTIL_KEY)
+                editor.remove(LOCKOUT_POEM_KEY)
             } else {
                 editor.putLong(LOCKOUT_UNTIL_KEY, adjustedLockUntil)
             }
@@ -377,14 +379,26 @@ object ControlState {
         prefs(context).getBoolean(QUESTION_OVERLAY_ACTIVE_KEY, false)
 
     @Synchronized
-    fun startWrongAnswerLock(context: Context): Long {
+    fun startWrongAnswerLock(context: Context, poem: Poem): Long {
         val startedAt = System.currentTimeMillis()
         val until = startedAt + settings(context).wrongLockMinutes * MILLIS_PER_MINUTE
         prefs(context).edit()
             .putLong(LOCKOUT_STARTED_AT_KEY, startedAt)
             .putLong(LOCKOUT_UNTIL_KEY, until)
+            .putString(LOCKOUT_POEM_KEY, QuestionBank.poemToJsonObject(poem).toString())
             .apply()
         return until
+    }
+
+    @Synchronized
+    fun wrongAnswerLockPoem(context: Context): Poem {
+        val preferences = prefs(context)
+        preferences.getString(LOCKOUT_POEM_KEY, null)?.let { json ->
+            runCatching { QuestionBank.parsePoem(JSONObject(json)) }.getOrNull()?.let { return it }
+        }
+        val poem = QuestionBank.poemForWrongAnswerLock(context)
+        preferences.edit().putString(LOCKOUT_POEM_KEY, QuestionBank.poemToJsonObject(poem).toString()).apply()
+        return poem
     }
 
     @Synchronized
@@ -392,6 +406,7 @@ object ControlState {
         prefs(context).edit()
             .remove(LOCKOUT_UNTIL_KEY)
             .remove(LOCKOUT_STARTED_AT_KEY)
+            .remove(LOCKOUT_POEM_KEY)
             .apply()
     }
 
