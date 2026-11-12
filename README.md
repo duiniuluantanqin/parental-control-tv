@@ -34,7 +34,9 @@ $emulator = Join-Path $androidSdk "emulator\emulator.exe"
 
 模拟器安装脚本会从 Android SDK 环境变量、`local.properties`、常见 SDK 目录或 PATH 定位 ADB，并会先卸载旧包，因此会清除模拟器中的本地应用数据。电视安装请使用 `install_device.bat`。
 
-屏幕亮起时长按 30 秒采样，额度临近耗尽时会缩短采样间隔。后台服务在开机后恢复；TCL 固件还需要通过 ADB 放行 `APP_AUTO_START` 与 `APP_ASSOC_START`。完整安装升级步骤见 [docs/INSTALL_TCL.md](docs/INSTALL_TCL.md)。
+屏幕亮起时长通常每 10 秒结算并同步保存，待机、正常关机和服务退出前补结算；额度临近耗尽时会缩短采样间隔。开机校时出现日期回退时不清空当天用时，日期跳变后校正可恢复该日期的已用时间。突然断电或强杀仍可能丢失最近尚未采样的一小段时间，系统长时间挂起服务时不能保证固定误差上限；详见 [计时说明](docs/USAGE_ACCOUNTING.md)。后台服务在开机后恢复；TCL 固件还需要通过 ADB 放行 `APP_AUTO_START` 与 `APP_ASSOC_START`。完整安装升级步骤见 [docs/INSTALL_TCL.md](docs/INSTALL_TCL.md)。
+
+开机答题每天只在首次启动时触发一次，按电视本地日期判断；当天再次重启电视或重新打开应用不会重复触发启动挑战，正常定时答题和锁定恢复仍照常执行。高级设置中的 `Questions on first startup of the day` 开关控制此行为。
 
 答错锁定期间会显示诗词全文：优先从本轮答错的古诗词题中选一篇，否则从题库中随机选择。全文不滚动；短篇保留原排版，长篇将作者以小字放在标题后，并按可用空间缩小正文和行距。倒计时和 PIN 入口保持可用；锁定恢复后仍显示同一篇。内置古诗文已附全文，离线时可作为后备。后台通过 DeepSeek 自动补全旧古诗词题缺失的作品全文并保存，之后随题目同步到电视；新 AI 古诗词题也会附全文，管理页的题目详情和 AI 预览均可查看。后台需已配置 `DEEPSEEK_API_KEY`，电视端不保存密钥或直接调用模型。
 

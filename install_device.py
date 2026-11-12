@@ -13,7 +13,7 @@ import urllib.request
 from pathlib import Path
 
 
-TV_IP = "10.0.0.44"
+TV_IP = os.environ.get("TV_PARENTAL_TV_IP", "10.0.0.8").strip()
 TV_ADB = f"{TV_IP}:5555"
 PACKAGE = "com.example.tvparental"
 APP_LABEL = "健康使用"
@@ -82,9 +82,14 @@ def adb_path():
 
 
 def run_adb(adb, *args):
-    result = subprocess.run([adb, *args], text=True, capture_output=True, check=False)
+    try:
+        result = subprocess.run(
+            [adb, *args], encoding="utf-8", errors="replace", capture_output=True, check=False, timeout=30
+        )
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(f"ADB command timed out after 30 seconds: {' '.join(args)}") from error
     if result.returncode:
-        raise RuntimeError(result.stderr.strip() or f"ADB command failed: {' '.join(args)}")
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"ADB command failed: {' '.join(args)}")
     return result.stdout.strip()
 
 
@@ -167,11 +172,11 @@ def main():
     shutil.copy2(APK, PUSH_APK)
 
     adb = adb_path()
-    print(f"Connecting to TCL TV at {TV_ADB}...")
-    run_adb(adb, "connect", TV_ADB)
+    print(f"Connecting to TCL TV at {TV_ADB}...", flush=True)
+    connection = run_adb(adb, "connect", TV_ADB)
     devices = run_adb(adb, "devices")
     if not any(line.split() == [TV_ADB, "device"] for line in devices.splitlines()):
-        raise RuntimeError(f"TV is not ready for ADB. Current devices:\n{devices}")
+        raise RuntimeError(f"TV is not ready for ADB at {TV_ADB}. {connection}\nCurrent devices:\n{devices}")
 
     server = None
     reverse_ready = False

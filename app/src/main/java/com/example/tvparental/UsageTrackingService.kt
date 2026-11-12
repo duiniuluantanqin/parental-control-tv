@@ -11,6 +11,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -28,46 +30,57 @@ import java.io.PrintWriter
 
 class UsageTrackingService : Service() {
     private val handler = Handler(Looper.getMainLooper())
-    private var lastSample = 0L
+    private val usageSamples = UsageSampleTracker()
     private var lastRemoteSync = 0L
-    private var lastUsageReport = 0L
+    private val usageReports = UsageReportSchedule()
     private var remoteSyncInProgress = false
-    private var usageReportInProgress = false
-    private var wasInteractive = false
-    private var overlayPaused = false
+    private var serviceStopped = false
+    private var networkCallbackRegistered = false
+    private val wasInteractive get() = usageSamples.interactive
+    private val overlayPaused get() = usageSamples.overlayPaused
     private var receiverRegistered = false
     private var lastEnforcementAction: String? = null
     private var reminderView: LinearLayout? = null
     private var reminderText: TextView? = null
     private var reminderWindowManager: WindowManager? = null
+    private val usageReportRetry = Runnable { reportUsageIfDue() }
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            handler.post {
+                if (!serviceStopped) reportUsageIfDue(force = usageReports.retryPending)
+            }
+        }
+    }
 
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == RemoteSync.ACTION_USAGE_RESET) {
-                lastSample = SystemClock.elapsedRealtime()
-                lastUsageReport = 0L
-                wasInteractive = powerManager().isInteractive
+                accountElapsedTime(interactive = powerManager().isInteractive)
                 refreshTrackedState()
-                reportUsageIfDue()
+                reportUsageIfDue(force = true)
                 return
             }
             if (intent?.action == RemoteSync.ACTION_SYNC_COMPLETED) {
-                wasInteractive = powerManager().isInteractive
+                accountElapsedTime(interactive = powerManager().isInteractive)
                 refreshTrackedState()
                 return
             }
-            accountElapsedTime()
-            wasInteractive = intent?.action == Intent.ACTION_SCREEN_ON
+            val interactive = when (intent?.action) {
+                Intent.ACTION_SCREEN_ON -> true
+                Intent.ACTION_SCREEN_OFF, Intent.ACTION_SHUTDOWN -> false
+                else -> powerManager().isInteractive
+            }
+            accountElapsedTime(interactive = interactive)
+            if (intent?.action == Intent.ACTION_SHUTDOWN) return
             updateEnforcement()
             maybeShowUsageReminder()
-            reportUsageIfDue()
+            reportUsageIfDue(force = intent?.action == Intent.ACTION_SCREEN_ON)
         }
     }
 
     private val ticker = object : Runnable {
         override fun run() {
-            accountElapsedTime()
-            wasInteractive = powerManager().isInteractive
+            accountElapsedTime(interactive = powerManager().isInteractive)
             updateEnforcement()
             maybeShowUsageReminder()
             updateNotification()
@@ -82,17 +95,25 @@ class UsageTrackingService : Service() {
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification())
         isRunning = true
-        wasInteractive = powerManager().isInteractive
-        overlayPaused = ControlState.isQuestionOverlayActive(this)
-        lastSample = SystemClock.elapsedRealtime()
+        usageSamples.start(
+            SystemClock.elapsedRealtime(),
+            powerManager().isInteractive,
+            QuestionOverlayService.isRunning && ControlState.isQuestionOverlayActive(this),
+        )
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_SHUTDOWN)
+            addAction(Intent.ACTION_TIME_CHANGED)
+            addAction(Intent.ACTION_TIMEZONE_CHANGED)
+            addAction(Intent.ACTION_DATE_CHANGED)
             addAction(RemoteSync.ACTION_SYNC_COMPLETED)
             addAction(RemoteSync.ACTION_USAGE_RESET)
         }
         registerReceiver(screenReceiver, filter)
         receiverRegistered = true
+        getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkCallback)
+        networkCallbackRegistered = true
         updateEnforcement()
         updateNotification()
         handler.post(ticker)
@@ -100,47 +121,49 @@ class UsageTrackingService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_SET_OVERLAY_PAUSED) {
-            accountElapsedTime()
-            overlayPaused = intent.getBooleanExtra(EXTRA_OVERLAY_PAUSED, false)
+            accountElapsedTime(
+                interactive = powerManager().isInteractive,
+                paused = intent.getBooleanExtra(EXTRA_OVERLAY_PAUSED, false),
+            )
             refreshTrackedState()
         } else if (intent?.action == ACTION_REFRESH_DISPLAY) {
-            wasInteractive = powerManager().isInteractive
+            accountElapsedTime(interactive = powerManager().isInteractive)
             refreshTrackedState()
         } else {
-            wasInteractive = powerManager().isInteractive
+            accountElapsedTime(interactive = powerManager().isInteractive)
             refreshTrackedState()
+            reportUsageIfDue(force = true)
             syncRemoteIfDue(force = true)
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
+        serviceStopped = true
+        accountElapsedTime(interactive = false)
         isRunning = false
         handler.removeCallbacks(ticker)
+        handler.removeCallbacks(usageReportRetry)
         hideUsageReminder()
         if (receiverRegistered) unregisterReceiver(screenReceiver)
+        if (networkCallbackRegistered) {
+            getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(networkCallback)
+        }
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun dump(fd: FileDescriptor?, writer: PrintWriter, args: Array<out String>?) {
-        writer.println("Usage tracking: running=$isRunning lastSampleElapsed=$lastSample")
+        writer.println("Usage tracking: running=$isRunning lastSampleElapsed=${usageSamples.lastElapsed}")
         writer.println("interactive=$wasInteractive overlayPaused=$overlayPaused")
+        writer.println("usageDay=${ControlState.usageReportSnapshot(this).getString("date")} usedMillis=${ControlState.usedMillis(this)} clockDay=${DailyUsageLedger.localDay(System.currentTimeMillis())}")
     }
 
-    private fun accountElapsedTime() {
+    private fun accountElapsedTime(interactive: Boolean = wasInteractive, paused: Boolean = overlayPaused) {
         val now = SystemClock.elapsedRealtime()
-        val elapsed = (now - lastSample).coerceAtLeast(0L)
-        if (wasInteractive &&
-            !overlayPaused &&
-            ControlState.lockoutUntil(this) <= System.currentTimeMillis() &&
-            !ControlState.isDailyLimitReached(this) &&
-            ControlState.isUsageWindowAllowed(this)
-        ) {
-            ControlState.addScreenTime(this, elapsed)
-        }
-        lastSample = now
+        val elapsed = usageSamples.sample(now, interactive, paused)
+        if (elapsed > 0L) ControlState.addScreenTime(this, elapsed)
     }
 
     private fun updateEnforcement() {
@@ -297,15 +320,21 @@ class UsageTrackingService : Service() {
         }.start()
     }
 
-    private fun reportUsageIfDue() {
-        if (usageReportInProgress) return
+    private fun reportUsageIfDue(force: Boolean = false) {
+        if (serviceStopped) return
         val now = SystemClock.elapsedRealtime()
-        if (lastUsageReport != 0L && now - lastUsageReport < USAGE_REPORT_INTERVAL_MS) return
-        lastUsageReport = now.coerceAtLeast(1L)
-        usageReportInProgress = true
+        if (!usageReports.begin(now, force)) return
+        handler.removeCallbacks(usageReportRetry)
         Thread {
-            RemoteSync.reportUsage(applicationContext)
-            handler.post { usageReportInProgress = false }
+            val success = RemoteSync.reportUsage(applicationContext)
+            handler.post {
+                if (serviceStopped) return@post
+                val completedAt = SystemClock.elapsedRealtime()
+                usageReports.complete(completedAt, success)
+                usageReports.followUpDelay(completedAt)?.let { delay ->
+                    handler.postDelayed(usageReportRetry, delay)
+                }
+            }
         }.start()
     }
 
@@ -368,8 +397,7 @@ class UsageTrackingService : Service() {
         const val EXTRA_OVERLAY_PAUSED = "overlay_paused"
         private const val CHANNEL_ID = "usage_tracking"
         private const val NOTIFICATION_ID = 1002
-        private const val SAMPLE_INTERVAL_MS = 30_000L
-        private const val USAGE_REPORT_INTERVAL_MS = 60_000L
+        private const val SAMPLE_INTERVAL_MS = 10_000L
         private const val TEN_MINUTE_THRESHOLD_MS = ControlState.TEN_MINUTE_REMINDER_MINUTES * 60_000L
         private const val ONE_MINUTE_THRESHOLD_MS = ControlState.ONE_MINUTE_REMINDER_MINUTES * 60_000L
         private const val MILLIS_PER_MINUTE = 60_000L

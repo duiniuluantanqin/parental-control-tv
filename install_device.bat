@@ -11,7 +11,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-python "%~dp0install_device.py"
+python -X utf8 "%~dp0install_device.py"
 if errorlevel 1 (
     echo.
     echo TCL installation failed. See the message above for details.

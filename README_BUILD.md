@@ -54,7 +54,7 @@ macOS/Linux 可在仓库根目录运行 `./gradlew assembleDebug`，前提是已
 
 电视安装入口是 `install_device.bat`。它需要 Python 3、电视开启 ADB 调试并可从本机访问。安装器会从 `ANDROID_SDK_ROOT`、`ANDROID_HOME`、项目 `local.properties` 或 PATH 查找 ADB，并通过电视自带的 TCL“多屏互动”发起安装；电视上需要用遥控器确认。此固件拒绝 `adb install -r`，不要用普通 ADB 覆盖安装。设备和升级验证步骤见 [docs/INSTALL_TCL.md](docs/INSTALL_TCL.md)。
 
-当前目标电视地址为 `10.0.0.44:5555`。换电脑但仍安装到同一台电视时，确认电视和电脑在同一网络，并先用 `adb devices` 或运行安装脚本确认连接状态。
+当前目标电视地址为 `10.0.0.8:5555`。换电脑但仍安装到同一台电视时，确认电视和电脑在同一网络，并先用 `adb devices` 或运行安装脚本确认连接状态。如果电视 IP 再次变化，可在当前 PowerShell 窗口设置 `$env:TV_PARENTAL_TV_IP = '新的电视IP'` 后运行 `install_device.bat`，不必修改脚本。
 
 ## 故障定位
 

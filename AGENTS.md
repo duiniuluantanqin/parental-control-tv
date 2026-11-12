@@ -11,7 +11,7 @@
 ## Product context
 
 - Target device: Thunderbird (LeiNiao) Android TV, Android 9/API 28.
-- ADB endpoint: `10.0.0.44:5555`.
+- ADB endpoint: `10.0.0.8:5555` (updated on 2026-11-12 after the TV's IP changed).
 - The app presents multiple-choice questions in a large centered floating window (about 86% x 82% of the screen, dimmed background) above the current TV app. D-pad moves the selection and OK submits it.
 - A parent sets a 6-key D-pad unlock password (up/down/left/right) on the launcher; it is stored only as a salted SHA-256 hash. On the wrong-answer lock screen the password ends the lockout early; 5 wrong attempts trigger a 30-second cooldown. The daily-quota lock cannot be unlocked by password.
 - Parents manage the question bank and usage rules through a Web admin page, initially hosted on a local computer and later deployable to Alibaba Cloud ECS.
@@ -39,6 +39,9 @@
 
 - Android sources are under `app/`; the 50-question seed bank is `app/src/main/assets/questions.json`.
 - The launcher displays today's use and supports manual sync and an immediate test question. The backend URL is fixed in `ControlState.BACKEND_URL`.
+- Startup challenges trigger only on the first startup of each TV-local calendar day. The boot receiver and launcher share a synchronously persisted date claim; missing overlay permission does not consume the claim. Later reboots or launcher openings that day do not trigger another startup challenge; interval questions and lock recovery keep their normal behavior.
+- Daily usage normally checkpoints synchronously every 10 seconds while the service is scheduled, plus final samples on screen-off, shutdown, and service destruction. Samples settle the previous screen/overlay state before transitions. A 32-date usage ledger preserves totals, extensions and reset IDs across clock jumps; an unseen older boot date cannot clear the active day. Lowering a quota never lowers already-used time. See `docs/USAGE_ACCOUNTING.md` for limits and validation.
+- Report cumulative daily usage immediately on usage-service startup and every screen-on, bypassing the normal minute interval. Failed reports retry after 5 seconds; network availability triggers an immediate retry. Requests are serialized, and an immediate request arriving during a report queues one follow-up. The minute interval starts after a successful report.
 - PIN-protected Advanced settings has a local `Block Recent Watch button` switch (on by default; preserves an explicit off choice). `RecentWatchGuardService` requires accessibility access, consumes TCL scan code 613 when delivered, and closes only the confirmed TCL Recent Watch plugin activity as a firmware fallback. See `docs/REMOTE_BUTTON_CONTROL.md`; preserve Aerial and other accessibility services when testing.
 - The same accessibility service provides an independent `Block Live TV button` switch, on by default. It consumes the observed Live TV key (`KEYCODE_TV`, scan code 377). Do not close all `com.tcl.tv.TVActivity` windows as a fallback: that activity also handles TV input sources. Key filtering remains requested while either shortcut switch is enabled.
 - The challenge unlocks after 4 correct answers out of 5. Every submitted answer is queued locally and reported to the backend; daily cumulative screen-on usage is reported once per minute.

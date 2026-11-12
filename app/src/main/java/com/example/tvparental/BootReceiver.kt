@@ -29,7 +29,7 @@ class BootReceiver : BroadcastReceiver() {
         }
         Log.i(TAG, "Received $action; question alarm and usage tracking started")
 
-        if (ControlState.showQuestionOnStartup(context)) {
+        if (Settings.canDrawOverlays(context) && ControlState.claimStartupQuestion(context)) {
             val questionIntent = Intent(context, QuestionOverlayService::class.java)
                 .setAction(QuestionOverlayService.ACTION_SHOW_QUESTION)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

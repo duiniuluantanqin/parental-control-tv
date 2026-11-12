@@ -93,7 +93,7 @@ class MainActivity : Activity() {
         }
         if (startupQuestionPending && canDrawOverlays()) {
             startupQuestionPending = false
-            showQuestionNow(testQuestion = false)
+            if (ControlState.claimStartupQuestion(this)) showQuestionNow(testQuestion = false)
         }
     }
 
@@ -388,7 +388,7 @@ class MainActivity : Activity() {
             setPadding(0, 0, 0, dp(18))
         }, centeredParams())
         val startupQuestion = Switch(this).apply {
-            text = "Show a question when the app starts"
+            text = "Questions on first startup of the day"
             textSize = 18f
             setTextColor(Color.rgb(235, 241, 237))
             isChecked = ControlState.showQuestionOnStartup(this@MainActivity)

@@ -3,6 +3,8 @@ package com.example.tvparental
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.SharedPreferences
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.security.MessageDigest
@@ -46,6 +48,8 @@ object ControlState {
     private const val SYNC_INTERVAL_KEY = "sync_interval_minutes"
     private const val ALWAYS_SHOW_REMAINING_TIME_KEY = "always_show_remaining_time"
     private const val SHOW_QUESTION_ON_STARTUP_KEY = "show_question_on_startup"
+    private const val STARTUP_QUESTION_DAY_KEY = "startup_question_day"
+    private var lastIgnoredClockDay: String? = null
     const val BLOCK_RECENT_WATCH_KEY = "block_recent_watch"
     const val BLOCK_LIVE_TV_KEY = "block_live_tv"
     private const val MILLIS_PER_MINUTE = 60_000L
@@ -99,6 +103,18 @@ object ControlState {
 
     fun setShowQuestionOnStartup(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(SHOW_QUESTION_ON_STARTUP_KEY, enabled).apply()
+    }
+
+    fun claimStartupQuestion(context: Context): Boolean =
+        claimStartupQuestion(prefs(context), System.currentTimeMillis())
+
+    @Synchronized
+    internal fun claimStartupQuestion(preferences: SharedPreferences, now: Long): Boolean {
+        if (!preferences.getBoolean(SHOW_QUESTION_ON_STARTUP_KEY, true)) return false
+        val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(now)
+        if (preferences.getString(STARTUP_QUESTION_DAY_KEY, null) == today) return false
+        // Persist before dispatch so the boot receiver and launcher cannot both trigger it.
+        return preferences.edit().putString(STARTUP_QUESTION_DAY_KEY, today).commit()
     }
 
     fun blockRecentWatch(context: Context): Boolean =
@@ -216,18 +232,19 @@ object ControlState {
         if (elapsedMillis <= 0L) return
         resetForNewDay(context)
         val now = System.currentTimeMillis()
+        val preferences = prefs(context)
+        if (preferences.getString(DAY_KEY, null) != DailyUsageLedger.localDay(now)) return
         val todayStart = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0)
             set(Calendar.MINUTE, 0)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
-        val start = maxOf(now - elapsedMillis, todayStart, prefs(context).getLong(USAGE_RESET_AT_KEY, 0L))
+        val start = maxOf(now - elapsedMillis, todayStart, preferences.getLong(USAGE_RESET_AT_KEY, 0L), lockoutUntil(context))
         val countedMillis = allowedUsageMillis(settings(context), start, now)
         if (countedMillis == 0L) return
-        val current = prefs(context).getLong(USED_MILLIS_KEY, 0L).coerceAtLeast(0L)
         val limit = todayDailyLimitMinutes(context) * MILLIS_PER_MINUTE + tempExtension(context)
-        prefs(context).edit().putLong(USED_MILLIS_KEY, (current + countedMillis).coerceAtMost(limit)).apply()
+        DailyUsageLedger.addUsage(preferences, countedMillis, limit)
     }
 
     fun isDailyLimitReached(context: Context): Boolean {
@@ -262,9 +279,9 @@ object ControlState {
     @Synchronized
     fun grantPasswordExtension(context: Context) {
         resetForNewDay(context)
-        prefs(context).edit()
+        check(prefs(context).edit()
             .putLong(TEMP_EXTENSION_KEY, PASSWORD_EXTENSION_MINUTES * MILLIS_PER_MINUTE)
-            .apply()
+            .commit()) { "Could not save the viewing extension." }
     }
 
     private fun allowedUsageMillis(settings: ParentSettings, startMillis: Long, endMillis: Long): Long {
@@ -490,17 +507,19 @@ object ControlState {
 
     @Synchronized
     private fun resetForNewDay(context: Context) {
-        val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(System.currentTimeMillis())
         val preferences = prefs(context)
-        if (preferences.getString(DAY_KEY, null) != today) {
-            preferences.edit()
-                .putString(DAY_KEY, today)
-                .putLong(USED_MILLIS_KEY, 0L)
-                .putLong(TEMP_EXTENSION_KEY, 0L)
-                .remove(USAGE_RESET_ID_KEY)
-                .remove(USAGE_RESET_AT_KEY)
-                .apply()
+        val previous = preferences.getString(DAY_KEY, null)
+        val now = System.currentTimeMillis()
+        DailyUsageLedger.ensureDay(preferences, now)
+        val day = preferences.getString(DAY_KEY, null)
+        if (day != previous) {
+            Log.i("TvParentalUsage", "Usage day $previous -> $day; usedMillis=${preferences.getLong(USED_MILLIS_KEY, 0L)}")
         }
+        val clockDay = DailyUsageLedger.localDay(now)
+        if (day != clockDay && lastIgnoredClockDay != clockDay) {
+            Log.w("TvParentalUsage", "Ignoring older clock day $clockDay; preserving usage day $day")
+        }
+        lastIgnoredClockDay = clockDay.takeIf { it != day }
     }
 
     private fun prefs(context: Context) =
