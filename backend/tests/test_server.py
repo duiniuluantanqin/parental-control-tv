@@ -111,8 +111,12 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(preview["questions"][0]["poem"], poem)
         self.assertEqual(len(server.STORE.load()["questions"]), 50)
+        _, history = self.request("/api/v1/admin/poems")
+        self.assertNotIn({"title": "静夜思", "author": "李白"}, history["poems"])
         status, _ = self.request("/api/v1/admin/questions/batch", method="POST", body={"questions": preview["questions"]})
         self.assertEqual(status, 200)
+        _, history = self.request("/api/v1/admin/poems")
+        self.assertIn({"title": "静夜思", "author": "李白"}, history["poems"])
         _, state = self.request("/api/v1/device/state", authenticated=False)
         question = state["questions"][-1]
         self.assertEqual(question["poem"], poem)
@@ -125,6 +129,55 @@ class AdminApiTests(unittest.TestCase):
         status, _ = self.request("/api/v1/admin/answers/restore", method="POST", body={"attemptId": "poem-answer"})
         self.assertEqual(status, 200)
         self.assertEqual(server.STORE.load()["questions"][-1]["poem"], poem)
+
+    def test_poem_history_is_admin_only_and_survives_question_removal(self) -> None:
+        path = "/api/v1/admin/poems"
+        status, _ = self.request(path, authenticated=False)
+        self.assertEqual(status, 401)
+        _, history = self.request(path)
+        self.assertEqual(len(history["poems"]), 10)
+        poem = {"title": "静夜思", "author": "李白", "content": "床前明月光，疑是地上霜。"}
+        base = {"category": "古诗词", "options": ["甲", "乙", "丙", "丁"], "answer": "甲", "poem": poem}
+        for prompt in ("诗词历史测试一", "诗词历史测试二"):
+            status, question = self.request("/api/v1/admin/questions", method="POST", body={**base, "prompt": prompt})
+            self.assertEqual(status, 201)
+            status, _ = self.request(f"/api/v1/admin/questions/{question['id']}", method="DELETE")
+            self.assertEqual(status, 200)
+        server.STORE = server.StateStore(server.STORE.path)
+        _, history = self.request(path)
+        self.assertEqual(history["poems"].count({"title": "静夜思", "author": "李白"}), 1)
+        question = server.STORE.load()["questions"][0]
+        self.request("/api/v1/device/answers", method="POST", authenticated=False, body={
+            "questionId": question["id"], "answer": question["answer"],
+        })
+        _, history = self.request(path)
+        self.assertIn({"title": question["poem"]["title"], "author": question["poem"]["author"]}, history["poems"])
+        _, synced = self.request("/api/v1/device/state", authenticated=False)
+        self.assertNotIn("poems", synced)
+
+    def test_poem_history_backfills_existing_questions_and_answer_snapshots(self) -> None:
+        # Simulate a database created before the poem history feature.
+        state = server.STORE.load()
+        poem = {"title": "相思", "author": "王维", "content": "红豆生南国，春来发几枝。"}
+        question = {**state["questions"][0], "id": "old-poem", "prompt": "旧诗词题", "poem": poem}
+        state["answerRecords"].append({"question": question})
+        state["questions"].append({key: value for key, value in {
+            **question, "id": "legacy-title", "prompt": "《山行》的作者是谁？",
+        }.items() if key != "poem"})
+        server.STORE.save(state)
+        with closing(sqlite3.connect(server.STORE.path)) as connection:
+            connection.execute("DELETE FROM poem_history")
+            connection.commit()
+        _, history = self.request("/api/v1/admin/poems")
+        self.assertIn({"title": "相思", "author": "王维"}, history["poems"])
+        self.assertIn({"title": "山行", "author": ""}, history["poems"])
+        # Full metadata later replaces the title-only entry in the displayed list.
+        state = server.STORE.load()
+        state["questions"][-1]["poem"] = {"title": "山行", "author": "杜牧", "content": "远上寒山石径斜，白云生处有人家。"}
+        server.STORE.save(state)
+        _, history = self.request("/api/v1/admin/poems")
+        self.assertNotIn({"title": "山行", "author": ""}, history["poems"])
+        self.assertIn({"title": "山行", "author": "杜牧"}, history["poems"])
 
     def test_full_work_batches_allow_long_prose_and_reject_invalid_poem_atomically(self) -> None:
         base = {"category": "古诗词", "options": ["甲", "乙", "丙", "丁"], "answer": "甲"}

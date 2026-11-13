@@ -86,6 +86,10 @@ button:disabled { opacity: .5; cursor: default; }
 .count { display: inline-grid; min-width: 30px; height: 26px; place-items: center; margin-left: 6px; padding: 0 8px; color: #285d52; background: #dceae3; border-radius: 14px; font-size: 13px; vertical-align: 3px; font-variant-numeric: tabular-nums; }
 .filters { display: flex; gap: 10px; }
 .filters select { min-width: 140px; }
+.filters input { min-width: 0; width: 200px; }
+.poem-history-table th:first-child, .poem-history-table td:first-child { width: auto; }
+.poem-history-table th:last-child, .poem-history-table td:last-child { width: 160px; text-align: left; }
+#poemHistoryHint { color: #835229; line-height: 1.6; }
 .table-wrap { background: #fff; border: 1px solid #d1dbd6; border-radius: 8px; overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; text-align: left; }
 th { padding: 15px 18px; color: #61746c; background: #f5f8f6; font-size: 12px; font-weight: 600; }
@@ -262,6 +266,10 @@ dialog::backdrop { background: #102c296b; backdrop-filter: blur(3px); }
 .reset-device-field select { min-width: 0; max-width: 100%; }
 .reset-actions { display: flex; flex-wrap: wrap; gap: 12px; flex-shrink: 0; }
 @media (max-width: 700px) {
+  .page-nav { gap: 20px; overflow-x: auto; white-space: nowrap; }
+  .filters input { flex: 1; }
+  .poem-history-table { min-width: 0; }
+  .poem-history-table th:last-child, .poem-history-table td:last-child { width: 90px; }
   .reset-device-field { align-items: stretch; flex-direction: column; padding: 0 24px 20px; }
   .reset-actions { width: 100%; }
 }

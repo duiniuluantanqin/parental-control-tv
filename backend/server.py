@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sqlite3
 from datetime import date, datetime, time as datetime_time, timedelta, timezone
 import secrets
@@ -338,6 +339,11 @@ class StateStore:
                 question_id TEXT NOT NULL UNIQUE,
                 payload TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS poem_history (
+                title TEXT NOT NULL,
+                author TEXT NOT NULL,
+                PRIMARY KEY (title, author)
+            );
             CREATE TABLE IF NOT EXISTS daily_usage (
                 device_id TEXT NOT NULL,
                 record_date TEXT NOT NULL,
@@ -386,9 +392,45 @@ class StateStore:
             connection.commit()
 
     @staticmethod
+    def _remember_poems(connection: sqlite3.Connection, questions: list[dict[str, object]]) -> None:
+        seed = {item["id"]: item for item in json.loads(SEED_FILE.read_text(encoding="utf-8"))}
+        works = set()
+        for question in questions:
+            if question.get("category", "古诗词") != "古诗词":
+                continue
+            poem = question.get("poem")
+            original = seed.get(question.get("id"))
+            if not poem and original and original["prompt"] == question.get("prompt"):
+                poem = original.get("poem")
+            if poem:
+                works.add((poem["title"].strip(), poem["author"].strip()))
+            else:
+                works.update((title.strip(), "") for title in re.findall(r"《([^《》]+)》", question.get("prompt", "")) if title.strip())
+        connection.executemany("INSERT OR IGNORE INTO poem_history(title, author) VALUES (?, ?)", sorted(works))
+
+    def poem_history(self) -> list[dict[str, str]]:
+        with self.lock:
+            state = self.load()
+            with closing(sqlite3.connect(self.path, timeout=10)) as connection, connection:
+                self._remember_poems(connection, state["questions"] + [
+                    item.get("question") or {"prompt": item.get("prompt", ""), "id": item.get("questionId")}
+                    for item in state["answerRecords"]
+                ])
+                rows = connection.execute("SELECT title, author FROM poem_history ORDER BY title, author").fetchall()
+            known_titles = {title for title, author in rows if author}
+            return [{"title": title, "author": author} for title, author in rows if author or title not in known_titles]
+
+    @staticmethod
     def _write_state(connection: sqlite3.Connection, state: dict[str, object]) -> None:
         encoded = lambda value: json.dumps(value, ensure_ascii=False, separators=(",", ":"))
         with connection:
+            # Remember the previous bank before deletion or a correct answer removes a work.
+            StateStore._remember_poems(connection, [
+                json.loads(item[0]) for item in connection.execute("SELECT payload FROM questions")
+            ] + state["questions"] + [
+                item.get("question") or {"prompt": item.get("prompt", ""), "id": item.get("questionId")}
+                for item in state["answerRecords"]
+            ])
             connection.execute(
                 "INSERT OR REPLACE INTO app_state(id, settings, password_reset) VALUES (1, ?, ?)",
                 (encoded(state["settings"]), encoded(state["passwordReset"]) if state.get("passwordReset") is not None else None),
@@ -679,6 +721,9 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/v1/admin/state":
             if self.require_admin():
                 self.send_json(200, STORE.snapshot())
+        elif path == "/api/v1/admin/poems":
+            if self.require_admin():
+                self.send_json(200, {"poems": STORE.poem_history()})
         elif path == "/api/v1/admin/records":
             if self.require_admin():
                 params = parse_qs(urlsplit(self.path).query)
@@ -769,7 +814,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                         for device_id in sorted(known_ids)
                     ]
                 })
-        elif path in ("/", "/index.html", "/login", "/settings", "/questions", "/records", "/devices"):
+        elif path in ("/", "/index.html", "/login", "/settings", "/questions", "/poems", "/records", "/devices"):
             self.send_static("index.html", "text/html; charset=utf-8")
         elif path == "/app.js":
             self.send_static("app.js", "text/javascript; charset=utf-8")

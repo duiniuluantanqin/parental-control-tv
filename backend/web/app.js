@@ -15,13 +15,14 @@ const englishWordInput = document.querySelector("#englishWordInput");
 const englishWordField = document.querySelector("#englishWordField");
 const loginView = document.querySelector("#loginView");
 const adminView = document.querySelector("#adminView");
-const page = location.pathname === "/questions" ? "questions" : ["/records", "/devices"].includes(location.pathname) ? "records" : "settings";
-const isLoginPage = !["/settings", "/questions", "/records", "/devices"].includes(location.pathname);
+const page = location.pathname === "/poems" ? "poems" : location.pathname === "/questions" ? "questions" : ["/records", "/devices"].includes(location.pathname) ? "records" : "settings";
+const isLoginPage = !["/settings", "/questions", "/poems", "/records", "/devices"].includes(location.pathname);
 const weekdays = [
   ["1", "周一"], ["2", "周二"], ["3", "周三"], ["4", "周四"],
   ["5", "周五"], ["6", "周六"], ["7", "周日"],
 ];
 let questions = [];
+let poemHistory = [];
 let aiQuestions = [];
 let refillTimer;
 
@@ -259,6 +260,48 @@ function renderWeeklySettings(settings) {
   }
 }
 
+function renderPoemHistory() {
+  const query = document.querySelector("#poemSearch").value.trim();
+  const visible = poemHistory.filter(poem => `${poem.title} ${poem.author}`.includes(query));
+  const container = document.querySelector("#poemRows");
+  container.replaceChildren();
+  document.querySelector("#poemCount").textContent = query ? `${visible.length} / ${poemHistory.length}` : poemHistory.length;
+  if (!visible.length) {
+    setEmptyRow(container, 2, query ? "没有匹配的作品" : "暂无已出题古诗词");
+    return;
+  }
+  for (const poem of visible) {
+    const row = document.createElement("tr");
+    for (const value of [`《${poem.title}》`, poem.author || "待补全"]) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.append(cell);
+    }
+    container.append(row);
+  }
+}
+
+function updatePoemHistoryHint() {
+  const normalize = value => value.replace(/[\s《》（）()·・]/g, "");
+  const query = normalize(poemTitleInput.value);
+  const matches = query ? poemHistory.filter(poem => {
+    const title = normalize(poem.title);
+    return title.includes(query) || query.includes(title);
+  }) : [];
+  const hint = document.querySelector("#poemHistoryHint");
+  hint.hidden = !matches.length;
+  hint.textContent = matches.length
+    ? `已有出题记录：${matches.slice(0, 5).map(poem => `《${poem.title}》${poem.author ? `（${poem.author}）` : ""}`).join("、")}${matches.length > 5 ? "等" : ""}。请核对，避免重复添加。`
+    : "";
+}
+
+async function loadPoemHistory() {
+  const result = await api("/api/v1/admin/poems");
+  poemHistory = result.poems;
+  renderPoemHistory();
+  updatePoemHistoryHint();
+}
+
 async function loadState() {
   const state = await api("/api/v1/admin/state");
   if (state.version) document.querySelector("#backendVersion").textContent = `后台 v${state.version}`;
@@ -279,6 +322,7 @@ async function loadState() {
   questions = state.questions;
   renderCategories();
   renderQuestions();
+  if (page === "poems" && !isLoginPage) await loadPoemHistory();
   if (refillTimer && questions.length) setNotice(`题库已更新，共 ${questions.length} 道题目`);
   clearTimeout(refillTimer);
   refillTimer = undefined;
@@ -546,7 +590,7 @@ async function login(event) {
     });
     document.querySelector("#passwordInput").value = "";
     const next = new URLSearchParams(location.search).get("next");
-    location.replace(["/settings", "/questions", "/records", "/devices"].includes(next) ? next : "/settings");
+    location.replace(["/settings", "/questions", "/poems", "/records", "/devices"].includes(next) ? next : "/settings");
   } catch (error) {
     handleError(error, loginNotice);
   } finally {
@@ -860,7 +904,7 @@ async function initialize() {
       }
       await loadRecords();
     }
-    document.title = `${page === "questions" ? "题库管理" : page === "records" ? "使用记录" : "使用规则"} · 健康使用`;
+    document.title = `${page === "poems" ? "已出题古诗词" : page === "questions" ? "题库管理" : page === "records" ? "使用记录" : "使用规则"} · 健康使用`;
   } catch (error) {
     if (error.status === 401 && !isLoginPage) {
       location.replace(loginAddress());
@@ -958,9 +1002,14 @@ questionForm.addEventListener("submit", addQuestion);
 for (const id of ["closeQuestionDetail", "dismissQuestionDetail"]) {
   document.getElementById(id).addEventListener("click", () => questionDetailDialog.close());
 }
-document.querySelector("#aiQuestionButton").addEventListener("click", () => {
+document.querySelector("#aiQuestionButton").addEventListener("click", async () => {
   aiDialog.showModal();
   aiCategoryInput.focus();
+  try {
+    await loadPoemHistory();
+  } catch (error) {
+    handleError(error, aiNotice);
+  }
 });
 document.querySelector("#closeAiDialog").addEventListener("click", () => aiDialog.close());
 aiDialog.addEventListener("close", () => document.querySelector("#aiQuestionButton").focus());
@@ -968,5 +1017,8 @@ document.querySelector("#aiGenerationForm").addEventListener("submit", generateA
 aiCategoryInput.addEventListener("change", updateAiCategoryFields);
 document.querySelector("#importAiQuestions").addEventListener("click", importAiQuestions);
 categoryFilter.addEventListener("change", renderQuestions);
+document.querySelector("#poemSearch").addEventListener("input", renderPoemHistory);
+document.querySelector("#refreshPoems").addEventListener("click", () => loadPoemHistory().catch(handleError));
+poemTitleInput.addEventListener("input", updatePoemHistoryHint);
 updateAiCategoryFields();
 initialize();
