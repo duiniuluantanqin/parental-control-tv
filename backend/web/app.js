@@ -15,7 +15,7 @@ const englishWordInput = document.querySelector("#englishWordInput");
 const englishWordField = document.querySelector("#englishWordField");
 const loginView = document.querySelector("#loginView");
 const adminView = document.querySelector("#adminView");
-const page = location.pathname === "/poems" ? "poems" : location.pathname === "/questions" ? "questions" : ["/records", "/devices"].includes(location.pathname) ? "records" : "settings";
+const page = ["settings", "questions", "poems", "records", "devices"].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : "settings";
 const isLoginPage = !["/settings", "/questions", "/poems", "/records", "/devices"].includes(location.pathname);
 const weekdays = [
   ["1", "周一"], ["2", "周二"], ["3", "周三"], ["4", "周四"],
@@ -80,8 +80,13 @@ function renderCategories() {
 }
 
 function renderQuestions() {
-  const filtered = categoryFilter.value ? questions.filter(question => question.category === categoryFilter.value) : questions;
+  const query = document.querySelector("#questionSearch").value.trim().toLowerCase();
+  const filtered = questions.filter(question =>
+    (!categoryFilter.value || question.category === categoryFilter.value)
+    && (!query || [question.prompt, question.answer, ...question.options].join(" ").toLowerCase().includes(query))
+  );
   document.querySelector("#questionCount").textContent = String(questions.length);
+  document.querySelector("#questionResults").textContent = `显示 ${filtered.length} / ${questions.length} 道`;
   rows.replaceChildren();
   if (!filtered.length) {
     const tr = document.createElement("tr");
@@ -97,6 +102,7 @@ function renderQuestions() {
     const tr = document.createElement("tr");
     for (const [column, value] of [question.category, question.prompt, question.answer].entries()) {
       const td = document.createElement("td");
+      td.dataset.label = ["类别", "题目", "正确答案"][column];
       if (column === 1) {
         const prompt = document.createElement("button");
         prompt.type = "button";
@@ -105,12 +111,18 @@ function renderQuestions() {
         prompt.setAttribute("aria-haspopup", "dialog");
         prompt.addEventListener("click", () => showQuestionDetail(question));
         td.append(prompt);
+      } else if (column === 0) {
+        const badge = document.createElement("span");
+        badge.className = "category-badge";
+        badge.textContent = value;
+        td.append(badge);
       } else {
         td.textContent = value;
       }
       tr.append(td);
     }
     const action = document.createElement("td");
+    action.dataset.label = "操作";
     const actions = document.createElement("div");
     actions.className = "question-actions";
     const priorityLabel = document.createElement("label");
@@ -235,6 +247,7 @@ function renderWeeklySettings(settings) {
     dayCell.scope = "row";
     dayCell.textContent = label;
     const limitCell = document.createElement("td");
+    limitCell.dataset.label = "每日时长";
     const limit = document.createElement("input");
     limit.className = "weekly-limit-input";
     limit.type = "number";
@@ -252,8 +265,10 @@ function renderWeeklySettings(settings) {
     limitCell.append(limitControl);
 
     const allowedCell = document.createElement("td");
+    allowedCell.dataset.label = "允许时段";
     allowedCell.append(createWindowEditor(label, settings.usageTimeWindows[day], false));
     const disabledCell = document.createElement("td");
+    disabledCell.dataset.label = "禁用时段";
     disabledCell.append(createWindowEditor(label, settings.disabledTimeWindows?.[day] || [], true));
     row.append(dayCell, limitCell, allowedCell, disabledCell);
     rows.append(row);
@@ -309,7 +324,7 @@ async function loadState() {
   document.querySelector("#questionInterval").value = state.settings.questionIntervalMinutes;
   document.querySelector("#wrongLock").value = state.settings.wrongLockMinutes;
   document.querySelector("#syncInterval").value = state.settings.syncIntervalMinutes;
-  if (page === "settings" && !isLoginPage) {
+  if (page === "devices" && !isLoginPage) {
     const { devices } = await api("/api/v1/admin/devices");
     const select = document.querySelector("#usageResetDevice");
     const previous = select.value;
@@ -567,6 +582,11 @@ async function restoreAnsweredQuestion(answer, button) {
     handleError(error);
     button.disabled = false;
   }
+}
+
+function localDate() {
+  const today = new Date();
+  return [today.getFullYear(), String(today.getMonth() + 1).padStart(2, "0"), String(today.getDate()).padStart(2, "0")].join("-");
 }
 
 function shiftRecordsDate(days) {
@@ -895,16 +915,19 @@ async function initialize() {
     document.querySelector("#changePasswordButton").hidden = false;
     document.querySelector("#logoutButton").hidden = false;
     document.querySelector(`#${page}Page`).hidden = false;
-    document.querySelector(`[data-page="${page}"]`).setAttribute("aria-current", "page");
+    const currentLink = document.querySelector(`[data-page="${page}"]`);
+    currentLink.setAttribute("aria-current", "page");
+    if (window.matchMedia("(max-width: 1000px)").matches) currentLink.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const titles = { settings: "使用规则", questions: "题库管理", poems: "已出题古诗词", records: "使用记录", devices: "设备与重置" };
+    document.querySelector("#currentSection").textContent = `${["questions", "poems"].includes(page) ? "内容管理" : page === "devices" ? "设备维护" : "使用管理"} / ${titles[page]}`;
     if (page === "records") {
       const dateInput = document.querySelector("#recordsDate");
       if (!dateInput.value) {
-        const today = new Date();
-        dateInput.value = [today.getFullYear(), String(today.getMonth() + 1).padStart(2, "0"), String(today.getDate()).padStart(2, "0")].join("-");
+        dateInput.value = localDate();
       }
       await loadRecords();
     }
-    document.title = `${page === "poems" ? "已出题古诗词" : page === "questions" ? "题库管理" : page === "records" ? "使用记录" : "使用规则"} · 健康使用`;
+    document.title = `${titles[page]} · 健康使用`;
   } catch (error) {
     if (error.status === 401 && !isLoginPage) {
       location.replace(loginAddress());
@@ -935,6 +958,11 @@ document.querySelector("#changePasswordDialog").addEventListener("close", () => 
 });
 document.querySelector("#settingsForm").addEventListener("submit", saveSettings);
 document.querySelector("#recordsDate").addEventListener("change", () => loadRecords().catch(handleError));
+
+document.querySelector("#todayRecordsDate").addEventListener("click", () => {
+  document.querySelector("#recordsDate").value = localDate();
+  loadRecords().catch(handleError);
+});
 document.querySelector("#previousRecordsDate").addEventListener("click", () => shiftRecordsDate(-1));
 document.querySelector("#nextRecordsDate").addEventListener("click", () => shiftRecordsDate(1));
 document.querySelector("#refreshRecords").addEventListener("click", () => loadRecords().catch(handleError));
@@ -1017,6 +1045,7 @@ document.querySelector("#aiGenerationForm").addEventListener("submit", generateA
 aiCategoryInput.addEventListener("change", updateAiCategoryFields);
 document.querySelector("#importAiQuestions").addEventListener("click", importAiQuestions);
 categoryFilter.addEventListener("change", renderQuestions);
+document.querySelector("#questionSearch").addEventListener("input", renderQuestions);
 document.querySelector("#poemSearch").addEventListener("input", renderPoemHistory);
 document.querySelector("#refreshPoems").addEventListener("click", () => loadPoemHistory().catch(handleError));
 poemTitleInput.addEventListener("input", updatePoemHistoryHint);

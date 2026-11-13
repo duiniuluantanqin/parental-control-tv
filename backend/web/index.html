@@ -10,9 +10,11 @@
   <header class="topbar">
     <a class="brand" href="/settings">
       <span class="brand-mark" aria-hidden="true">TV</span>
-      <span><strong>健康使用</strong><small>家长管理</small><small id="backendVersion">后台</small></span>
+      <span><strong>健康使用</strong><small>家长管理</small></span>
     </a>
+    <span id="currentSection" class="workspace-caption">家长管理工作台</span>
     <div class="topbar-actions">
+      <span id="backendVersion" class="version-label">后台</span>
       <button id="changePasswordButton" class="button topbar-button" type="button" hidden>修改密码</button>
       <button id="logoutButton" class="button topbar-button" type="button" hidden>退出登录</button>
     </div>
@@ -36,71 +38,109 @@
   </main>
 
   <main id="adminView" hidden>
+    <a class="skip-link" href="#pageContent">跳至主要内容</a>
     <nav class="page-nav" aria-label="管理导航">
-      <a href="/settings" data-page="settings">使用规则</a>
-      <a href="/questions" data-page="questions">题库管理</a>
-      <a href="/poems" data-page="poems">已出题古诗词</a>
-      <a href="/records" data-page="records">使用记录</a>
+      <div class="nav-group">
+        <p class="nav-group-title">使用管理</p>
+        <a href="/settings" data-page="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3v4m8-4v4M4 10h16M5 5h14a1 1 0 0 1 1 1v14H4V6a1 1 0 0 1 1-1Z M8 14h3m-3 3h6"/></svg>使用规则</a>
+        <a href="/records" data-page="records"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v16h16M8 15v-4m5 4V7m5 8v-6"/></svg>使用记录</a>
+      </div>
+      <div class="nav-group">
+        <p class="nav-group-title">内容管理</p>
+        <a href="/questions" data-page="questions"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5zM8 8h8m-8 4h8m-8 4h4"/></svg>题库管理</a>
+        <a href="/poems" data-page="poems"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v15M3 4h5l4 2 4-2h5v15h-5l-4 2-4-2H3z"/></svg>已出题古诗词</a>
+      </div>
+      <div class="nav-group">
+        <p class="nav-group-title">设备维护</p>
+        <a href="/devices" data-page="devices"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v12H4zM8 21h8m-4-5v5M8 8h8m-8 4h4"/></svg>设备与重置</a>
+      </div>
     </nav>
+    <div id="pageContent" class="page-content" tabindex="-1">
     <p id="notice" class="notice" role="status" aria-live="polite"></p>
 
     <section id="settingsPage" aria-labelledby="settingsTitle" hidden>
       <div class="section-heading">
-        <div><h1 id="settingsTitle">使用规则</h1><p>分别设置每周额度、允许时段和禁用时段。</p></div>
+        <div><span class="page-eyebrow">使用管理</span><h1 id="settingsTitle">使用规则</h1><p>安排每周观看时间，设置答题与同步规则。</p></div>
+        <a class="subtle-link" href="/records">查看使用记录 <span aria-hidden="true">↗</span></a>
       </div>
-      <form id="settingsForm" class="settings-panel">
-        <div class="weekly-heading">
-          <div><h2>每周使用安排</h2><p>允许时段留空表示全天可用；禁用时段优先于允许时段。时长设为 0 表示当天不可使用，时段允许跨午夜。</p></div>
+      <form id="settingsForm" class="settings-form">
+        <section class="settings-panel" aria-labelledby="challengeSettingsTitle">
+        <div class="weekly-heading"><span class="section-number" aria-hidden="true">01</span><div><h2 id="challengeSettingsTitle">答题与同步</h2><p>五题答对至少四题可继续观看；保存后，电视将在下次同步时应用。</p></div></div>
+        <div class="settings-grid">
+          <label for="questionInterval">答题间隔 <span class="input-with-unit"><input id="questionInterval" type="number" min="1" max="240" value="10" required><span>分钟</span></span><small>观看多久后进入下一次五题答题</small></label>
+          <label for="wrongLock">答错锁定 <span class="input-with-unit"><input id="wrongLock" type="number" min="1" max="1440" value="10" required><span>分钟</span></span><small>本轮答题未通过时，需要等待的时长</small></label>
+          <label for="syncInterval">同步间隔 <span class="input-with-unit"><input id="syncInterval" type="number" min="1" max="60" value="5" required><span>分钟</span></span><small>电视获取规则与题目的间隔</small></label>
         </div>
+        </section>
+        <section class="settings-panel" aria-labelledby="weeklyTitle">
+        <div class="weekly-heading">
+          <span class="section-number" aria-hidden="true">02</span><div><h2 id="weeklyTitle">每周观看安排</h2><p>先设置每日额度，再按需要添加允许和禁用时段。</p></div>
+        </div>
+        <div class="rules-note"><strong>禁用时段优先</strong><p>允许时段留空表示全天可用；每日时长为 0 表示当天不可用。时段可跨午夜。</p></div>
         <div class="weekly-table-wrap">
           <table class="weekly-table">
             <thead><tr><th scope="col">星期</th><th scope="col">每日时长</th><th scope="col">允许时段</th><th scope="col">禁用时段</th></tr></thead>
             <tbody id="weeklyRows"></tbody>
           </table>
         </div>
-        <div class="settings-grid">
-          <label for="questionInterval">答题间隔 <span class="input-with-unit"><input id="questionInterval" type="number" min="1" max="240" value="10" required><span>分钟</span></span><small>使用多久后回答一道题</small></label>
-          <label for="wrongLock">答错锁定 <span class="input-with-unit"><input id="wrongLock" type="number" min="1" max="1440" value="10" required><span>分钟</span></span><small>答错后需要等待的时间</small></label>
-          <label for="syncInterval">同步间隔 <span class="input-with-unit"><input id="syncInterval" type="number" min="1" max="60" value="5" required><span>分钟</span></span><small>电视获取规则与题目的间隔</small></label>
-        </div>
-        <div class="settings-footer"><p>电视将在下次同步时应用已保存的规则。</p><button id="saveSettings" class="button primary" type="submit">保存规则</button></div>
+        </section>
+        <div class="settings-footer save-bar"><p>所有规则统一保存，电视下次同步后生效。</p><button id="saveSettings" class="button primary" type="submit">保存规则</button></div>
       </form>
-      <section class="settings-panel password-reset-panel" aria-labelledby="passwordResetTitle">
-        <div class="weekly-heading">
-          <div><h2 id="passwordResetTitle">电视重置</h2><p>重置 PIN 后默认密码为“上下左右上上”。重置使用时长会清零所选设备今天的计时和临时加时，恢复当天配置额度；允许时段和答题规则仍然生效。电视将在下次云端同步时应用。</p></div>
-        </div>
-        <div class="reset-device-field"><label for="usageResetDevice">重置时长的设备</label><select id="usageResetDevice"><option value="">正在载入设备…</option></select></div>
-        <div class="settings-footer">
-          <p id="passwordResetStatus" role="status">重置指令仅在管理员确认后发送。</p>
-          <div class="reset-actions">
-            <button id="resetDevicePin" class="button secondary" type="button">重置电视 PIN</button>
-            <button id="resetDeviceUsage" class="button secondary" type="button" disabled>重置使用时长</button>
-          </div>
-        </div>
-      </section>
+    </section>
+
+    <section id="devicesPage" aria-labelledby="devicesTitle" hidden>
+      <div class="section-heading"><div><span class="page-eyebrow">设备维护</span><h1 id="devicesTitle">设备与重置</h1><p>按需恢复电视 PIN 或当天使用额度。重置指令将在电视下次同步时应用。</p></div></div>
+      <div class="maintenance-grid">
+        <section class="settings-panel maintenance-card" aria-labelledby="usageResetTitle">
+          <div class="card-heading"><span class="card-kicker">使用额度</span><h2 id="usageResetTitle">重置今日使用时长</h2><p>清零所选设备今天的计时和临时加时，恢复当天配置额度。允许时段和答题规则仍然生效。</p></div>
+          <div class="reset-device-field"><label for="usageResetDevice">选择设备</label><select id="usageResetDevice"><option value="">正在载入设备…</option></select></div>
+          <div class="card-footer"><span>仅影响所选设备的今天</span><button id="resetDeviceUsage" class="button caution" type="button" disabled>重置使用时长</button></div>
+        </section>
+        <section class="settings-panel maintenance-card" aria-labelledby="passwordResetTitle">
+          <div class="card-heading"><span class="card-kicker">家长解锁</span><h2 id="passwordResetTitle">重置电视 PIN</h2><p>忘记解锁密码时，将电视 PIN 恢复为默认的六步方向键密码。</p></div>
+          <div class="pin-reference"><span>默认 PIN</span><strong>上 · 下 · 左 · 右 · 上 · 上</strong><small>此指令适用于所有同步设备</small></div>
+          <div class="card-footer"><span>原有观看规则保持生效</span><button id="resetDevicePin" class="button caution" type="button">重置电视 PIN</button></div>
+        </section>
+      </div>
+      <p id="passwordResetStatus" class="maintenance-status" role="status">重置操作会再次询问确认，请先核对设备与操作范围。</p>
     </section>
 
     <section id="questionsPage" aria-labelledby="questionsTitle" hidden>
       <div class="section-heading">
-        <div><h1 id="questionsTitle">题库管理 <span id="questionCount" class="count">0</span></h1><p>电视优先从勾选“优先”的题目中随机抽题，不足五题时用普通题补足，避免连续重复。设置将在电视下次同步后，于下次抽取新题时生效。</p></div>
-        <div class="filters">
-          <label class="sr-only" for="categoryFilter">筛选类别</label>
-          <select id="categoryFilter"><option value="">全部类别</option></select>
-          <button id="aiQuestionButton" class="button secondary" type="button">AI 出题</button>
-          <button id="addQuestionButton" class="button primary" type="button">添加题目</button>
+        <div><span class="page-eyebrow">内容管理</span><h1 id="questionsTitle">题库管理 <span id="questionCount" class="count">0</span></h1><p>维护电视答题内容，点击题目查看完整选项与诗词原文。</p></div>
+        <div class="page-actions">
+          <button id="addQuestionButton" class="button secondary" type="button"><span aria-hidden="true">＋</span> 添加题目</button>
+          <button id="aiQuestionButton" class="button primary" type="button">AI 出题</button>
         </div>
       </div>
-      <div class="table-wrap">
-        <table>
+      <div class="page-callout"><p><strong>优先出题</strong>勾选后，电视优先抽取这些题目，不足五题时用普通题补足。下次同步后，在新一轮抽题时生效。</p><a href="/poems">添加诗词前查重 <span aria-hidden="true">→</span></a></div>
+      <div class="table-panel">
+      <div class="table-toolbar">
+        <div class="filters">
+          <label class="sr-only" for="questionSearch">搜索题目、选项或答案</label>
+          <input id="questionSearch" type="search" placeholder="搜索题目、选项或答案">
+          <label class="sr-only" for="categoryFilter">筛选类别</label>
+          <select id="categoryFilter"><option value="">全部类别</option></select>
+        </div>
+        <span id="questionResults" class="result-count" role="status"></span>
+      </div>
+      <div class="table-wrap question-table-wrap">
+        <table class="question-table">
           <thead><tr><th>类别</th><th>题目</th><th>正确答案</th><th>操作</th></tr></thead>
           <tbody id="questionRows"></tbody>
         </table>
+      </div>
       </div>
     </section>
 
     <section id="poemsPage" aria-labelledby="poemsTitle" hidden>
       <div class="section-heading">
-        <div><h1 id="poemsTitle">已出题古诗词 <span id="poemCount" class="count">0</span></h1><p>记录加入过题库的作品，同一作品合并显示。答对移除或手动删除题目后仍保留，方便添加前查重；仅生成预览不会记录。</p></div>
+        <div><span class="page-eyebrow">内容管理</span><h1 id="poemsTitle">已出题古诗词 <span id="poemCount" class="count">0</span></h1><p>添加前先查一查，避免对同一首作品重复出题。</p></div>
+        <a class="subtle-link" href="/questions">返回题库管理 <span aria-hidden="true">↗</span></a>
+      </div>
+      <div class="page-callout"><p><strong>作品记录会保留</strong>同一作品合并显示；答对移除或手动删除题目后仍可查到。仅生成预览不会记录。</p></div>
+      <div class="table-panel">
+      <div class="table-toolbar">
         <div class="filters">
           <label class="sr-only" for="poemSearch">搜索作品或作者</label>
           <input id="poemSearch" type="search" placeholder="搜索作品或作者">
@@ -113,22 +153,26 @@
           <tbody id="poemRows"></tbody>
         </table>
       </div>
+      </div>
     </section>
 
     <section id="recordsPage" aria-labelledby="recordsTitle" hidden>
       <div class="section-heading records-heading">
-        <div><h1 id="recordsTitle">使用记录</h1><p id="recordsSummary">查看所有设备的每日使用时长和答题记录。</p></div>
-        <div class="records-controls">
+        <div><span class="page-eyebrow">使用管理</span><h1 id="recordsTitle">使用记录</h1><p>查看每天的观看时长、连续观看时段和五题答题情况。</p></div>
+        <a class="subtle-link" href="/settings">调整使用规则 <span aria-hidden="true">↗</span></a>
+      </div>
+        <div class="records-controls table-toolbar">
           <div class="records-date-control">
             <button id="previousRecordsDate" class="icon-button date-nav-button" type="button" aria-label="前一天" title="前一天">←</button>
-            <label class="records-date" for="recordsDate">日期<input id="recordsDate" type="date"></label>
+            <label class="records-date" for="recordsDate"><span class="sr-only">查看日期</span><input id="recordsDate" type="date"></label>
             <button id="nextRecordsDate" class="icon-button date-nav-button" type="button" aria-label="后一天" title="后一天">→</button>
           </div>
+          <button id="todayRecordsDate" class="button secondary" type="button">今天</button>
+          <p id="recordsSummary" class="result-count">正在载入记录…</p>
           <button id="refreshRecords" class="button secondary" type="button">刷新</button>
         </div>
-      </div>
       <section class="records-section" aria-labelledby="usageRecordsTitle">
-        <div class="records-section-heading"><h2 id="usageRecordsTitle">每日使用时长</h2></div>
+        <div class="records-section-heading"><div><h2 id="usageRecordsTitle">每日使用时长</h2><p>点击详情，查看每个连续观看时段。</p></div></div>
         <div class="table-wrap">
           <table class="usage-record-table">
             <colgroup><col class="usage-col-device"><col class="usage-col-total"><col class="usage-col-report"><col class="usage-col-action"></colgroup>
@@ -138,10 +182,11 @@
         </div>
       </section>
       <section class="records-section" aria-labelledby="answerRecordsTitle">
-        <div class="records-section-heading"><h2 id="answerRecordsTitle">答题记录</h2></div>
+        <div class="records-section-heading"><div><h2 id="answerRecordsTitle">答题记录</h2><p>展开一轮答题，查看每题结果或将题目恢复到题库。</p></div></div>
         <div id="challengeRecords" class="challenge-records"></div>
       </section>
     </section>
+    </div>
   </main>
 
   <dialog id="changePasswordDialog" aria-labelledby="changePasswordTitle">
