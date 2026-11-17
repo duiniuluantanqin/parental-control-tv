@@ -195,7 +195,8 @@ tbody tr:hover { background: #fafcfd; }
 .challenge-record[open] .challenge-summary { background: #fafcfe; }
 .challenge-record[open] .challenge-summary::after { transform: rotate(180deg); }
 .challenge-summary-main, .challenge-summary-meta { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.challenge-summary-meta { margin-left: auto; }
+.challenge-summary-meta { margin-left: auto; flex-wrap: wrap; }
+.challenge-trigger { color: #526d91; font-size: 12px; }
 .challenge-device { color: #3b5066; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .challenge-time, .challenge-score { color: #8b97a5; font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .challenge-status { padding: 4px 9px; border-radius: 5px; color: #29816c; background: #edf7f1; font-size: 11px; white-space: nowrap; }

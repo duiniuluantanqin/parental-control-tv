@@ -900,6 +900,12 @@ class RequestHandler(BaseHTTPRequestHandler):
                 correct_count = payload.get("correctCount")
                 questions = payload.get("questions")
                 interrupted_question_id = payload.get("interruptedQuestionId", "")
+                trigger = payload.get("trigger", "unknown")
+                resumed_from_session_id = payload.get("resumedFromSessionId", "")
+                if trigger not in ("unknown", "startup", "interval", "lockout_retry", "reboot_resume"):
+                    raise ValueError("弹出类型无效")
+                if not isinstance(resumed_from_session_id, str) or len(resumed_from_session_id) > 80:
+                    raise ValueError("恢复来源会话 ID 无效")
                 if not isinstance(session_id, str) or not 1 <= len(session_id) <= 80:
                     raise ValueError("答题会话 ID 无效")
                 if not isinstance(device_id, str) or not 1 <= len(device_id) <= 80:
@@ -908,7 +914,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     raise ValueError("答题日期格式必须为 YYYY-MM-DD")
                 if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in (started_at, ended_at)):
                     raise ValueError("答题会话时间无效")
-                if status not in ("active", "answered", "timeout", "reboot", "daily_limit"):
+                if status not in ("active", "answered", "timeout", "reboot", "daily_limit", "parent_skip"):
                     raise ValueError("答题会话状态无效")
                 if status != "active" and ended_at < started_at:
                     raise ValueError("答题会话结束时间无效")
@@ -941,6 +947,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "correctCount": correct_count,
                     "questions": normalized_questions,
                     "interruptedQuestionId": interrupted_question_id,
+                    "trigger": trigger,
+                    "resumedFromSessionId": resumed_from_session_id,
                 }
                 with STORE.lock:
                     state = STORE.load()

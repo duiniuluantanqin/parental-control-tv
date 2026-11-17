@@ -91,9 +91,9 @@ class MainActivity : Activity() {
             autoOpenedOverlaySettings = true
             openOverlaySettings()
         }
-        if (startupQuestionPending && canDrawOverlays()) {
+        if ((startupQuestionPending || QuestionBank.hasRebootChallenge(this)) && canDrawOverlays()) {
             startupQuestionPending = false
-            if (ControlState.claimStartupQuestion(this)) showQuestionNow(testQuestion = false)
+            if (ControlState.claimStartupQuestion(this) || QuestionBank.hasRebootChallenge(this)) showQuestionNow(testQuestion = false)
         }
     }
 
@@ -598,6 +598,7 @@ class MainActivity : Activity() {
         val intent = Intent(this, QuestionOverlayService::class.java)
             .setAction(QuestionOverlayService.ACTION_SHOW_QUESTION)
             .putExtra(QuestionOverlayService.EXTRA_TEST_QUESTION, testQuestion)
+            .putExtra(QuestionOverlayService.EXTRA_TRIGGER, QuestionBank.TRIGGER_STARTUP)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
     }
 

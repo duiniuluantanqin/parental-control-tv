@@ -2,6 +2,7 @@ package com.example.tvparental
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.provider.Settings
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -59,6 +60,8 @@ data class PendingChallengeRecord(
     val correctCount: Int,
     val questions: List<ChallengeQuestionSnapshot>,
     val interruptedQuestionId: String,
+    val trigger: String,
+    val resumedFromSessionId: String,
 )
 
 object QuestionBank {
@@ -75,6 +78,9 @@ object QuestionBank {
     private const val CHALLENGE_INDEX = "challenge_index"
     private const val CHALLENGE_SESSION_ID = "challenge_session_id"
     private const val CHALLENGE_STARTED_AT = "challenge_started_at"
+    private const val CHALLENGE_TRIGGER = "challenge_trigger"
+    private const val CHALLENGE_BOOT_COUNT = "challenge_boot_count"
+    private const val RESUMED_FROM_SESSION_ID = "resumed_from_session_id"
     private const val REUSE_CACHED_QUESTIONS = "reuse_cached_questions"
     private const val PENDING_ANSWER_ATTEMPTS = "pending_answer_attempts"
     private const val PENDING_CHALLENGE_RECORDS = "pending_challenge_records"
@@ -83,6 +89,12 @@ object QuestionBank {
     const val STATUS_ANSWERED = "answered"
     const val STATUS_TIMEOUT = "timeout"
     const val STATUS_REBOOT = "reboot"
+    const val STATUS_PARENT_SKIP = "parent_skip"
+    const val TRIGGER_UNKNOWN = "unknown"
+    const val TRIGGER_STARTUP = "startup"
+    const val TRIGGER_INTERVAL = "interval"
+    const val TRIGGER_LOCKOUT_RETRY = "lockout_retry"
+    const val TRIGGER_REBOOT_RESUME = "reboot_resume"
     const val STATUS_DAILY_LIMIT = "daily_limit"
 
     fun all(context: Context): List<TvQuestion> {
@@ -104,7 +116,8 @@ object QuestionBank {
         context.assets.open("questions.json").bufferedReader().use { parseQuestions(it.readText()) }
 
     @Synchronized
-    fun currentOrNext(context: Context): TvQuestion? {
+    fun currentOrNext(context: Context, trigger: String = TRIGGER_UNKNOWN): TvQuestion? {
+        finishForReboot(context)
         val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
         if (!preferences.getBoolean(CHALLENGE_ACTIVE, false)) {
             val cached = storedChallengeQuestions(preferences)
@@ -126,6 +139,8 @@ object QuestionBank {
                 .putInt(CHALLENGE_INDEX, 0)
                 .putString(CHALLENGE_SESSION_ID, sessionId)
                 .putLong(CHALLENGE_STARTED_AT, startedAt)
+                .putString(CHALLENGE_TRIGGER, if (preferences.getBoolean(REUSE_CACHED_QUESTIONS, false)) TRIGGER_REBOOT_RESUME else trigger)
+                .putInt(CHALLENGE_BOOT_COUNT, bootCount(context))
                 .putString(CHALLENGE_QUESTIONS, JSONArray(questions.map { toJsonObject(it) }).toString())
                 .putBoolean(REUSE_CACHED_QUESTIONS, false)
                 .commit()) { "Could not save the challenge questions." }
@@ -164,14 +179,17 @@ object QuestionBank {
             .putBoolean(REUSE_CACHED_QUESTIONS, false)
             .remove(CHALLENGE_SESSION_ID)
             .remove(CHALLENGE_STARTED_AT)
+            .remove(CHALLENGE_TRIGGER)
+            .remove(RESUMED_FROM_SESSION_ID)
             .remove(CHALLENGE_QUESTIONS)
             .commit()
     }
 
     @Synchronized
-    fun finishForReboot(context: Context) {
+    fun finishForReboot(context: Context, shuttingDown: Boolean = false) {
         if (!isChallengeActive(context)) return
         val preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        if (!shuttingDown && preferences.getInt(CHALLENGE_BOOT_COUNT, -1) == bootCount(context)) return
         val questions = storedChallengeQuestions(preferences)
         val currentQuestion = questions.getOrNull(preferences.getInt(CHALLENGE_INDEX, 0))
         queueChallengeRecord(context, STATUS_REBOOT, currentQuestion?.id.orEmpty())
@@ -184,8 +202,20 @@ object QuestionBank {
             .putBoolean(REUSE_CACHED_QUESTIONS, questions.size == CHALLENGE_QUESTION_COUNT)
             .remove(CHALLENGE_SESSION_ID)
             .remove(CHALLENGE_STARTED_AT)
+            .remove(CHALLENGE_TRIGGER)
+            .putString(RESUMED_FROM_SESSION_ID, preferences.getString(CHALLENGE_SESSION_ID, ""))
             .commit()) { "Could not preserve the challenge questions after reboot." }
+        ControlState.clearQuestionTimeout(context)
     }
+
+    fun hasRebootChallenge(context: Context): Boolean {
+        finishForReboot(context)
+        return context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .getBoolean(REUSE_CACHED_QUESTIONS, false)
+    }
+
+    private fun bootCount(context: Context): Int =
+        Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT, 0)
 
     @Synchronized
     fun recordAnswer(context: Context, question: TvQuestion, selectedAnswer: String): ChallengeProgress {
@@ -299,13 +329,16 @@ object QuestionBank {
                     ChallengeQuestionSnapshot(question.getString("questionId"), question.getString("prompt"))
                 },
                 interruptedQuestionId = item.optString("interruptedQuestionId", ""),
+                trigger = item.optString("trigger", TRIGGER_UNKNOWN),
+                resumedFromSessionId = item.optString("resumedFromSessionId", ""),
             )
         }
     }
 
     @Synchronized
-    fun acknowledgeChallengeRecords(context: Context, ids: Set<String>) {
-        val remaining = pendingChallengeRecords(context).filterNot { it.sessionId in ids }
+    fun acknowledgeChallengeRecords(context: Context, records: List<PendingChallengeRecord>) {
+        // Keep a newer result if this session changed while its report was in flight.
+        val remaining = pendingChallengeRecords(context).filterNot { it in records }
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
             .putString(PENDING_CHALLENGE_RECORDS, JSONArray(remaining.map { challengeRecordToJson(it) }).toString())
             .apply()
@@ -326,6 +359,8 @@ object QuestionBank {
             correctCount = challengeCorrectCount(context),
             questions = questions.map { ChallengeQuestionSnapshot(it.id, it.prompt) },
             interruptedQuestionId = interruptedQuestionId,
+            trigger = preferences.getString(CHALLENGE_TRIGGER, TRIGGER_UNKNOWN) ?: TRIGGER_UNKNOWN,
+            resumedFromSessionId = preferences.getString(RESUMED_FROM_SESSION_ID, "") ?: "",
         )
         val pending = pendingChallengeRecords(context).filterNot { it.sessionId == sessionId } + record
         check(preferences.edit()
@@ -345,6 +380,8 @@ object QuestionBank {
             JSONObject().put("questionId", question.questionId).put("prompt", question.prompt)
         }))
         .put("interruptedQuestionId", record.interruptedQuestionId)
+        .put("trigger", record.trigger)
+        .put("resumedFromSessionId", record.resumedFromSessionId)
 
     private fun storedChallengeQuestions(preferences: SharedPreferences): List<TvQuestion> {
         val json = preferences.getString(CHALLENGE_QUESTIONS, "[]") ?: "[]"

@@ -82,7 +82,10 @@ class QuestionOverlayService : Service() {
             ACTION_USAGE_WINDOW -> showUsageWindowLock()
             ACTION_REFRESH_STATE -> refreshBlockingState()
             ACTION_HIDE -> hideOverlay()
-            ACTION_SHOW_QUESTION -> showQuestion(intent?.getBooleanExtra(EXTRA_TEST_QUESTION, false) == true)
+            ACTION_SHOW_QUESTION -> showQuestion(
+                intent.getBooleanExtra(EXTRA_TEST_QUESTION, false),
+                trigger = intent.getStringExtra(EXTRA_TRIGGER) ?: QuestionBank.TRIGGER_UNKNOWN,
+            )
             else -> showQuestion()
         }
         return START_STICKY
@@ -99,7 +102,7 @@ class QuestionOverlayService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun showQuestion(testQuestion: Boolean = false, force: Boolean = false) {
+    private fun showQuestion(testQuestion: Boolean = false, force: Boolean = false, trigger: String = QuestionBank.TRIGGER_UNKNOWN) {
         if (!Settings.canDrawOverlays(this)) {
             stopSelf()
             return
@@ -110,7 +113,7 @@ class QuestionOverlayService : Service() {
             !ControlState.isUsageWindowAllowed(this) -> return showUsageWindowLock()
             !force && currentMode == MODE_QUESTION && overlayView != null -> return
         }
-        if (!testQuestion) ControlState.clearWrongAnswerLock(this)
+        val challengeTrigger = if (ControlState.lockoutUntil(this) > 0L) QuestionBank.TRIGGER_LOCKOUT_RETRY else trigger
         handler.removeCallbacks(lockTicker)
         val existingRoot = (overlayView as? LinearLayout)?.takeIf { currentMode == MODE_QUESTION }
         if (existingRoot != null) {
@@ -124,7 +127,7 @@ class QuestionOverlayService : Service() {
         answerSubmitted = false
         isTestQuestion = testQuestion
 
-        val question = (if (testQuestion) QuestionBank.testQuestion(this) else QuestionBank.currentOrNext(this)) ?: run {
+        val question = (if (testQuestion) QuestionBank.testQuestion(this) else QuestionBank.currentOrNext(this, challengeTrigger)) ?: run {
             if (!testQuestion) {
                 RemoteSync.syncAsync(applicationContext) { result ->
                     if (result.settingsChanged) QuestionAlarmReceiver.scheduleForCurrentState(applicationContext)
@@ -134,7 +137,11 @@ class QuestionOverlayService : Service() {
             hideOverlay(preserveQuestionTimeout = testQuestion)
             return
         }
+        if (!testQuestion) ControlState.clearWrongAnswerLock(this)
         currentQuestion = question
+        if (!testQuestion) RemoteSync.syncAsync(applicationContext) { result ->
+            if (result.settingsChanged) QuestionAlarmReceiver.scheduleForCurrentState(applicationContext)
+        }
         if (!testQuestion && ControlState.ensureQuestionTimeout(this) <= System.currentTimeMillis()) {
             handleQuestionTimeout(question)
             return
@@ -415,7 +422,6 @@ class QuestionOverlayService : Service() {
         if (ControlState.isDailyLimitReached(this)) return showDailyLock()
         if (currentMode == MODE_QUESTION && overlayView != null && answerTransition != null) return
         if (ControlState.lockoutUntil(this) <= System.currentTimeMillis()) {
-            ControlState.clearWrongAnswerLock(this)
             return refreshBlockingState()
         }
         renderLock(MODE_WRONG_LOCK)
@@ -807,7 +813,7 @@ class QuestionOverlayService : Service() {
         }
         answerSubmitted = true
         // Use the existing parent-override completion path without recording any answers.
-        QuestionBank.finishChallenge(this)
+        QuestionBank.finishChallenge(this, QuestionBank.STATUS_PARENT_SKIP, currentQuestion?.id.orEmpty())
         ControlState.clearQuestionTimeout(this)
         ControlState.clearWrongAnswerLock(this)
         QuestionAlarmReceiver.scheduleNext(this)
@@ -882,17 +888,7 @@ class QuestionOverlayService : Service() {
         if (currentMode == MODE_WRONG_LOCK) {
             val remaining = ControlState.lockoutUntil(this) - System.currentTimeMillis()
             if (remaining <= 0L) {
-                ControlState.clearWrongAnswerLock(this)
-                if (ControlState.isDailyLimitReached(this)) {
-                    renderLock(MODE_DAILY_LOCK)
-                } else if (!ControlState.isUsageWindowAllowed(this)) {
-                    renderLock(MODE_USAGE_WINDOW)
-                } else if (QuestionBank.isChallengeActive(this)) {
-                    showQuestion()
-                } else {
-                    QuestionAlarmReceiver.scheduleAfter(this, 1_000L)
-                    hideOverlay()
-                }
+                refreshBlockingState()
                 return
             }
             lockCountdown?.text = if (pinEntryActive) "Unlocks in ${formatRemaining(remaining)}"
@@ -910,6 +906,7 @@ class QuestionOverlayService : Service() {
             ControlState.lockoutUntil(this) > System.currentTimeMillis() -> showLockout()
             !ControlState.isUsageWindowAllowed(this) -> showUsageWindowLock()
             currentMode == MODE_QUESTION && overlayView != null -> Unit
+            ControlState.lockoutUntil(this) > 0L -> showQuestion(trigger = QuestionBank.TRIGGER_LOCKOUT_RETRY)
             currentMode == MODE_DAILY_LOCK || currentMode == MODE_WRONG_LOCK || currentMode == MODE_USAGE_WINDOW -> {
                 if (QuestionBank.isChallengeActive(this)) {
                     showQuestion()
@@ -1080,6 +1077,7 @@ class QuestionOverlayService : Service() {
         const val ACTION_REFRESH_STATE = "com.example.tvparental.action.REFRESH_STATE"
         const val ACTION_HIDE = "com.example.tvparental.action.HIDE"
         const val EXTRA_TEST_QUESTION = "com.example.tvparental.extra.TEST_QUESTION"
+        const val EXTRA_TRIGGER = "com.example.tvparental.extra.CHALLENGE_TRIGGER"
 
         private const val CHANNEL_ID = "question_overlay"
         private const val NOTIFICATION_ID = 1001

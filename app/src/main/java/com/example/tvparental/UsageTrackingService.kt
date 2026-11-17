@@ -71,7 +71,10 @@ class UsageTrackingService : Service() {
                 else -> powerManager().isInteractive
             }
             accountElapsedTime(interactive = interactive)
-            if (intent?.action == Intent.ACTION_SHUTDOWN) return
+            if (intent?.action == Intent.ACTION_SHUTDOWN) {
+                QuestionBank.finishForReboot(this@UsageTrackingService, shuttingDown = true)
+                return
+            }
             updateEnforcement()
             maybeShowUsageReminder()
             reportUsageIfDue(force = intent?.action == Intent.ACTION_SCREEN_ON)

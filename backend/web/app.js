@@ -420,8 +420,16 @@ function renderChallengeRecords(records, deviceNames) {
     active: "答题中",
     answered: "全部作答",
     timeout: "倒计时结束退出",
-    reboot: "电视/模拟器重启退出",
+    reboot: "关机或重启中断",
     daily_limit: "每日限额退出",
+    parent_skip: "家长密码跳过",
+  };
+  const triggerLabels = {
+    startup: "首次启动",
+    interval: "答题间隔到达",
+    lockout_retry: "答错锁定重试",
+    reboot_resume: "关机后恢复未完成答题",
+    unknown: "历史记录 / 类型未知",
   };
   container.replaceChildren();
   document.querySelector("#recordsSummary").textContent = `${records.usage.length} 台设备 · ${challenges.length} 次五题答题`;
@@ -444,13 +452,17 @@ function renderChallengeRecords(records, deviceNames) {
     main.append(device, time);
     const meta = document.createElement("span");
     meta.className = "challenge-summary-meta";
+    const trigger = document.createElement("span");
+    trigger.className = "challenge-trigger";
+    trigger.textContent = `弹出：${triggerLabels[challenge.trigger] || triggerLabels.unknown}`;
+    if (challenge.resumedFromSessionId) trigger.title = `恢复自答题记录：${challenge.resumedFromSessionId}`;
     const status = document.createElement("span");
     status.className = `challenge-status status-${challenge.status}`;
     status.textContent = statusLabels[challenge.status] || challenge.status;
     const score = document.createElement("span");
     score.className = "challenge-score";
     score.textContent = `已答 ${challenge.answeredCount}/5 · 答对 ${challenge.correctCount}/5`;
-    meta.append(status, score);
+    meta.append(trigger, status, score);
     summary.append(main, meta);
     pane.append(summary);
 
@@ -477,6 +489,8 @@ function renderChallengeRecords(records, deviceNames) {
         answerStatus = "timeout";
       } else if (interrupted && challenge.status === "reboot") {
         answerStatus = "reboot";
+      } else if (interrupted && challenge.status === "parent_skip") {
+        answerStatus = "parent-skip";
       } else {
         answerStatus = attempt ? "unanswered" : "not-shown";
       }
@@ -485,7 +499,8 @@ function renderChallengeRecords(records, deviceNames) {
         correct: "答对",
         incorrect: "答错",
         timeout: "倒计时结束，未作答",
-        reboot: "重启时未作答",
+        reboot: "关机或重启时未作答",
+        "parent-skip": "家长跳过，未作答",
         unanswered: "未作答",
         "not-shown": "未弹出",
       }[answerStatus];

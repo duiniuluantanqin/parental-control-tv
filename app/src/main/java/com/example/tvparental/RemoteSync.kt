@@ -26,7 +26,7 @@ object RemoteSync {
         return try {
             val acknowledged = mutableSetOf<String>()
             val acknowledgedAttempts = mutableSetOf<String>()
-            val acknowledgedChallenges = mutableSetOf<String>()
+            val acknowledgedChallenges = mutableListOf<PendingChallengeRecord>()
             for (challenge in QuestionBank.pendingChallengeRecords(context)) {
                 val report = URL("${ControlState.BACKEND_URL}/api/v1/device/challenges").openConnection() as HttpURLConnection
                 try {
@@ -50,13 +50,15 @@ object RemoteSync {
                         .put("correctCount", challenge.correctCount)
                         .put("questions", questions)
                         .put("interruptedQuestionId", challenge.interruptedQuestionId)
+                        .put("trigger", challenge.trigger)
+                        .put("resumedFromSessionId", challenge.resumedFromSessionId)
                         .toString().toByteArray(Charsets.UTF_8)
                     report.setFixedLengthStreamingMode(body.size)
                     report.outputStream.use { it.write(body) }
                     val code = report.responseCode
                     if (code !in 200..299) return SyncResult(false, "Challenge report failed (HTTP $code). It will retry later.")
                     val result = JSONObject(report.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
-                    if (result.getBoolean("accepted")) acknowledgedChallenges.add(challenge.sessionId)
+                    if (result.getBoolean("accepted")) acknowledgedChallenges.add(challenge)
                 } finally {
                     report.disconnect()
                 }

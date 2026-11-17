@@ -509,6 +509,8 @@ class AdminApiTests(unittest.TestCase):
             "correctCount": 0,
             "questions": [{"questionId": item["id"], "prompt": item["prompt"]} for item in questions],
             "interruptedQuestionId": "",
+            "trigger": "startup",
+            "resumedFromSessionId": "",
         }
         status, _ = self.request("/api/v1/device/challenges", method="POST", authenticated=False, body=session)
         self.assertEqual(status, 200)
@@ -537,10 +539,47 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(len(records["challenges"]), 1)
         challenge = records["challenges"][0]
         self.assertEqual(challenge["status"], "timeout")
+        self.assertEqual(challenge["trigger"], "startup")
         self.assertEqual(challenge["deviceName"], "tv-01")
         self.assertEqual(len(challenge["questions"]), 5)
         self.assertEqual(challenge["interruptedQuestionId"], questions[1]["id"])
         self.assertEqual(records["answers"][0]["challengeId"], session["sessionId"])
+
+    def test_challenge_triggers_survive_updates_retries_and_database_reload(self) -> None:
+        questions = server.STORE.load()["questions"][:5]
+        session = {
+            "sessionId": "trigger-test", "deviceId": "tv-01", "date": "2026-11-05",
+            "startedAt": 1793836800000, "endedAt": 0, "status": "active",
+            "answeredCount": 0, "correctCount": 0,
+            "questions": [{"questionId": item["id"], "prompt": item["prompt"]} for item in questions],
+        }
+        for trigger in ("startup", "interval", "lockout_retry", "reboot_resume", "unknown"):
+            with self.subTest(trigger=trigger):
+                report = dict(session, sessionId=trigger, trigger=trigger,
+                              resumedFromSessionId="previous-round" if trigger == "reboot_resume" else "")
+                status, _ = self.request("/api/v1/device/challenges", method="POST", authenticated=False, body=report)
+                self.assertEqual(status, 200)
+                finished = dict(report, status="parent_skip", endedAt=1793836860000)
+                status, _ = self.request("/api/v1/device/challenges", method="POST", authenticated=False, body=finished)
+                self.assertEqual(status, 200)
+                self.request("/api/v1/device/challenges", method="POST", authenticated=False, body=report)
+                server.STORE = server.StateStore(server.STORE.path)
+                _, records = self.request("/api/v1/admin/records?date=2026-11-05")
+                saved = next(item for item in records["challenges"] if item["sessionId"] == trigger)
+                self.assertEqual(saved["trigger"], trigger)
+                self.assertEqual(saved["status"], "parent_skip")
+                self.assertEqual(saved["resumedFromSessionId"], report["resumedFromSessionId"])
+
+        for field, value in (("trigger", "invalid"), ("trigger", []), ("resumedFromSessionId", 123), ("resumedFromSessionId", "x" * 81)):
+            status, _ = self.request("/api/v1/device/challenges", method="POST", authenticated=False,
+                                     body=dict(session, **{field: value}))
+            self.assertEqual(status, 400)
+
+        status, _ = self.request("/api/v1/device/challenges", method="POST", authenticated=False, body=session)
+        self.assertEqual(status, 200)
+        _, records = self.request("/api/v1/admin/records?date=2026-11-05")
+        legacy = next(item for item in records["challenges"] if item["sessionId"] == "trigger-test")
+        self.assertEqual(legacy["trigger"], "unknown")
 
     def test_cached_question_answer_is_accepted_after_question_was_removed(self) -> None:
         question = server.STORE.load()["questions"][0]

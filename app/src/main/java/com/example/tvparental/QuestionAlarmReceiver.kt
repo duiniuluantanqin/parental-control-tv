@@ -100,6 +100,7 @@ class QuestionAlarmReceiver : BroadcastReceiver() {
 
         private fun startOverlay(context: Context, action: String) {
             val serviceIntent = Intent(context, QuestionOverlayService::class.java).setAction(action)
+                .putExtra(QuestionOverlayService.EXTRA_TRIGGER, QuestionBank.TRIGGER_INTERVAL)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(serviceIntent)
             } else {
