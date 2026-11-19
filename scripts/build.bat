@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-cd /d "%~dp0"
+cd /d "%~dp0.."
 chcp 65001 >nul
 
 if not defined JAVA_HOME if exist "%ProgramFiles%\Android\Android Studio\jbr\bin\java.exe" set "JAVA_HOME=%ProgramFiles%\Android\Android Studio\jbr"
@@ -112,6 +112,6 @@ if exist "%APK_FILE%" (
 )
 
 echo.
-echo 下一步：运行 install_emulator.bat 或 install_device.bat 安装应用
+echo 下一步：运行 scripts\install_emulator.bat 或 scripts\install_device.bat 安装应用
 echo.
 pause

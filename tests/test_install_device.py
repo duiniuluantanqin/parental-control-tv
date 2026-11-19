@@ -3,7 +3,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-import install_device
+from scripts import install_device
 
 
 class RunAdbTests(unittest.TestCase):
@@ -27,7 +27,7 @@ class RunAdbTests(unittest.TestCase):
             install_device.run_adb(sys.executable, "-c", "print('connection refused'); raise SystemExit(1)")
 
     def test_adb_timeout_has_an_actionable_error(self):
-        with patch("install_device.subprocess.run", side_effect=subprocess.TimeoutExpired("adb", 30)):
+        with patch("scripts.install_device.subprocess.run", side_effect=subprocess.TimeoutExpired("adb", 30)):
             with self.assertRaisesRegex(RuntimeError, "timed out after 30 seconds: connect 10.0.0.8:5555"):
                 install_device.run_adb("adb", "connect", "10.0.0.8:5555")
 

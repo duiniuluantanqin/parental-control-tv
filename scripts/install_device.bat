@@ -1,7 +1,9 @@
 @echo off
 setlocal EnableExtensions
-cd /d "%~dp0"
+cd /d "%~dp0.."
 chcp 65001 >nul
+
+if not "%~1"=="" set "TV_PARENTAL_TV_IP=%~1"
 
 where python >nul 2>&1
 if errorlevel 1 (

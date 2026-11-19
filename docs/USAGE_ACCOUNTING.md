@@ -28,7 +28,7 @@
 `UsageAccountingTest` 覆盖反复进程重建、日期回退、未来日期跳变后校正、跨本地午夜、降低额度、历史记录保留上限、反复待机、悬浮窗暂停、关机末尾结算和状态刷新交错。
 
 ```powershell
-# 先按 README_BUILD.md 设置当前机器的 JDK，再运行：
+# 先按 docs/README_BUILD.md 设置当前机器的 JDK，再运行：
 .\gradlew.bat testDebugUnitTest
 ```
 

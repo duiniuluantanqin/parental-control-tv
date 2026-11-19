@@ -19,7 +19,7 @@ PACKAGE = "com.example.tvparental"
 APP_LABEL = "健康使用"
 PORT = 8765
 TIMEOUT_SECONDS = 300
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 APP_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 APK = ROOT / "app" / "build" / "outputs" / "parental" / f"Parental-TV-v{APP_VERSION}.apk"
 METADATA = ROOT / "app" / "build" / "outputs" / "apk" / "debug" / "output-metadata.json"
@@ -162,9 +162,9 @@ def request_tcl_install(version_code):
 
 def main():
     if not APK.is_file():
-        raise RuntimeError(f"APK not found: {APK}. Run build.bat first.")
+        raise RuntimeError(f"APK not found: {APK}. Run scripts/build.bat first.")
     if not METADATA.is_file():
-        raise RuntimeError(f"Build metadata not found: {METADATA}. Run build.bat first.")
+        raise RuntimeError(f"Build metadata not found: {METADATA}. Run scripts/build.bat first.")
 
     metadata = json.loads(METADATA.read_text(encoding="utf-8"))
     version_code = int(metadata["elements"][0]["versionCode"])

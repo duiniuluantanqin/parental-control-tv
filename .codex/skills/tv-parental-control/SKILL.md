@@ -9,10 +9,10 @@ Use this skill for Android or backend work in this repository. The target is a T
 
 ## Session bootstrap and build environment
 
-- At the start of Android work, read repository-root `AGENTS.md` and `README_BUILD.md`, then inspect the relevant source and script. Read `docs/INSTALL_TCL.md` before TV installation.
-- On Windows, run `build.bat` from the repository root. It discovers Java from `JAVA_HOME`, Android Studio/JBR, JDK environment variables, or PATH. It reuses an extracted Gradle 9.1.0 distribution from local caches when available, otherwise the committed `gradlew.bat` downloads the pinned distribution. Never require a global Gradle installation.
+- At the start of Android work, read repository-root `AGENTS.md` and `docs/README_BUILD.md`, then inspect the relevant source and script. Read `docs/INSTALL_TCL.md` before TV installation.
+- On Windows, run `scripts/build.bat` from the repository root. It discovers Java from `JAVA_HOME`, Android Studio/JBR, JDK environment variables, or PATH. It reuses an extracted Gradle 9.1.0 distribution from local caches when available, otherwise the committed `gradlew.bat` downloads the pinned distribution. Never require a global Gradle installation.
 - For a fresh clone, Android Studio should generate the ignored, machine-specific `local.properties`. Install Android SDK Platform 37 and Platform-Tools through SDK Manager. `.tools/`, `.gradle/`, `build/`, and `local.properties` are local machine state; never assume or copy their paths between computers.
-- Install to an emulator with `install_emulator.bat`; it discovers ADB using `ANDROID_SDK_ROOT`, `ANDROID_HOME`, `local.properties`, the standard Windows SDK directory, or PATH. Install to the TCL TV with `install_device.bat`; it discovers ADB using the SDK environment variables, `local.properties`, or PATH.
+- Install to an emulator with `scripts/install_emulator.bat`; it discovers ADB using `ANDROID_SDK_ROOT`, `ANDROID_HOME`, `local.properties`, the standard Windows SDK directory, or PATH. Install to the TCL TV with `scripts/install_device.bat`; it discovers ADB using the SDK environment variables, `local.properties`, or PATH.
 - For build failures, inspect the actual JDK, SDK, Gradle wrapper/cache, and script output before concluding a tool is missing. Do not infer failure from `java` or `gradle` not being globally available when the project script can locate them.
 
 ## Change scope
@@ -50,4 +50,4 @@ Use this skill for Android or backend work in this repository. The target is a T
 - Every interactive control must be reachable with D-pad arrows and activated by OK/Enter.
 - Restore question alarms and usage tracking after `LOCKED_BOOT_COMPLETED` and `BOOT_COMPLETED`.
 - Backend uses Python's standard library. Keep `backend/.env` and `backend/data/` out of version control. ECS deployment uses the host's Caddy and a systemd service. Dockerfile and Compose are not used; do not recreate them. Do not expose the app's port 8080 directly to the public internet.
-- Run backend tests with `python -m unittest discover -s backend/tests -v` and Windows Android builds with `build.bat`.
+- Run backend tests with `python -m unittest discover -s backend/tests -v` and Windows Android builds with `scripts/build.bat`.

@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-cd /d "%~dp0"
+cd /d "%~dp0.."
 chcp 65001 >nul
 echo ================================
 echo    安装到模拟器
@@ -19,7 +19,7 @@ set "APK_FILE=app\build\outputs\parental\Parental-TV-v%APP_VERSION%.apk"
 if not exist "%APK_FILE%" (
     echo ❌ 错误: 找不到 APK 文件
     echo.
-    echo 请先运行 build.bat 编译项目
+    echo 请先运行 scripts\build.bat 编译项目
     pause
     exit /b 1
 )

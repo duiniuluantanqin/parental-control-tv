@@ -2,10 +2,10 @@
 
 ## Session and toolchain bootstrap
 
-- Treat this repository as the durable project memory. At the start of Android work, read `README_BUILD.md` and `.codex/skills/tv-parental-control/SKILL.md`; do not depend on prior chat context or a remembered machine-specific SDK path.
-- On Windows, build from the repository root with `build.bat`. It discovers Java and reuses an extracted Gradle 9.1.0 distribution from local caches when present, otherwise the checked-in Gradle Wrapper. Do not report a missing global `gradle` command as a project blocker.
+- Treat this repository as the durable project memory. At the start of Android work, read `docs/README_BUILD.md` and `.codex/skills/tv-parental-control/SKILL.md`; do not depend on prior chat context or a remembered machine-specific SDK path.
+- On Windows, build from the repository root with `scripts/build.bat`. It discovers Java and reuses an extracted Gradle 9.1.0 distribution from local caches when present, otherwise the checked-in Gradle Wrapper. Do not report a missing global `gradle` command as a project blocker.
 - `local.properties` and `.tools/` are intentionally machine-local and ignored by Git. Never copy their paths from another computer. Android Studio should create `local.properties`; install SDK Platform 37 and use Android Studio JBR/JDK 17+ or set `JAVA_HOME` for the current shell.
-- Install to the emulator with `install_emulator.bat`; install to the TCL TV with `install_device.bat`. The TV installer discovers ADB from SDK environment variables, `local.properties`, or PATH and uses TCL MultiScreen Interaction.
+- Install to the emulator with `scripts/install_emulator.bat`; install to the TCL TV with `scripts/install_device.bat`. The TV installer discovers ADB from SDK environment variables, `local.properties`, or PATH and uses TCL MultiScreen Interaction.
 - The optional local Gradle cache is not required on a fresh clone. The committed Wrapper pins Gradle 9.1.0 and may download it on first use.
 
 ## Product context
@@ -59,5 +59,5 @@
 - The Web backend and admin page are under `backend/`; run its API tests with `python -m unittest discover -s backend/tests -v`.
 - ECS deployment uses host-level Caddy + a `tvparental` systemd service running as dedicated user `tvparental-deploy`, code at `/var/www/html/tvparental`. `backend/compose.yaml` remains as a Docker alternative. Keep `backend/.env` and `backend/data/` private.
 - `.github/workflows/deploy-ecs.yml` auto-deploys backend changes on `main` via rsync + SSH + `systemctl restart tvparental`; required secrets are documented in `docs/DEPLOY_ECS.md`.
-- Windows local Android builds use `build.bat`; Gradle Wrapper is pinned to 9.1.0. The SDK path in `local.properties` is per-machine and must not be committed.
+- Windows local Android builds use `scripts/build.bat`; Gradle Wrapper is pinned to 9.1.0. The SDK path in `local.properties` is per-machine and must not be committed.
 - TCL MultiScreen Interaction installation and the floating overlay over the launcher were verified previously. The launcher opens the overlay permission page on first launch (Android offers no install-time prompt); the app never grants it silently. The API 28 Android TV emulator has no overlay settings page, so grant it with `appops` there. Video-app overlay behavior and reboot recovery should be rechecked after significant Android changes.

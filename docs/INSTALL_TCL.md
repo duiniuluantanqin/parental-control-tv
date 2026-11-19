@@ -2,13 +2,15 @@
 
 适用设备：雷鸟/TCL `tcl_m7642`，Android 9/API 28，ADB 地址 `10.0.0.8:5555`（2026-11-12 更新）。此固件会拒绝 `adb install` 和 `adb install -r`，使用电视自带的 TCL“多屏互动”推送 APK。电视端必须确认安装或升级。本流程已在这台电视上验证。
 
-`install_device.bat` 默认连接 `10.0.0.8`。电视 IP 变化时，可先在 PowerShell 设置 `$env:TV_PARENTAL_TV_IP = '新的电视IP'` 再运行安装脚本。ADB 连接失败时会保留实际错误信息；中文输出不会因 Windows 默认编码而导致解码异常。
+`scripts/install_device.bat` 接受可选的 IP 参数，例如在仓库根目录运行 `.\scripts\install_device.bat 10.0.0.9`（不带端口）。IP 取值顺序为命令行参数、环境变量 `TV_PARENTAL_TV_IP`、默认值 `10.0.0.8`；ADB 端口固定为 5555。ADB 连接失败时会保留实际错误信息；中文输出不会因 Windows 默认编码而导致解码异常。
+
+`scripts/install_device.bat` 是 Windows 启动入口，内部调用同目录的 `install_device.py`。Python 脚本负责查找 ADB、提供临时 APK 下载服务、发起 TCL 多屏互动安装、校验版本、设置权限及清理连接；两个文件需要一起保留。
 
 ## 升级前
 
 1. 电视开机，并与电脑连接同一网络。
 2. 保持包名 `com.example.tvparental` 不变。版本名统一读取根目录 `VERSION`，Android 的 `versionCode` 每次递增 1。不要更换用于签名的电脑/Android Studio 用户配置，否则电视可能拒绝覆盖安装。
-3. 在项目根目录打开 PowerShell。以下命令优先使用 PATH 中的 ADB；如果未加入 PATH，可将 `$adb` 设置为当前电脑 Android SDK `platform-tools` 目录下的 `adb.exe`。仓库安装器 `install_device.bat` 会自动从 Android SDK 环境变量、`local.properties` 或 PATH 定位 ADB。
+3. 在项目根目录打开 PowerShell。以下命令优先使用 PATH 中的 ADB；如果未加入 PATH，可将 `$adb` 设置为当前电脑 Android SDK `platform-tools` 目录下的 `adb.exe`。仓库安装器 `scripts/install_device.bat` 会自动从 Android SDK 环境变量、`local.properties` 或 PATH 定位 ADB。
 
 ## 构建并推送
 
@@ -21,7 +23,7 @@ $tvIp = '10.0.0.8'
 $adbTarget = "${tvIp}:5555"
 $pushDir = Join-Path (Get-Location) '.tools\tv-parental-push'
 
-& .\build.bat
+& .\scripts\build.bat
 if ($LASTEXITCODE -ne 0) { throw 'Android build failed.' }
 New-Item -ItemType Directory -Force -Path $pushDir | Out-Null
 $appVersion = (Get-Content '.\VERSION' -Raw).Trim()
@@ -73,7 +75,7 @@ try {
 & $adb -s $adbTarget shell appops get com.example.tvparental APP_ASSOC_START
 ```
 
-通过 `install_device.bat` 安装时，安装器会在电视确认安装且版本校验通过后，自动把悬浮窗权限 `SYSTEM_ALERT_WINDOW` 以及 TCL 自启动权限 `APP_AUTO_START`、`APP_ASSOC_START` 设为 `allow` 并回读核验。若应用是通过其他方式安装或重新安装后相关权限失效，可手动执行：
+通过 `scripts/install_device.bat` 安装时，安装器会在电视确认安装且版本校验通过后，自动把悬浮窗权限 `SYSTEM_ALERT_WINDOW` 以及 TCL 自启动权限 `APP_AUTO_START`、`APP_ASSOC_START` 设为 `allow` 并回读核验。若应用是通过其他方式安装或重新安装后相关权限失效，可手动执行：
 
 ```powershell
 & $adb -s $adbTarget shell appops set com.example.tvparental SYSTEM_ALERT_WINDOW allow
@@ -92,9 +94,9 @@ try {
 
 打开应用，确认首页显示的每日额度、题目间隔和题库数量。默认每日额度为 60 分钟、答题间隔为 10 分钟、答错锁定为 10 分钟；题库包含 50 道初中难度题目并随机抽取。首次打开应用会自动跳转到悬浮窗权限页，请用遥控器允许；随后在首页选择“设置解锁密码”，用方向键输入两次 6 位密码。手动“Test question”只显示一道测试题，不记录答案、不消耗题目，也不会触发锁定。启动时答题按电视本地日期每天只触发一次，当天后续重启或重新打开应用不会额外触发；高级设置中的 `Questions on first startup of the day` 开关可关闭此行为。启动答题使用正式五题挑战，五题中至少答对四题即可解锁；全部作答后正确数少于四题才开始答错锁定。四个选项分成 2×2，方向键移动并高亮，按 OK 提交，没有单独的提交按钮。升级后通常会保留已授予的悬浮窗权限。
 
-应用启动后自动从 `https://tvparental.mediainsight360.com` 获取题库和规则，无需在电视配置地址、用户名或密码。升级后也固定使用该域名，不再读取旧版保存的后台地址。可在首页选择“立即同步题目和规则”进行验证。管理页面和部署方式见项目根目录的 `README.md`。设备默认每 5 分钟同步一次，同步间隔可在后台调整为 1–60 分钟。
+应用启动后自动从 `https://tvparental.mediainsight360.com` 获取题库和规则，无需在电视配置地址、用户名或密码。升级后也固定使用该域名，不再读取旧版保存的后台地址。可在首页选择“立即同步题目和规则”进行验证。后台管理与答题规则见 [使用说明](USER_GUIDE.md)，部署方式见 [部署指南](DEPLOY_ECS.md)。设备默认每 5 分钟同步一次，同步间隔可在后台调整为 1–60 分钟。
 
-通过 `install_device.bat` 安装时，ADB 会设置悬浮窗和自启动权限；若通过其他方式安装且悬浮窗权限缺失，首次启动可能会打开系统授权页。应用会在 `LOCKED_BOOT_COMPLETED` 与 `BOOT_COMPLETED` 时恢复 10 分钟答题闹钟和时长统计服务。今日使用时长按屏幕亮起时间估算，午夜按电视本地日期清零；错误锁定期间不累计时长。待机唤醒不一定会发送启动广播，请通过电视完整重启验证冷启动行为。
+通过 `scripts/install_device.bat` 安装时，ADB 会设置悬浮窗和自启动权限；若通过其他方式安装且悬浮窗权限缺失，首次启动可能会打开系统授权页。应用会在 `LOCKED_BOOT_COMPLETED` 与 `BOOT_COMPLETED` 时恢复 10 分钟答题闹钟和时长统计服务。今日使用时长按屏幕亮起时间估算，午夜按电视本地日期清零；错误锁定期间不累计时长。待机唤醒不一定会发送启动广播，请通过电视完整重启验证冷启动行为。
 
 ## 收尾
 

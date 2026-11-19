@@ -43,7 +43,7 @@ adb shell "dumpsys alarm | grep -A 5 -B 3 com.example.tvparental"
 
 ## 本次真机结果（2026-11-07）
 
-安装版本 `1.0.14` / `versionCode=38`，通过项目 `build.bat` 构建、`install_device.bat` 覆盖升级。验证期间没有手动打开应用，没有给应用发送启动命令。
+安装版本 `1.0.14` / `versionCode=38`，通过项目 `scripts/build.bat` 构建、`scripts/install_device.bat` 覆盖升级。验证期间没有手动打开应用，没有给应用发送启动命令。
 
 | 场景 | 原 PID | 恢复 PID | 观测到完整恢复的时间 | 结果 |
 | --- | --- | --- | --- | --- |

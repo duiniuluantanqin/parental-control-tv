@@ -1,86 +1,125 @@
-## Android 应用
+# TV Parental Control
 
-在 Android Studio 中打开项目目录，等待 Gradle 同步。项目使用 Kotlin、Android Gradle Plugin 9.0.0、`compileSdk 37`、`minSdk 28`，Gradle Wrapper 固定为 9.1.0。若 SDK Platform 37 缺失，请在 SDK Manager 中安装。
+## 编译
 
-Windows 新环境准备、JDK/SDK 定位和安装流程见 [README_BUILD.md](README_BUILD.md)。从仓库根目录使用项目构建脚本：
+1. 安装 Android Studio，使用自带 JBR 或 JDK 17+。
+2. 在 SDK Manager 安装 Android SDK Platform 37 和 Platform-Tools。
+3. 用 Android Studio 打开仓库根目录，完成 Gradle 同步并生成本机 `local.properties`，不要复制其他电脑的 SDK 路径。
 
-```powershell
-.\build.bat
-```
-
-版本号统一保存在根目录 `VERSION`。APK 位于 `app\build\outputs\parental\Parental-TV-v<版本号>.apk`。应用自动从 `https://tvparental.mediainsight360.com` 同步题目和规则，无需在电视配置地址或登录；首页可手动同步并查看今日已用时间。首次使用需要在电视确认系统悬浮窗权限；应用不能静默授予 Android 特殊权限。
-
-### 启动 Android 模拟器
-
-在 Android Studio 打开 Device Manager，找到已创建的虚拟设备并点击启动按钮。也可以在 PowerShell 中列出并启动 AVD：
+无需安装全局 Gradle，项目使用 Gradle Wrapper 9.1.0；首次构建可能需要下载：
 
 ```powershell
-$androidSdk = "$env:LOCALAPPDATA\Android\Sdk"
-$emulator = Join-Path $androidSdk "emulator\emulator.exe"
-& $emulator -list-avds
-& $emulator -avd Television_1080p
-& $emulator -avd "AVD_NAME"
+.\scripts\build.bat
 ```
 
-如果列表为空，在 Device Manager 点击“Create Device”，选择设备型号和系统镜像，完成创建后再启动。
+版本号在 `VERSION`，APK 输出到 `app\build\outputs\parental\Parental-TV-v<版本号>.apk`。详细环境配置与排障见 [Android 编译与安装](docs/README_BUILD.md)。
 
-如果 SDK 安装在其他目录，请将 `$androidSdk` 改为 Android Studio SDK Manager 显示的路径。将 `AVD_NAME` 替换为列表中的设备名称。
+## 安装
 
-等待模拟器启动后安装当前调试版本：
+### 模拟器
+
+先在 Android Studio Device Manager 创建 Android TV API 28 虚拟设备，再用脚本启动：
 
 ```powershell
-.\install_emulator.bat
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start_emulator.ps1
 ```
 
-模拟器安装脚本会从 Android SDK 环境变量、`local.properties`、常见 SDK 目录或 PATH 定位 ADB，并会先卸载旧包，因此会清除模拟器中的本地应用数据。电视安装请使用 `install_device.bat`。
+脚本自动查找 SDK；只有一个 AVD 时直接启动，多个时提示选择。也可列出设备或指定名称：
 
-屏幕亮起时长通常每 10 秒结算并同步保存，待机、正常关机和服务退出前补结算；额度临近耗尽时会缩短采样间隔。开机校时出现日期回退时不清空当天用时，日期跳变后校正可恢复该日期的已用时间。突然断电或强杀仍可能丢失最近尚未采样的一小段时间，系统长时间挂起服务时不能保证固定误差上限；详见 [计时说明](docs/USAGE_ACCOUNTING.md)。后台服务在开机后恢复；TCL 固件还需要通过 ADB 放行 `APP_AUTO_START` 与 `APP_ASSOC_START`。完整安装升级步骤见 [docs/INSTALL_TCL.md](docs/INSTALL_TCL.md)。
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start_emulator.ps1 -List
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start_emulator.ps1 -AvdName "AVD_NAME"
+```
 
-开机答题每天只在首次启动时触发一次，按电视本地日期判断；当天再次重启电视或重新打开应用不会重复触发启动挑战，正常定时答题和锁定恢复仍照常执行。高级设置中的 `Questions on first startup of the day` 开关控制此行为。
+将 `AVD_NAME` 替换为列表中的名称，等待模拟器启动完成后安装：
 
-答错锁定期间会显示诗词全文：优先从本轮答错的古诗词题中选一篇，否则从题库中随机选择。全文不滚动；短篇保留原排版，长篇将作者以小字放在标题后，并按可用空间缩小正文和行距。倒计时和 PIN 入口保持可用；锁定恢复后仍显示同一篇。内置古诗文已附全文，离线时可作为后备。后台通过 DeepSeek 自动补全旧古诗词题缺失的作品全文并保存，之后随题目同步到电视；新 AI 古诗词题也会附全文，管理页的题目详情和 AI 预览均可查看。后台需已配置 `DEEPSEEK_API_KEY`，电视端不保存密钥或直接调用模型。
+```powershell
+.\scripts\install_emulator.bat
+```
+
+脚本会先卸载旧包，清除模拟器中的本地应用数据。API 28 TV 模拟器没有悬浮窗设置页，可通过 ADB 放行；将 `emulator-5554` 替换为 `adb devices` 中的实际序列号：
+
+```powershell
+adb devices
+adb -s emulator-5554 shell appops set com.example.tvparental SYSTEM_ALERT_WINDOW allow
+```
+
+### 真机
+
+各型号和固件的菜单可能不同：
+
+| 电视 | 怎么打开 |
+| --- | --- |
+| 小米 / Redmi | 设置 → 关于 → 连续按「产品型号/产品类型」进入开发者模式，再到 设置 → 账号与安全，打开「ADB 调试」和「安装未知来源的应用」。 |
+| TCL / 雷鸟 | 设置 → 关于 → 本机信息，快速按遥控器「上下左右」，在底部的「更多」里打开 ADB。 |
+| 海尔 / 模卡 | 按电视机身上的信号源键，再用遥控器按「左左上右」，在工厂菜单里打开「ADB 调试开关」，别动其他选项。 |
+| 海信 / Vidda | 设置 → 声音，关闭杜比全景声；在 专业音响设置 → 声音平衡 里快速交替按「确认」「菜单」，左上角出现 M 后按「菜单」进工厂菜单，把「选项」里的 To Fac 从 U 改成 M 后重启，别动其他选项；再到 设置 → 全部设置，连按「菜单」打开原生设置，连按版本号后在开发者选项里打开「USB 调试」和「无线调试」。工厂菜单按错有风险，反复改 To Fac 可能让 USB 失灵、要重置电视，只改一次（[详细说明](https://github.com/pengchujin/aerial-tv/blob/main/docs/devices/adb-by-brand.md)）。 |
+| OPPO（含 S1） | 设置 → 系统 → 关于本机 → 设备型号，按「上上右右」再按确认；再到 设置 → 系统 → 开发者选项，打开「USB 调试」。IP 在 设置 → 网络 → 已连接的网络 最下面。 |
+| 其他 Android TV | 设置 → 设备偏好设置 → 关于，连续点击「版本号 / Android TV OS 版本」进入开发者模式，再返回开发者选项打开 USB 调试；如提供网络 / 无线调试，按该选项提示连接。 |
+
+### 雷鸟 / TCL 电视安装
+
+电脑与电视连接同一网络，电视开启 ADB 调试，确认连接后安装：
+
+```powershell
+adb connect 10.0.0.8:5555
+adb devices
+.\scripts\install_device.bat
+```
+
+需要 Python 3。此固件拒绝普通 `adb install`，安装脚本通过 TCL“多屏互动”推送，需在电视上确认安装。默认 IP 为 `10.0.0.8`，也可传入其他 IP（不带端口）：
+
+```powershell
+.\scripts\install_device.bat 10.0.0.9
+```
+
+IP 取值顺序：命令行参数 → 环境变量 `TV_PARENTAL_TV_IP` → 默认值 `10.0.0.8`。
+
+安装脚本会自动放行并核验悬浮窗、自启动和关联启动权限；手动补设时运行：
+
+```powershell
+adb -s 10.0.0.8:5555 shell appops set com.example.tvparental SYSTEM_ALERT_WINDOW allow
+adb -s 10.0.0.8:5555 shell appops set com.example.tvparental APP_AUTO_START allow
+adb -s 10.0.0.8:5555 shell appops set com.example.tvparental APP_ASSOC_START allow
+```
+
+暂停播放器还需通知使用权，可从应用首页的 `Allow media pause` 开启，或在该 TCL 电视执行：
+
+```powershell
+adb -s 10.0.0.8:5555 shell cmd notification allow_listener com.example.tvparental/com.example.tvparental.MediaControlListenerService 0
+```
+
+手动执行命令需将 Android SDK 的 `platform-tools` 加入 PATH，或使用 `adb.exe` 的完整路径；目标 IP 变化时同步替换命令中的地址。完整升级、授权核验和连接清理见 [TCL 安装指南](docs/INSTALL_TCL.md)。
 
 ## 本机后台
 
-需要 Python 3.11 或更高版本，无第三方 Python 依赖。在项目根目录打开 PowerShell，首次启动会在 SQLite 中创建默认管理员 `admin/admin`。
-
-然后启动本地预览服务，保持这个终端运行：
+需要 Python 3.11+，仅使用标准库，无需安装第三方依赖或单独编译：
 
 ```powershell
 $env:HOST = "127.0.0.1"
+$env:PORT = "8765"
 python backend/server.py
 ```
 
-浏览器打开 `http://127.0.0.1:8765/questions`，使用 `admin/admin` 登录，然后通过右上角“修改密码”更换默认密码（新密码至少 10 个字符）。后台导航按功能分组：“使用管理”包含使用规则和使用记录；“内容管理”包含题库管理和已出题古诗词；“设备维护”中的“设备与重置”提供 PIN 和今日使用时长重置。题库支持组合使用类别筛选与题目、选项、答案搜索；点击题目可查看完整选项和诗词原文。规则页的保存栏和长弹窗的操作栏会保持可见；手机端的每周规则、题目和使用时长采用卡片布局。
+打开 <http://127.0.0.1:8765/>。新数据库默认账号为 `admin/admin`，首次登录后在右上角修改密码（至少 10 个字符）。端口冲突时修改 `PORT`；停止服务按 `Ctrl+C`。
 
-如果 8765 端口已被占用，可在启动服务前改用其他端口，例如：
+忘记管理员密码时运行：
 
 ```powershell
-$env:HOST = "127.0.0.1"
-$env:PORT = "8766"
-python backend/server.py
+python backend/server.py --set-admin
 ```
 
-此时打开 `http://127.0.0.1:8766/settings`。停止服务时在运行它的 PowerShell 窗口按 `Ctrl+C`。
+Android 当前固定连接 <https://tvparental.mediainsight360.com>，启动本机后台不会自动切换电视的服务地址。ECS 安装、HTTPS 配置和自动发布见 [后台部署指南](docs/DEPLOY_ECS.md)。
 
-管理员用户名和加盐密码散列、题库、规则、设备及使用记录均保存在 `backend/data.sqlite3`。忘记密码时可运行 `python backend/server.py --set-admin` 重设。首次启动会用默认规则、种子题库和 `admin/admin` 初始化 SQLite，不会自动导入旧 JSON。启动本地后台只会让浏览器管理页面使用本地数据；app 当前仍固定连接线上域名 `https://tvparental.mediainsight360.com`，不会因为启动本地后台而自动切换。修改 `backend/web/` 后刷新浏览器即可看到变化，无需重启 Python。
-
-题库支持 DeepSeek AI 出题：古诗词类别输入作品名（可附作者），数学、地理历史和科学类别可直接随机出题。每次生成 1–10 道四选一题目，预览并勾选后批量入库。AI 与手动出题的难度统一为“低、中、高”，默认“中”；已有题库的“小学、初中、高中”读取时分别对应“低、中、高”。需要在服务环境中配置 `DEEPSEEK_API_KEY`；Key 配置和使用步骤见[部署文档](docs/DEPLOY_ECS.md#deepseek-ai-出题)。
-
-## 部署到阿里云 ECS
-
-复用 ECS 上已有的 Caddy，为新域名增加 `reverse_proxy 127.0.0.1:8080`，Python 后台由 systemd 托管。按 [部署文档](docs/DEPLOY_ECS.md) 完成一次性初始化后，推送后台或种子题库到 `main`，GitHub Actions 就会测试、同步代码、重启后台并检查 HTTPS 接口。
-
-管理页面为 https://tvparental.mediainsight360.com/ 。代码位于 `/var/www/html/tvparental`，管理员账号散列、题库、规则、设备和记录保存在 `backend/data/state.sqlite3`；自动发布会保留这些运行数据，请另外备份。新数据库默认账号为 `admin/admin`，首次登录后应在页面右上角修改密码。应用端口 8080 只监听本机，无需在安全组开放。
-
-已有宿主机 Caddy 时不要运行仓库的 `backend/compose.yaml`，其中自带的 Caddy 会争用 80/443 端口。
-
-## 后端测试
+后台测试：
 
 ```powershell
 python -m unittest discover -s backend/tests -v
 ```
 
-## 当前边界
+## 其他文档
 
-Android 用屏幕交互状态估算电视使用时间，电视厂商的休眠和进程管理策略可能影响后台服务。悬浮框持有遥控器焦点，可以阻挡当前画面的遥控操作，但无法强制停止其他应用的视频解码或音频，也无法替代设备所有者级别的系统管控。
+- [使用说明与答题规则](docs/USER_GUIDE.md)
+- [用时统计说明](docs/USAGE_ACCOUNTING.md)
+- [后台恢复与验证](docs/BACKGROUND_RECOVERY.md)
+- [遥控器快捷按键设置](docs/REMOTE_BUTTON_CONTROL.md)
