@@ -37,7 +37,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start_emulator.ps1
 .\scripts\install_emulator.bat
 ```
 
-脚本使用覆盖安装，保留模拟器中的本地设置、PIN 和绑定凭证。API 28 TV 模拟器没有悬浮窗设置页，可通过 ADB 放行；将 `emulator-5554` 替换为 `adb devices` 中的实际序列号：
+脚本先按电脑时间校准模拟器，再覆盖安装，保留本地设置、PIN 和绑定凭证。使用记录按模拟器本地日期归档。API 28 TV 模拟器没有悬浮窗设置页，可通过 ADB 放行；将 `emulator-5554` 替换为 `adb devices` 中的实际序列号：
 
 ```powershell
 adb devices

@@ -75,6 +75,11 @@ echo ✓ 找到模拟器: %EMULATOR%
 echo.
 
 echo [2/4] 保留已有数据和绑定凭证，将覆盖安装...
+echo 校准模拟器时间，避免旧快照使使用记录落到错误日期...
+for /f %%T in ('powershell -NoProfile -Command "[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()"') do set "EMULATOR_NOW_MS=%%T"
+if defined EMULATOR_NOW_MS "%ADB_CMD%" -s %EMULATOR% shell cmd alarm set-time !EMULATOR_NOW_MS! >nul 2>&1
+echo 模拟器当前时间：
+"%ADB_CMD%" -s %EMULATOR% shell date
 echo.
 
 echo [3/4] 安装新版本...

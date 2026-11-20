@@ -50,6 +50,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start_emulator.ps1
 
 该脚本会从 Android SDK 环境变量、项目 `local.properties`、常见 SDK 目录或 PATH 定位 ADB，使用 `adb install -r` 覆盖安装，保留本地设置、PIN 和账号绑定凭证。构建产物不存在时先运行 `scripts/build.bat`。不会因安装失败自动卸载应用；若签名不匹配，需自行决定是否卸载重装。
 
+安装前会按电脑当前时间校准模拟器，并输出模拟器日期。使用记录按模拟器本地日期上报；旧快照可能带回过期时间，出现“绑定成功但今天没有记录”时，先检查 `adb -s emulator-5554 shell date`，再核对后台所选日期。时区可用 `adb -s emulator-5554 shell cmd alarm set-timezone Asia/Shanghai` 设置。校时后，旧日期的历史记录保留在原日期，当天用时从当天重新累计。
+
 ## 安装到雷鸟/TCL 电视
 
 运行：
