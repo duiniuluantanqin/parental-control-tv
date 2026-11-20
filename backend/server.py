@@ -635,8 +635,8 @@ class AdminAuth:
     def validate_credentials(username: str, password: str) -> None:
         if not isinstance(username, str) or not 1 <= len(username.strip()) <= 64:
             raise ValueError("用户名需为 1–64 个字符")
-        if not isinstance(password, str) or not 10 <= len(password) <= 1024:
-            raise ValueError("密码需为 10–1024 个字符")
+        if not isinstance(password, str) or not password:
+            raise ValueError("请输入密码")
 
     def throttled(self, key: str, limit: int = 5, seconds: int = 60) -> bool:
         now = time.monotonic()
@@ -726,10 +726,8 @@ class AdminAuth:
         return self.account_id(session) is not None
 
     def change_password(self, session: str, current_password: str, new_password: str) -> tuple[int, str]:
-        if not 10 <= len(new_password) <= 1024:
-            return 400, "新密码需为 10–1024 个字符"
-        if current_password == new_password:
-            return 400, "新密码不能与当前密码相同"
+        if not isinstance(new_password, str) or not new_password:
+            return 400, "请输入新密码"
         with self.lock:
             account_id = self.account_id(session)
             if account_id is None:
@@ -1258,7 +1256,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             try:
                 payload = self.read_json()
                 username, password = payload.get("username"), payload.get("password")
-                if not isinstance(username, str) or not isinstance(password, str) or len(username) > 64 or len(password) > 1024:
+                if not isinstance(username, str) or not isinstance(password, str) or len(username) > 64:
                     raise ValueError("请输入有效的用户名和密码")
                 status, result = AUTH.login(username, password)
                 if status == 200:
@@ -1308,7 +1306,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 current_password = payload.get("currentPassword")
                 new_password = payload.get("newPassword")
                 confirm_password = payload.get("confirmPassword")
-                if any(not isinstance(value, str) or len(value) > 1024 for value in (current_password, new_password, confirm_password)):
+                if any(not isinstance(value, str) for value in (current_password, new_password, confirm_password)):
                     raise ValueError("请输入有效的当前密码和新密码")
                 if new_password != confirm_password:
                     raise ValueError("两次输入的新密码不一致")
@@ -1553,7 +1551,7 @@ def main() -> None:
     args = parser.parse_args()
     if args.set_admin:
         username = input("用户名 [admin]: ").strip() or "admin"
-        password = getpass.getpass("密码（至少 10 个字符）: ")
+        password = getpass.getpass("密码: ")
         if password != getpass.getpass("再次输入密码: "):
             raise SystemExit("两次密码不一致，未修改账号")
         try:

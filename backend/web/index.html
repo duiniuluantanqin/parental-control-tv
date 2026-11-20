@@ -30,10 +30,10 @@
         <label for="usernameInput">用户名</label>
         <input id="usernameInput" name="username" autocomplete="username" maxlength="64" required autofocus>
         <label for="passwordInput">密码</label>
-        <input id="passwordInput" name="password" type="password" autocomplete="current-password" maxlength="1024" required>
+        <input id="passwordInput" name="password" type="password" autocomplete="current-password" required>
         <div id="registerConfirmation" hidden>
           <label for="registerConfirmInput">确认密码</label>
-          <input id="registerConfirmInput" type="password" autocomplete="new-password" maxlength="1024">
+          <input id="registerConfirmInput" type="password" autocomplete="new-password">
         </div>
         <p id="loginNotice" class="form-notice error" role="alert"></p>
         <button id="loginButton" class="button primary" type="submit">登录</button>
@@ -208,9 +208,9 @@
   <dialog id="changePasswordDialog" aria-labelledby="changePasswordTitle">
     <form id="changePasswordForm" class="password-form">
       <div class="form-heading"><div><h2 id="changePasswordTitle">修改账号密码</h2></div><button id="closeChangePassword" class="icon-button" type="button" aria-label="关闭修改密码对话框">×</button></div>
-      <label for="currentPasswordInput">当前密码<input id="currentPasswordInput" type="password" autocomplete="current-password" maxlength="1024" required></label>
-      <label for="newPasswordInput">新密码<input id="newPasswordInput" type="password" autocomplete="new-password" minlength="10" maxlength="1024" required><small>至少 10 个字符</small></label>
-      <label for="confirmPasswordInput">确认新密码<input id="confirmPasswordInput" type="password" autocomplete="new-password" minlength="10" maxlength="1024" required></label>
+      <label for="currentPasswordInput">当前密码<input id="currentPasswordInput" type="password" autocomplete="current-password" required></label>
+      <label for="newPasswordInput">新密码<input id="newPasswordInput" type="password" autocomplete="new-password" required></label>
+      <label for="confirmPasswordInput">确认新密码<input id="confirmPasswordInput" type="password" autocomplete="new-password" required></label>
       <p id="changePasswordNotice" class="form-notice error" role="alert"></p>
       <div class="form-actions"><button id="cancelChangePassword" class="button secondary" type="button">取消</button><button id="submitChangePassword" class="button primary" type="submit">保存密码</button></div>
     </form>

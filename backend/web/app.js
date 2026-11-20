@@ -1019,7 +1019,6 @@ if (isRegisterPage) {
   document.querySelector("#authDescription").textContent = "每个账号独立管理自己的设备、题库与使用记录。";
   document.querySelector("#registerConfirmation").hidden = false;
   document.querySelector("#registerConfirmInput").required = true;
-  document.querySelector("#passwordInput").minLength = 10;
   document.querySelector("#passwordInput").autocomplete = "new-password";
   document.querySelector("#loginButton").textContent = "注册";
   document.querySelector("#authSwitch").href = "/login";

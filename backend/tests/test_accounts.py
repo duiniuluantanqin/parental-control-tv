@@ -83,7 +83,8 @@ class AccountBindingTests(unittest.TestCase):
         return code
 
     def test_registration_validation_and_case_insensitive_uniqueness(self):
-        for body in ({}, {"username": "new", "password": "short", "confirmPassword": "short"},
+        for body in ({}, {"username": "new", "password": "", "confirmPassword": ""},
+                     {"username": "new", "password": 1, "confirmPassword": 1},
                      {"username": "new", "password": "long-password-123", "confirmPassword": "different"}):
             self.assertEqual(self.request(self.device, "/api/v1/admin/register", body)[0], 400)
         self.assertEqual(self.request(self.device, "/api/v1/admin/register", {
@@ -91,6 +92,28 @@ class AccountBindingTests(unittest.TestCase):
         })[0], 409)
         with closing(sqlite3.connect(self.path)) as db:
             self.assertNotEqual(db.execute("SELECT password_hash FROM accounts WHERE username = 'alice'").fetchone()[0], "long-password-123")
+
+    def test_passwords_have_no_length_or_complexity_policy(self):
+        for index, password in enumerate(("1", "x" * 1025)):
+            with self.subTest(length=len(password)):
+                username = f"simple{index}"
+                client = build_opener(HTTPCookieProcessor(CookieJar()))
+                self.assertEqual(self.request(client, "/api/v1/admin/register", {
+                    "username": username, "password": password, "confirmPassword": password,
+                })[0], 201)
+                self.assertEqual(self.request(client, "/api/v1/admin/login", {"username": username, "password": password})[0], 200)
+                self.assertEqual(self.request(client, "/api/v1/admin/password/change", {
+                    "currentPassword": password, "newPassword": password, "confirmPassword": password,
+                })[0], 200)
+                self.assertEqual(self.request(client, "/api/v1/admin/password/change", {
+                    "currentPassword": password, "newPassword": "2", "confirmPassword": "2",
+                })[0], 200)
+                self.assertEqual(self.request(client, "/api/v1/admin/login", {"username": username, "password": "2"})[0], 200)
+                self.assertEqual(self.request(client, "/api/v1/admin/password/change", {
+                    "currentPassword": "2", "newPassword": "", "confirmPassword": "",
+                })[0], 400)
+                server.AUTH.set_password(username, password)
+                self.assertEqual(self.request(client, "/api/v1/admin/login", {"username": username, "password": password})[0], 200)
 
     def test_unbound_device_and_anonymous_legacy_endpoints_are_rejected(self):
         for path in ("state", "usage", "answers", "challenges"):
