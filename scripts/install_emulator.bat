@@ -97,16 +97,10 @@ echo ================================
 echo    安装成功！✓
 echo ================================
 echo.
-echo 是否立即启动应用？(Y/N)
-set /p LAUNCH=
-
-if /i "%LAUNCH%"=="Y" (
-    echo.
-    echo 正在启动应用...
-    "%ADB_CMD%" -s %EMULATOR% shell am start -n com.example.tvparental/.MainActivity
-    echo.
-    echo ✓ 应用已启动
-)
+echo 正在启动应用...
+"%ADB_CMD%" -s %EMULATOR% shell am start -n com.example.tvparental/.MainActivity
+echo.
+echo ✓ 应用已启动
 
 echo.
 pause

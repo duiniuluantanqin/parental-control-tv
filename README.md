@@ -117,6 +117,13 @@ Android 当前固定连接 <https://tvparental.mediainsight360.com>，启动本�
 python -m unittest discover -s backend/tests -v
 ```
 
+## 界面截图
+
+![](docs/images/app.png)
+![](docs/images/app2.png)
+![](docs/images/web.png)
+![](docs/images/web2.png)
+
 ## 其他文档
 
 - [使用说明与答题规则](docs/USER_GUIDE.md)

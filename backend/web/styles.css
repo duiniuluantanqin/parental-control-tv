@@ -33,6 +33,7 @@ h2 { font-size: 17px; line-height: 1.5; font-weight: 650; }
 .workspace-caption { color: var(--muted); font-size: 13px; }
 .topbar-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 .version-label { margin-right: 10px; color: #7a8796; font-size: 11px; white-space: nowrap; }
+.account-label { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 13px; }
 #adminView { margin-left: 224px; }
 .page-content { max-width: 1360px; margin: 0 auto; padding: 34px 40px 48px; outline: none; }
 .page-nav { position: fixed; top: 76px; bottom: 0; left: 0; width: 224px; padding: 30px 18px; overflow-y: auto; background: #fff; border-right: 1px solid var(--line); }
@@ -305,7 +306,8 @@ dialog::backdrop { background: #14253d66; backdrop-filter: blur(4px); }
   .brand-mark { width: 32px; height: 32px; border-radius: 9px; }
   .brand strong { font-size: 15px; }
   .brand small { font-size: 10px; }
-  .topbar-actions { gap: 6px; }
+  .topbar-actions { gap: 0 6px; min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
+  .account-label { flex-basis: 100%; max-width: 160px; font-size: 11px; line-height: 1.4; text-align: right; }
   .topbar-button { min-height: 34px; padding: 0 9px; font-size: 11px; }
   .version-label { display: none; }
   .page-nav { top: 68px; gap: 8px; padding: 9px 12px; }

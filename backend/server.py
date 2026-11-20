@@ -725,6 +725,10 @@ class AdminAuth:
     def is_authenticated(self, session: str) -> bool:
         return self.account_id(session) is not None
 
+    def username(self, account_id: int) -> str:
+        with closing(self.connect()) as connection:
+            return connection.execute("SELECT username FROM accounts WHERE id = ?", (account_id,)).fetchone()[0]
+
     def change_password(self, session: str, current_password: str, new_password: str) -> tuple[int, str]:
         if not isinstance(new_password, str) or not new_password:
             return 400, "请输入新密码"
@@ -873,7 +877,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_json(200, self.store.snapshot(params.get("deviceId", [""])[0], params.get("date", [""])[0]))
         elif path == "/api/v1/admin/state":
             if self.require_admin():
-                self.send_json(200, self.store.snapshot())
+                self.send_json(200, {**self.store.snapshot(), "username": AUTH.username(self.account)})
         elif path == "/api/v1/admin/poems":
             if self.require_admin():
                 self.send_json(200, {"poems": self.store.poem_history()})

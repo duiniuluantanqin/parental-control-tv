@@ -82,6 +82,18 @@ class AccountBindingTests(unittest.TestCase):
         self.headers["X-Binding-Id"] = binding["bindingId"]
         return code
 
+    def test_admin_state_identifies_current_account(self):
+        for client, username in ((self.admin, "admin"), (self.alice, "alice"), (self.bob, "bob")):
+            with self.subTest(username=username):
+                status, state = self.request(client, "/api/v1/admin/state")
+                self.assertEqual(status, 200)
+                self.assertEqual(state["username"], username)
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/login", {
+            "username": "ALICE", "password": "long-password-123",
+        })[0], 200)
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/state")[1]["username"], "alice")
+        self.assertEqual(self.request(self.device, "/api/v1/admin/state")[0], 401)
+
     def test_registration_validation_and_case_insensitive_uniqueness(self):
         for body in ({}, {"username": "new", "password": "", "confirmPassword": ""},
                      {"username": "new", "password": 1, "confirmPassword": 1},

@@ -321,6 +321,9 @@ async function loadPoemHistory() {
 async function loadState() {
   const state = await api("/api/v1/admin/state");
   if (state.version) document.querySelector("#backendVersion").textContent = `后台 v${state.version}`;
+  const currentAccount = document.querySelector("#currentAccount");
+  currentAccount.textContent = `账号：${state.username}`;
+  currentAccount.title = currentAccount.textContent;
   renderWeeklySettings(state.settings);
   document.querySelector("#questionInterval").value = state.settings.questionIntervalMinutes;
   document.querySelector("#wrongLock").value = state.settings.wrongLockMinutes;
@@ -985,6 +988,7 @@ async function initialize() {
       return;
     }
     adminView.hidden = false;
+    document.querySelector("#currentAccount").hidden = false;
     document.querySelector("#changePasswordButton").hidden = false;
     document.querySelector("#logoutButton").hidden = false;
     document.querySelector(`#${page}Page`).hidden = false;
