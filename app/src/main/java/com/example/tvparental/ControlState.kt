@@ -478,12 +478,21 @@ object ControlState {
     private const val APPLIED_PASSWORD_RESET_ID_KEY = "applied_password_reset_id"
 
     fun hasUnlockPassword(context: Context): Boolean =
-        prefs(context).getString(PASSWORD_HASH_KEY, null) != null
+        hasUnlockPassword(prefs(context))
 
-    fun setUnlockPassword(context: Context, sequence: String): Boolean {
+    @Synchronized
+    internal fun hasUnlockPassword(preferences: SharedPreferences): Boolean =
+        preferences.getString(PASSWORD_HASH_KEY, null) != null ||
+            setUnlockPassword(preferences, DEFAULT_REMOTE_PASSWORD)
+
+    fun setUnlockPassword(context: Context, sequence: String): Boolean =
+        setUnlockPassword(prefs(context), sequence)
+
+    @Synchronized
+    internal fun setUnlockPassword(preferences: SharedPreferences, sequence: String): Boolean {
         if (sequence.length != PASSWORD_LENGTH || sequence.any { it !in "UDLR" }) return false
         val salt = java.util.UUID.randomUUID().toString()
-        return prefs(context).edit()
+        return preferences.edit()
             .putString(PASSWORD_SALT_KEY, salt)
             .putString(PASSWORD_HASH_KEY, hashPassword(salt, sequence))
             .commit()
@@ -502,8 +511,12 @@ object ControlState {
             .commit()
     }
 
-    fun verifyUnlockPassword(context: Context, sequence: String): Boolean {
-        val preferences = prefs(context)
+    fun verifyUnlockPassword(context: Context, sequence: String): Boolean =
+        verifyUnlockPassword(prefs(context), sequence)
+
+    @Synchronized
+    internal fun verifyUnlockPassword(preferences: SharedPreferences, sequence: String): Boolean {
+        if (!hasUnlockPassword(preferences)) return false
         val salt = preferences.getString(PASSWORD_SALT_KEY, null) ?: return false
         val hash = preferences.getString(PASSWORD_HASH_KEY, null) ?: return false
         return MessageDigest.isEqual(hash.toByteArray(), hashPassword(salt, sequence).toByteArray())

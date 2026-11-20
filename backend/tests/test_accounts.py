@@ -98,7 +98,19 @@ class AccountBindingTests(unittest.TestCase):
         self.pairing()
         self.assertEqual(self.request(self.device, "/api/v1/device/state", headers=self.headers)[0], 403)
         fake = {**self.headers, "Authorization": "Bearer " + "x" * 43}
-        self.assertEqual(self.request(self.device, "/api/v1/device/pairing", {}, fake)[0], 401)
+        self.assertEqual(self.request(self.device, "/api/v1/device/binding", headers=fake)[0], 401)
+
+    def test_reinstall_before_binding_replaces_pending_credentials_and_code(self):
+        previous = self.pairing()
+        old_headers = dict(self.headers)
+        self.headers["Authorization"] = "Bearer " + secrets.token_urlsafe(32)
+        with patch("server.secrets.randbelow", return_value=(int(previous["code"]) + 1) % 1_000_000):
+            current = self.pairing()
+        self.assertFalse(current["bound"])
+        self.assertEqual(self.request(self.device, "/api/v1/device/binding", headers=old_headers)[0], 401)
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/devices/preview", {"code": previous["code"]})[0], 400)
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/devices/preview", {"code": current["code"]})[0], 200)
+        self.bind(self.alice)
 
     def test_binding_is_one_time_expires_and_cannot_be_stolen(self):
         code = self.bind(self.alice)
@@ -175,7 +187,10 @@ class AccountBindingTests(unittest.TestCase):
         self.bind(self.alice)
         old_headers = dict(self.headers)
         self.headers["Authorization"] = "Bearer " + secrets.token_urlsafe(32)
-        self.assertEqual(self.request(self.device, "/api/v1/device/pairing", {}, self.headers)[0], 401)
+        status, error = self.request(self.device, "/api/v1/device/pairing", {}, self.headers)
+        self.assertEqual(status, 409)
+        self.assertEqual(error["errorCode"], "device_already_bound")
+        self.assertEqual(self.request(self.device, "/api/v1/device/binding", headers=old_headers)[0], 200)
         self.request(self.alice, "/api/v1/admin/devices/unbind", {"deviceId": "test-tv"})
         self.bind(self.bob)
         self.assertEqual(self.request(self.device, "/api/v1/device/state", headers=old_headers)[0], 401)

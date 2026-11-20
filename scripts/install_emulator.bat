@@ -74,17 +74,11 @@ if "%EMULATOR%"=="" (
 echo ✓ 找到模拟器: %EMULATOR%
 echo.
 
-echo [2/4] 卸载旧版本...
-"%ADB_CMD%" -s %EMULATOR% uninstall com.example.tvparental >nul 2>&1
-if %ERRORLEVEL% EQU 0 (
-    echo ✓ 已卸载旧版本
-) else (
-    echo - 未安装旧版本，跳过
-)
+echo [2/4] 保留已有数据和绑定凭证，将覆盖安装...
 echo.
 
 echo [3/4] 安装新版本...
-"%ADB_CMD%" -s %EMULATOR% install %APK_FILE%
+"%ADB_CMD%" -s %EMULATOR% install -r "%APK_FILE%"
 
 if %ERRORLEVEL% NEQ 0 (
     echo.

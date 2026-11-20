@@ -48,7 +48,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start_emulator.ps1
 .\scripts\install_emulator.bat
 ```
 
-该脚本会从 Android SDK 环境变量、项目 `local.properties`、常见 SDK 目录或 PATH 定位 ADB，并会先卸载模拟器上的旧包再安装，因此会清除该模拟器中本应用的本地数据。构建产物不存在时先运行 `scripts/build.bat`。
+该脚本会从 Android SDK 环境变量、项目 `local.properties`、常见 SDK 目录或 PATH 定位 ADB，使用 `adb install -r` 覆盖安装，保留本地设置、PIN 和账号绑定凭证。构建产物不存在时先运行 `scripts/build.bat`。不会因安装失败自动卸载应用；若签名不匹配，需自行决定是否卸载重装。
 
 ## 安装到雷鸟/TCL 电视
 

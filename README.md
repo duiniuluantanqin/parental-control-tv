@@ -37,7 +37,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start_emulator.ps1
 .\scripts\install_emulator.bat
 ```
 
-脚本会先卸载旧包，清除模拟器中的本地应用数据。API 28 TV 模拟器没有悬浮窗设置页，可通过 ADB 放行；将 `emulator-5554` 替换为 `adb devices` 中的实际序列号：
+脚本使用覆盖安装，保留模拟器中的本地设置、PIN 和绑定凭证。API 28 TV 模拟器没有悬浮窗设置页，可通过 ADB 放行；将 `emulator-5554` 替换为 `adb devices` 中的实际序列号：
 
 ```powershell
 adb devices
@@ -83,7 +83,7 @@ adb -s 10.0.0.8:5555 shell appops set com.example.tvparental APP_AUTO_START allo
 adb -s 10.0.0.8:5555 shell appops set com.example.tvparental APP_ASSOC_START allow
 ```
 
-暂停播放器还需通知使用权，可从应用首页的 `Allow media pause` 开启，或在该 TCL 电视执行：
+暂停播放器还需通知使用权，在该 TCL 电视通过 ADB 授权：
 
 ```powershell
 adb -s 10.0.0.8:5555 shell cmd notification allow_listener com.example.tvparental/com.example.tvparental.MediaControlListenerService 0
@@ -109,7 +109,7 @@ python backend/server.py
 python backend/server.py --set-admin
 ```
 
-Android 当前固定连接 <https://tvparental.mediainsight360.com>，启动本机后台不会自动切换电视的服务地址。首次需在电视打开 `Bind account`，在后台“设备与重置”输入绑定码；详见 [注册与绑定说明](docs/USER_GUIDE.md#注册与绑定电视)。ECS 安装、HTTPS 配置和自动发布见 [后台部署指南](docs/DEPLOY_ECS.md)。
+Android 当前固定连接 <https://tvparental.mediainsight360.com>，启动本机后台不会自动切换电视的服务地址。首次需在电视打开“绑定账号”，绑定码自动获取，在后台“设备与重置”输入绑定码；详见 [注册与绑定说明](docs/USER_GUIDE.md#注册与绑定电视)。ECS 安装、HTTPS 配置和自动发布见 [后台部署指南](docs/DEPLOY_ECS.md)。
 
 后台测试：
 

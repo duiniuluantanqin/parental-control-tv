@@ -25,7 +25,7 @@ object RemoteSync {
         var connection: HttpURLConnection? = null
         return try {
             val binding = DeviceBinding.refresh(context, requestCode = DeviceBinding.bindingId(context).isEmpty())
-            if (!binding.getBoolean("bound")) return SyncResult(false, "Not linked. Open Bind account to link this TV.")
+            if (!binding.getBoolean("bound")) return SyncResult(false, "尚未绑定账号，请打开「绑定账号」完成绑定。")
             val acknowledged = mutableSetOf<String>()
             val acknowledgedAttempts = mutableSetOf<String>()
             val acknowledgedChallenges = mutableListOf<PendingChallengeRecord>()

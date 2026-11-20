@@ -20,7 +20,7 @@ adb shell appops get com.example.tvparental APP_ASSOC_START
 adb shell settings get secure enabled_notification_listeners
 ```
 
-两个 app-op 应为 `allow`，通知列表应包含 `com.example.tvparental/com.example.tvparental.MediaControlListenerService`。已有授权会在覆盖升级时保留；如缺失，可从应用的 `Allow media pause` 入口授权。这项授权既用于暂停播放，也用于系统绑定后的后台恢复。
+两个 app-op 应为 `allow`，通知列表应包含 `com.example.tvparental/com.example.tvparental.MediaControlListenerService`。已有授权会在覆盖升级时保留；如缺失，通过 `adb shell cmd notification allow_listener com.example.tvparental/com.example.tvparental.MediaControlListenerService 0` 授权。这项授权既用于暂停播放，也用于系统绑定后的后台恢复。
 
 ## 验证
 

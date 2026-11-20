@@ -12,6 +12,15 @@ import java.security.SecureRandom
 import java.util.concurrent.FutureTask
 
 object DeviceBinding {
+    internal const val CREDENTIALS_CHANGED_MESSAGE = "设备凭证已更换，请先在原账号后台解绑此电视。"
+
+    internal fun responseErrorMessage(status: Int, errorCode: String): String = when {
+        status == 409 && errorCode == "device_already_bound" -> CREDENTIALS_CHANGED_MESSAGE
+        status == 401 -> "设备验证失败；若刚重装，请确认后台已更新后重试。"
+        status == 404 -> "绑定服务不可用，请先更新后台。"
+        else -> "无法检查账号绑定（HTTP $status），请稍后重试。"
+    }
+
     private fun prefs(context: Context) = context.getSharedPreferences("device_binding", Context.MODE_PRIVATE)
 
     fun bindingId(context: Context): String = prefs(context).getString("binding_id", "").orEmpty()
@@ -23,7 +32,7 @@ object DeviceBinding {
         preferences.getString("token", null)?.let { return it }
         val bytes = ByteArray(32).also { SecureRandom().nextBytes(it) }
         val token = Base64.encodeToString(bytes, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
-        check(preferences.edit().putString("token", token).commit()) { "Could not save device credentials." }
+        check(preferences.edit().putString("token", token).commit()) { "无法保存设备凭证。" }
         return token
     }
 
@@ -53,8 +62,11 @@ object DeviceBinding {
             val code = connection.responseCode
             if (code == 401 && !requestCode) return refresh(context, requestCode = true)
             check(code in 200..299) {
-                if (code == 401) "Device credentials changed. Unlink this TV in the original account, then select Get binding code."
-                else "Could not check account binding (HTTP $code)."
+                val errorCode = runCatching {
+                    JSONObject(connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty())
+                        .optString("errorCode")
+                }.getOrDefault("")
+                responseErrorMessage(code, errorCode)
             }
             val state = JSONObject(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
             val nextId = if (state.getBoolean("bound")) state.getString("bindingId") else ""
@@ -67,13 +79,13 @@ object DeviceBinding {
                         context.stopService(Intent(context, QuestionOverlayService::class.java))
                         ControlState.clearAccountData(context)
                         check(context.getSharedPreferences("question_state", Context.MODE_PRIVATE).edit().clear().commit()) {
-                            "Could not clear the previous account's questions."
+                            "无法清除原账号的题目。"
                         }
                     }
                     check(prefs(context).edit().putString("binding_id", nextId)
                         .putString("username", state.optString("username"))
                         .putBoolean("ever_bound", nextId.isNotEmpty() || prefs(context).getBoolean("ever_bound", false))
-                        .commit()) { "Could not save account binding." }
+                        .commit()) { "无法保存账号绑定。" }
                     QuestionAlarmReceiver.scheduleForCurrentState(context)
                     context.sendBroadcast(Intent(RemoteSync.ACTION_SYNC_COMPLETED).setPackage(context.packageName))
                 }

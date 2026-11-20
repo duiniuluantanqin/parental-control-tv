@@ -767,6 +767,14 @@ class AdminAuth:
                 connection.execute("INSERT INTO device_bindings(device_id, token_hash, name) VALUES (?, ?, ?)",
                                    (device_id, token_hash, name[:100] or device_id))
                 row = connection.execute("SELECT * FROM device_bindings WHERE device_id = ?", (device_id,)).fetchone()
+            elif row is not None and enroll and not hmac.compare_digest(row["token_hash"], token_hash):
+                if row["account_id"] is not None:
+                    raise PermissionError("设备已绑定账号，请先由原账号解绑")
+                connection.execute(
+                    "UPDATE device_bindings SET token_hash = ?, name = ?, code = NULL, expires_at = 0, last_code_at = 0 WHERE device_id = ?",
+                    (token_hash, name[:100] or device_id, device_id),
+                )
+                row = connection.execute("SELECT * FROM device_bindings WHERE device_id = ?", (device_id,)).fetchone()
             if row is None or not hmac.compare_digest(row["token_hash"], token_hash):
                 return None
             return dict(row)
@@ -1464,7 +1472,11 @@ class RequestHandler(BaseHTTPRequestHandler):
     def require_device(self, *, bound: bool = True, enroll: bool = False, name: str = "") -> dict[str, object] | None:
         authorization = self.headers.get("Authorization", "")
         token = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
-        device = AUTH.device(self.headers.get("X-Device-Id", ""), token, enroll=enroll, name=name)
+        try:
+            device = AUTH.device(self.headers.get("X-Device-Id", ""), token, enroll=enroll, name=name)
+        except PermissionError as error:
+            self.send_json(409, {"error": str(error), "errorCode": "device_already_bound"})
+            return None
         if device is None:
             self.send_json(401, {"error": "设备凭证无效，请在电视上重新绑定"})
             return None
