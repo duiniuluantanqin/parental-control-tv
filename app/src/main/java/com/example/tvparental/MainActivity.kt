@@ -59,6 +59,16 @@ class MainActivity : Activity() {
     private var autoOpenedOverlaySettings = false
     private var startupQuestionPending = false
     private var remoteButtonStatus: TextView? = null
+    private var bindingDialog: Dialog? = null
+    private var bindingText: TextView? = null
+    private var bindingRequestInProgress = false
+    private val bindingPoll = object : Runnable {
+        override fun run() {
+            if (bindingDialog?.isShowing != true || isFinishing || isDestroyed) return
+            loadBindingCode()
+            statusHandler.postDelayed(this, 3_000L)
+        }
+    }
 
     companion object {
         private const val REQUEST_CODE_ENABLE_ADMIN = 1001
@@ -87,6 +97,7 @@ class MainActivity : Activity() {
         registerSyncReceiver()
         statusHandler.removeCallbacks(statusRefresh)
         statusRefresh.run()
+        if (bindingDialog?.isShowing == true) bindingPoll.run()
         if (!canDrawOverlays() && !autoOpenedOverlaySettings) {
             autoOpenedOverlaySettings = true
             openOverlaySettings()
@@ -99,6 +110,7 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         statusHandler.removeCallbacks(statusRefresh)
+        statusHandler.removeCallbacks(bindingPoll)
         unregisterSyncReceiver()
         super.onPause()
     }
@@ -197,7 +209,7 @@ class MainActivity : Activity() {
 
         val actionGrid = GridLayout(this).apply {
             columnCount = 2
-            rowCount = 3
+            rowCount = 4
             useDefaultMargins = false
             setPadding(0, dp(22), 0, 0)
         }
@@ -208,6 +220,7 @@ class MainActivity : Activity() {
             menuButton("Sync now", android.R.drawable.ic_popup_sync) { syncRemoteSettings() },
             menuButton("Media pause access", android.R.drawable.ic_media_pause) { openMediaAccessSettings() },
             menuButton("Advanced settings", android.R.drawable.ic_menu_preferences) { openAdvancedSettings() },
+            menuButton("Bind account", android.R.drawable.ic_menu_myplaces) { openAccountBinding() },
         )
         permissionButton = actions[0]
         testButton = actions[2]
@@ -312,6 +325,7 @@ class MainActivity : Activity() {
             "Uninstall protection · Off"
         }
         adminStatus.setTextColor(if (ControlState.isDeviceAdminActive(this)) Color.rgb(138, 205, 174) else Color.rgb(160, 174, 174))
+        adminStatus.append("\nAccount · ${DeviceBinding.username(this).ifBlank { "Not linked" }}")
         testButton.isEnabled = canDrawOverlays()
         testButton.alpha = if (canDrawOverlays()) 1f else 0.45f
     }
@@ -329,6 +343,69 @@ class MainActivity : Activity() {
             }
             refreshStatus()
         }
+    }
+
+    private fun openAccountBinding() {
+        if (bindingDialog?.isShowing == true) return
+        val dialog = Dialog(this)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(36), dp(28), dp(36), dp(28))
+            setBackgroundColor(Color.rgb(22, 34, 36))
+        }
+        box.addView(statusText(26f).apply { text = "Link this TV to your account" }, centeredParams())
+        box.addView(statusText(17f).apply {
+            text = "Sign in at tvparental.mediainsight360.com\nOpen Devices and enter the code below."
+        }, centeredParams())
+        bindingText = statusText(28f).apply { text = "Connecting…" }
+        box.addView(bindingText, centeredParams())
+        val refresh = menuButton("Get binding code", android.R.drawable.ic_popup_sync) { loadBindingCode(requestCode = true) }
+        box.addView(refresh, centeredParams())
+        box.addView(menuButton("Done", android.R.drawable.ic_menu_close_clear_cancel) { dialog.dismiss() }, centeredParams())
+        dialog.setContentView(box)
+        dialog.setOnDismissListener {
+            statusHandler.removeCallbacks(bindingPoll)
+            bindingDialog = null
+            bindingText = null
+        }
+        bindingDialog = dialog
+        dialog.show()
+        dialog.window?.setLayout(dp(760), ViewGroup.LayoutParams.WRAP_CONTENT)
+        refresh.requestFocus()
+        loadBindingCode(requestCode = true)
+        statusHandler.postDelayed(bindingPoll, 3_000L)
+    }
+
+    private fun loadBindingCode(requestCode: Boolean = false) {
+        if (bindingRequestInProgress) return
+        bindingRequestInProgress = true
+        val appContext = applicationContext
+        Thread {
+            val result = runCatching { RemoteSync.refreshBinding(appContext, requestCode) }
+            statusHandler.post {
+                bindingRequestInProgress = false
+                if (isFinishing || isDestroyed || bindingDialog?.isShowing != true) return@post
+                result.onSuccess { state ->
+                    if (state.getBoolean("bound")) {
+                        val newlyLinked = bindingText?.text?.startsWith("Linked to ") != true
+                        bindingText?.text = "Linked to ${state.getString("username")}\nUnlink this TV from the web admin to change accounts."
+                        if (newlyLinked) syncRemoteSettings()
+                    } else {
+                        val code = state.optString("code").takeUnless { state.isNull("code") || it.isBlank() }
+                        val seconds = ((state.optLong("expiresAt") - System.currentTimeMillis()) / 1_000).coerceAtLeast(0)
+                        bindingText?.text = if (code != null) "$code\nExpires in ${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}"
+                        else "Code expired. Select Get binding code."
+                    }
+                    refreshStatus()
+                }.onFailure { bindingText?.text = it.message ?: "Could not connect. Select Get binding code to retry." }
+            }
+        }.start()
+    }
+
+    override fun onDestroy() {
+        bindingDialog?.dismiss()
+        statusHandler.removeCallbacks(bindingPoll)
+        super.onDestroy()
     }
 
     private fun refreshUsageDisplay() {

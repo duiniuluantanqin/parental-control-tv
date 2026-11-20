@@ -443,6 +443,23 @@ object ControlState {
 
     fun remoteQuestions(context: Context): String? = prefs(context).getString(REMOTE_QUESTIONS_KEY, null)
 
+    @Synchronized
+    fun clearAccountData(context: Context) = clearAccountData(prefs(context))
+
+    internal fun clearAccountData(preferences: SharedPreferences) {
+        val accountKeys = setOf(
+            DAY_KEY, USED_MILLIS_KEY, TEMP_EXTENSION_KEY, USAGE_RESET_ID_KEY, USAGE_RESET_AT_KEY,
+            "usage_history_days", LOCKOUT_UNTIL_KEY, LOCKOUT_STARTED_AT_KEY, LOCKOUT_POEM_KEY,
+            QUESTION_STARTED_AT_KEY, QUESTION_TIMEOUT_AT_KEY, QUESTION_OVERLAY_ACTIVE_KEY,
+            REMOTE_QUESTIONS_KEY, WEEKLY_LIMITS_KEY, USAGE_WINDOWS_KEY, DISABLED_WINDOWS_KEY,
+            QUESTION_INTERVAL_KEY, WRONG_LOCK_KEY, SYNC_INTERVAL_KEY, APPLIED_PASSWORD_RESET_ID_KEY,
+        )
+        val editor = preferences.edit()
+        preferences.all.keys.filter { key -> accountKeys.any { key == it || key.startsWith("$it.") } }
+            .forEach { editor.remove(it) }
+        check(editor.commit()) { "Could not clear the previous account's data." }
+    }
+
     fun todayUsageLabel(context: Context): String {
         val totalSeconds = usedMillis(context) / 1_000L
         val hours = totalSeconds / 3_600L

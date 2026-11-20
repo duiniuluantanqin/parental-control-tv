@@ -1,0 +1,36 @@
+package com.example.tvparental
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Test
+
+class AccountDataTest {
+    @Test
+    fun switchingAccountsClearsPersistedUsageAndRemoteDataButKeepsDevicePinAndSwitches() {
+        val store = TestPreferenceStore(mapOf(
+            "usage_day" to "2026-11-19",
+            "used_millis" to 180_000L,
+            "used_millis.2026-11-18" to 600_000L,
+            "usage_history_days" to "2026-11-18",
+            "temp_extension_millis" to 900_000L,
+            "usage_reset_id.2026-11-18" to "previous-command",
+            "remote_questions" to "previous account questions",
+            "weekly_daily_limit_minutes" to "previous account rules",
+            "lockout_poem" to "previous account poem",
+            "lockout_until" to 1000L,
+            "question_timeout_at" to 1000L,
+            "applied_password_reset_id" to "old-pin-reset",
+            "unlock_password_hash" to "device-pin-hash",
+            "unlock_password_salt" to "device-pin-salt",
+            "block_recent_watch" to false,
+            "show_question_on_startup" to true,
+        ))
+
+        ControlState.clearAccountData(store.open())
+
+        val persisted = store.restart().open()
+        assertEquals(setOf("unlock_password_hash", "unlock_password_salt", "block_recent_watch", "show_question_on_startup"), persisted.all.keys)
+        assertEquals("device-pin-hash", persisted.getString("unlock_password_hash", null))
+        assertFalse(persisted.getBoolean("block_recent_watch", true))
+    }
+}

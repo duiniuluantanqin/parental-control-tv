@@ -12,3 +12,5 @@ backend/.env
 backend/__pycache__/
 *.py[cod]
 .kotlin/
+
+backend/*.sqlite3.accounts/

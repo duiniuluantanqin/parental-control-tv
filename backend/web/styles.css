@@ -422,3 +422,12 @@ dialog::backdrop { background: #14253d66; backdrop-filter: blur(4px); }
   dialog[open] { animation: appear .16s ease-out; }
   @keyframes appear { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 }
+
+.auth-switch { margin-top: 20px; color: var(--accent); }
+#registerConfirmation { display: grid; gap: 8px; }
+#registerConfirmation input { width: 100%; }
+.binding-panel { margin-bottom: 24px; padding: 24px; }
+.binding-form { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 18px; }
+.binding-form input { width: 150px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; letter-spacing: 3px; }
+.bound-devices { display: grid; gap: 12px; margin-top: 18px; }
+.bound-device { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding-top: 12px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }

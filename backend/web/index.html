@@ -25,15 +25,20 @@
     <section class="login-card" aria-labelledby="loginTitle">
       <span class="login-eyebrow">家长管理</span>
       <h1 id="loginTitle">安排好每天的电视时间</h1>
-      <p class="muted">登录后管理使用规则与答题题库。</p>
+      <p id="authDescription" class="muted">登录后管理自己的电视、使用规则与答题题库。</p>
       <form id="loginForm">
         <label for="usernameInput">用户名</label>
         <input id="usernameInput" name="username" autocomplete="username" maxlength="64" required autofocus>
         <label for="passwordInput">密码</label>
         <input id="passwordInput" name="password" type="password" autocomplete="current-password" maxlength="1024" required>
+        <div id="registerConfirmation" hidden>
+          <label for="registerConfirmInput">确认密码</label>
+          <input id="registerConfirmInput" type="password" autocomplete="new-password" maxlength="1024">
+        </div>
         <p id="loginNotice" class="form-notice error" role="alert"></p>
         <button id="loginButton" class="button primary" type="submit">登录</button>
       </form>
+      <p class="auth-switch"><a id="authSwitch" href="/register">没有账号？注册</a></p>
     </section>
   </main>
 
@@ -90,6 +95,17 @@
 
     <section id="devicesPage" aria-labelledby="devicesTitle" hidden>
       <div class="section-heading"><div><span class="page-eyebrow">设备维护</span><h1 id="devicesTitle">设备与重置</h1><p>按需恢复电视 PIN 或当天使用额度。重置指令将在电视下次同步时应用。</p></div></div>
+      <section class="settings-panel binding-panel" aria-labelledby="bindingTitle">
+        <h2 id="bindingTitle">绑定电视</h2>
+        <p class="muted">在电视打开 Bind account，将屏幕上的六位绑定码输入这里。绑定码五分钟内有效。</p>
+        <form id="bindDeviceForm" class="binding-form">
+          <label for="bindingCode">绑定码</label>
+          <input id="bindingCode" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="off" placeholder="六位数字" required>
+          <button id="bindDeviceButton" class="button primary" type="submit">查找并绑定</button>
+        </form>
+        <p id="bindingNotice" class="form-notice" role="status"></p>
+        <div id="boundDevices" class="bound-devices"></div>
+      </section>
       <div class="maintenance-grid">
         <section class="settings-panel maintenance-card" aria-labelledby="usageResetTitle">
           <div class="card-heading"><span class="card-kicker">使用额度</span><h2 id="usageResetTitle">重置今日使用时长</h2><p>清零所选设备今天的计时和临时加时，恢复当天配置额度。允许时段和答题规则仍然生效。</p></div>
@@ -98,7 +114,7 @@
         </section>
         <section class="settings-panel maintenance-card" aria-labelledby="passwordResetTitle">
           <div class="card-heading"><span class="card-kicker">家长解锁</span><h2 id="passwordResetTitle">重置电视 PIN</h2><p>忘记解锁密码时，将电视 PIN 恢复为默认的六步方向键密码。</p></div>
-          <div class="pin-reference"><span>默认 PIN</span><strong>上 · 下 · 左 · 右 · 上 · 上</strong><small>此指令适用于所有同步设备</small></div>
+          <div class="pin-reference"><span>默认 PIN</span><strong>上 · 下 · 左 · 右 · 上 · 上</strong><small>此指令仅适用于当前账号的绑定设备</small></div>
           <div class="card-footer"><span>原有观看规则保持生效</span><button id="resetDevicePin" class="button caution" type="button">重置电视 PIN</button></div>
         </section>
       </div>
@@ -191,7 +207,7 @@
 
   <dialog id="changePasswordDialog" aria-labelledby="changePasswordTitle">
     <form id="changePasswordForm" class="password-form">
-      <div class="form-heading"><div><h2 id="changePasswordTitle">修改管理员密码</h2></div><button id="closeChangePassword" class="icon-button" type="button" aria-label="关闭修改密码对话框">×</button></div>
+      <div class="form-heading"><div><h2 id="changePasswordTitle">修改账号密码</h2></div><button id="closeChangePassword" class="icon-button" type="button" aria-label="关闭修改密码对话框">×</button></div>
       <label for="currentPasswordInput">当前密码<input id="currentPasswordInput" type="password" autocomplete="current-password" maxlength="1024" required></label>
       <label for="newPasswordInput">新密码<input id="newPasswordInput" type="password" autocomplete="new-password" minlength="10" maxlength="1024" required><small>至少 10 个字符</small></label>
       <label for="confirmPasswordInput">确认新密码<input id="confirmPasswordInput" type="password" autocomplete="new-password" minlength="10" maxlength="1024" required></label>

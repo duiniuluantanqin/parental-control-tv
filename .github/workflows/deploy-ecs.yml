@@ -88,13 +88,13 @@ jobs:
             sudo -n /usr/bin/systemctl restart tvparental
             curl -fsS --connect-timeout 3 --max-time 10 \
               --retry 10 --retry-delay 1 --retry-connrefused \
-              http://127.0.0.1:8080/api/v1/device/state > /dev/null
+              http://127.0.0.1:8080/api/v1/health > /dev/null
             systemctl is-active --quiet tvparental
           EOF
 
-      - name: Verify device API over HTTPS
+      - name: Verify backend health over HTTPS
         run: |
           curl -fsS --connect-timeout 10 --max-time 20 \
             --retry 5 --retry-delay 5 --retry-connrefused \
-            "https://$TV_PARENTAL_DOMAIN/api/v1/device/state" \
-            | python3 -c "import json,sys; s=json.load(sys.stdin); assert s['questions'] and s['settings']; print('questions:', len(s['questions']), '| settings:', s['settings'])"
+            "https://$TV_PARENTAL_DOMAIN/api/v1/health" \
+            | python3 -c "import json,sys; s=json.load(sys.stdin); assert s['ok']; print('version:', s['version'])"

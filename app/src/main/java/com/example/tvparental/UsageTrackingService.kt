@@ -31,6 +31,7 @@ import java.io.PrintWriter
 class UsageTrackingService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private val usageSamples = UsageSampleTracker()
+    private var usageBindingId = ""
     private var lastRemoteSync = 0L
     private val usageReports = UsageReportSchedule()
     private var remoteSyncInProgress = false
@@ -98,6 +99,7 @@ class UsageTrackingService : Service() {
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification())
         isRunning = true
+        usageBindingId = DeviceBinding.bindingId(this)
         usageSamples.start(
             SystemClock.elapsedRealtime(),
             powerManager().isInteractive,
@@ -165,6 +167,12 @@ class UsageTrackingService : Service() {
 
     private fun accountElapsedTime(interactive: Boolean = wasInteractive, paused: Boolean = overlayPaused) {
         val now = SystemClock.elapsedRealtime()
+        val bindingId = DeviceBinding.bindingId(this)
+        if (bindingId != usageBindingId) {
+            usageBindingId = bindingId
+            usageSamples.start(now, interactive, paused)
+            return
+        }
         val elapsed = usageSamples.sample(now, interactive, paused)
         if (elapsed > 0L) ControlState.addScreenTime(this, elapsed)
     }

@@ -109,7 +109,7 @@ python backend/server.py
 python backend/server.py --set-admin
 ```
 
-Android 当前固定连接 <https://tvparental.mediainsight360.com>，启动本机后台不会自动切换电视的服务地址。ECS 安装、HTTPS 配置和自动发布见 [后台部署指南](docs/DEPLOY_ECS.md)。
+Android 当前固定连接 <https://tvparental.mediainsight360.com>，启动本机后台不会自动切换电视的服务地址。首次需在电视打开 `Bind account`，在后台“设备与重置”输入绑定码；详见 [注册与绑定说明](docs/USER_GUIDE.md#注册与绑定电视)。ECS 安装、HTTPS 配置和自动发布见 [后台部署指南](docs/DEPLOY_ECS.md)。
 
 后台测试：
 

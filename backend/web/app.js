@@ -16,6 +16,7 @@ const englishWordField = document.querySelector("#englishWordField");
 const loginView = document.querySelector("#loginView");
 const adminView = document.querySelector("#adminView");
 const page = ["settings", "questions", "poems", "records", "devices"].includes(location.pathname.slice(1)) ? location.pathname.slice(1) : "settings";
+const isRegisterPage = location.pathname === "/register";
 const isLoginPage = !["/settings", "/questions", "/poems", "/records", "/devices"].includes(location.pathname);
 const weekdays = [
   ["1", "周一"], ["2", "周二"], ["3", "周三"], ["4", "周四"],
@@ -325,13 +326,15 @@ async function loadState() {
   document.querySelector("#wrongLock").value = state.settings.wrongLockMinutes;
   document.querySelector("#syncInterval").value = state.settings.syncIntervalMinutes;
   if (page === "devices" && !isLoginPage) {
-    const { devices } = await api("/api/v1/admin/devices");
+    const { devices: allDevices } = await api("/api/v1/admin/devices");
+    const devices = allDevices.filter(device => device.bound);
+    renderBoundDevices(devices);
     const select = document.querySelector("#usageResetDevice");
     const previous = select.value;
     select.replaceChildren();
     for (const device of devices) select.add(new Option(`${device.name} (${device.deviceId})`, device.deviceId));
     if (devices.some(device => device.deviceId === previous)) select.value = previous;
-    if (!devices.length) select.add(new Option("暂无设备，请先让电视同步", ""));
+    if (!devices.length) select.add(new Option("暂无设备，请先输入电视绑定码", ""));
     document.querySelector("#resetDeviceUsage").disabled = !devices.length;
   }
   questions = state.questions;
@@ -612,6 +615,57 @@ function shiftRecordsDate(days) {
   loadRecords().catch(handleError);
 }
 
+function renderBoundDevices(devices) {
+  const container = document.querySelector("#boundDevices");
+  container.replaceChildren();
+  for (const device of devices) {
+    const row = document.createElement("div");
+    row.className = "bound-device";
+    const name = document.createElement("span");
+    name.textContent = `${device.name} · ${device.deviceId}`;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "button caution";
+    button.textContent = "解绑";
+    button.addEventListener("click", async () => {
+      if (!window.confirm(`确认解绑 ${device.name}？历史记录保留，电视可重新绑定其他账号。`)) return;
+      button.disabled = true;
+      try {
+        await api("/api/v1/admin/devices/unbind", { method: "POST", body: JSON.stringify({ deviceId: device.deviceId }) });
+        await loadState();
+        setNotice("设备已解绑，电视下次联网检查后生效");
+      } catch (error) {
+        handleError(error);
+        button.disabled = false;
+      }
+    });
+    row.append(name, button);
+    container.append(row);
+  }
+}
+
+async function bindDevice(event) {
+  event.preventDefault();
+  const button = document.querySelector("#bindDeviceButton");
+  const notice = document.querySelector("#bindingNotice");
+  button.disabled = true;
+  notice.textContent = "";
+  try {
+    const code = document.querySelector("#bindingCode").value.trim();
+    const device = await api("/api/v1/admin/devices/preview", { method: "POST", body: JSON.stringify({ code }) });
+    if (!window.confirm(`绑定电视 ${device.name}（${device.deviceId}）到当前账号？`)) return;
+    await api("/api/v1/admin/devices/bind", { method: "POST", body: JSON.stringify({ code, deviceId: device.deviceId }) });
+    document.querySelector("#bindDeviceForm").reset();
+    await loadState();
+    notice.classList.remove("error");
+    notice.textContent = "绑定成功，电视将自动同步当前账号的题库和规则。";
+  } catch (error) {
+    handleError(error, notice);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function login(event) {
   event.preventDefault();
   const button = document.querySelector("#loginButton");
@@ -619,11 +673,15 @@ async function login(event) {
   button.disabled = true;
   loginNotice.textContent = "";
   try {
-    await api("/api/v1/admin/login", {
+    await api(isRegisterPage ? "/api/v1/admin/register" : "/api/v1/admin/login", {
       method: "POST",
-      body: JSON.stringify({ username: document.querySelector("#usernameInput").value.trim(), password: document.querySelector("#passwordInput").value }),
+      body: JSON.stringify({ username: document.querySelector("#usernameInput").value.trim(), password: document.querySelector("#passwordInput").value, confirmPassword: document.querySelector("#registerConfirmInput").value }),
     });
     document.querySelector("#passwordInput").value = "";
+    if (isRegisterPage) {
+      location.replace("/login?registered=1");
+      return;
+    }
     const next = new URLSearchParams(location.search).get("next");
     location.replace(["/settings", "/questions", "/poems", "/records", "/devices"].includes(next) ? next : "/settings");
   } catch (error) {
@@ -956,6 +1014,21 @@ async function initialize() {
   }
 }
 
+if (isRegisterPage) {
+  document.querySelector("#loginTitle").textContent = "创建家长账号";
+  document.querySelector("#authDescription").textContent = "每个账号独立管理自己的设备、题库与使用记录。";
+  document.querySelector("#registerConfirmation").hidden = false;
+  document.querySelector("#registerConfirmInput").required = true;
+  document.querySelector("#passwordInput").minLength = 10;
+  document.querySelector("#passwordInput").autocomplete = "new-password";
+  document.querySelector("#loginButton").textContent = "注册";
+  document.querySelector("#authSwitch").href = "/login";
+  document.querySelector("#authSwitch").textContent = "已有账号？登录";
+} else if (new URLSearchParams(location.search).get("registered") === "1") {
+  document.querySelector("#loginNotice").classList.remove("error");
+  document.querySelector("#loginNotice").textContent = "注册成功，请登录。";
+}
+document.querySelector("#bindDeviceForm").addEventListener("submit", bindDevice);
 document.querySelector("#loginForm").addEventListener("submit", login);
 document.querySelector("#changePasswordButton").addEventListener("click", () => {
   document.querySelector("#changePasswordNotice").textContent = "";

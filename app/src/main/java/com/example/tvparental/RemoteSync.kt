@@ -24,12 +24,15 @@ object RemoteSync {
     fun sync(context: Context): SyncResult {
         var connection: HttpURLConnection? = null
         return try {
+            val binding = DeviceBinding.refresh(context, requestCode = DeviceBinding.bindingId(context).isEmpty())
+            if (!binding.getBoolean("bound")) return SyncResult(false, "Not linked. Open Bind account to link this TV.")
             val acknowledged = mutableSetOf<String>()
             val acknowledgedAttempts = mutableSetOf<String>()
             val acknowledgedChallenges = mutableListOf<PendingChallengeRecord>()
             for (challenge in QuestionBank.pendingChallengeRecords(context)) {
                 val report = URL("${ControlState.BACKEND_URL}/api/v1/device/challenges").openConnection() as HttpURLConnection
                 try {
+                    DeviceBinding.authorize(context, report)
                     report.requestMethod = "POST"
                     report.connectTimeout = 5_000
                     report.readTimeout = 5_000
@@ -66,6 +69,7 @@ object RemoteSync {
             for (attempt in QuestionBank.pendingAnswerAttempts(context)) {
                 val report = URL("${ControlState.BACKEND_URL}/api/v1/device/answers").openConnection() as HttpURLConnection
                 try {
+                    DeviceBinding.authorize(context, report)
                     report.requestMethod = "POST"
                     report.connectTimeout = 5_000
                     report.readTimeout = 5_000
@@ -98,12 +102,14 @@ object RemoteSync {
             for (question in QuestionBank.pendingCorrectAnswers(context).filterNot { it.id in acknowledged }) {
                 val report = URL("${ControlState.BACKEND_URL}/api/v1/device/answers").openConnection() as HttpURLConnection
                 try {
+                    DeviceBinding.authorize(context, report)
                     report.requestMethod = "POST"
                     report.connectTimeout = 5_000
                     report.readTimeout = 5_000
                     report.doOutput = true
                     report.setRequestProperty("Content-Type", "application/json; charset=utf-8")
                     val body = JSONObject().put("questionId", question.id).put("answer", question.answer)
+                        .put("deviceId", deviceId(context))
                         .toString().toByteArray(Charsets.UTF_8)
                     report.setFixedLengthStreamingMode(body.size)
                     report.outputStream.use { it.write(body) }
@@ -118,6 +124,7 @@ object RemoteSync {
             val usageDate = ControlState.usageReportSnapshot(context).getString("date")
             val deviceQuery = URLEncoder.encode(deviceId(context), "UTF-8")
             connection = URL("${ControlState.BACKEND_URL}/api/v1/device/state?deviceId=$deviceQuery&date=$usageDate").openConnection() as HttpURLConnection
+            DeviceBinding.authorize(context, connection)
             connection.requestMethod = "GET"
             connection.connectTimeout = 5_000
             connection.readTimeout = 5_000
@@ -186,6 +193,9 @@ object RemoteSync {
         }
     }
 
+    @Synchronized
+    fun refreshBinding(context: Context, requestCode: Boolean = false): JSONObject = DeviceBinding.refresh(context, requestCode)
+
     fun syncAsync(context: Context, onComplete: (SyncResult) -> Unit) {
         val applicationContext = context.applicationContext
         Thread {
@@ -199,10 +209,13 @@ object RemoteSync {
             ?.takeIf { it.isNotBlank() }
             ?: error("Could not read the device ID.")
 
+    @Synchronized
     fun reportUsage(context: Context): Boolean {
         var connection: HttpURLConnection? = null
         return try {
+            if (DeviceBinding.bindingId(context).isEmpty()) return true
             connection = URL("${ControlState.BACKEND_URL}/api/v1/device/usage").openConnection() as HttpURLConnection
+            DeviceBinding.authorize(context, connection)
             connection.requestMethod = "POST"
             connection.connectTimeout = 5_000
             connection.readTimeout = 5_000
@@ -231,7 +244,7 @@ object RemoteSync {
         return hour * 60 + minute
     }
 
-    private fun deviceName(): String {
+    fun deviceName(): String {
         val avdName = runCatching {
             Runtime.getRuntime()
                 .exec(arrayOf("/system/bin/getprop", "ro.kernel.qemu.avd_name"))

@@ -237,6 +237,7 @@ class StateStore:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.lock = threading.RLock()
+        self.account_stores: dict[int, StateStore] = {}
         self.refill_thread: threading.Thread | None = None
         self.refill_running = False
         self.refill_error: str | None = None
@@ -246,6 +247,15 @@ class StateStore:
         self.poem_enrichment_error: str | None = None
         self.next_poem_attempt = 0.0
         self.poem_failures: dict[str, int] = {}
+
+    def for_account(self, account_id: int) -> StateStore:
+        if account_id == 1:
+            return self
+        with self.lock:
+            if account_id not in self.account_stores:
+                path = self.path.parent / (self.path.name + ".accounts") / f"{account_id}.sqlite3"
+                self.account_stores[account_id] = StateStore(path)
+            return self.account_stores[account_id]
 
     def load(self) -> dict[str, object]:
         with self.lock:
@@ -587,73 +597,133 @@ class AdminAuth:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.lock = threading.RLock()
-        self.sessions: dict[str, tuple[float, str]] = {}
-        self.failures: list[float] = []
+        self.sessions: dict[str, tuple[float, int, str]] = {}
+        self.failures: dict[str, list[float]] = {}
+
+    def connect(self) -> sqlite3.Connection:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(self.path, timeout=10)
+        StateStore._create_schema(connection)
+        connection.executescript("""
+            CREATE TABLE IF NOT EXISTS accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                salt TEXT NOT NULL,
+                iterations INTEGER NOT NULL,
+                password_hash TEXT NOT NULL
+            );
+            INSERT OR IGNORE INTO accounts(id, username, salt, iterations, password_hash)
+                SELECT id, username, salt, iterations, password_hash FROM admin_account WHERE id = 1;
+            CREATE TABLE IF NOT EXISTS device_bindings (
+                device_id TEXT PRIMARY KEY,
+                token_hash TEXT NOT NULL,
+                name TEXT NOT NULL,
+                account_id INTEGER,
+                binding_id TEXT NOT NULL DEFAULT '',
+                code TEXT UNIQUE,
+                expires_at INTEGER NOT NULL DEFAULT 0,
+                last_code_at INTEGER NOT NULL DEFAULT 0
+            );
+        """)
+        return connection
 
     @staticmethod
     def _digest(password: str, salt: str, iterations: int) -> str:
         return hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), iterations).hex()
 
-    def set_password(self, username: str, password: str) -> None:
-        if not 1 <= len(username.strip()) <= 64:
+    @staticmethod
+    def validate_credentials(username: str, password: str) -> None:
+        if not isinstance(username, str) or not 1 <= len(username.strip()) <= 64:
             raise ValueError("用户名需为 1–64 个字符")
-        if not 10 <= len(password) <= 1024:
+        if not isinstance(password, str) or not 10 <= len(password) <= 1024:
             raise ValueError("密码需为 10–1024 个字符")
-        salt = secrets.token_bytes(16)
-        password_hash = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PASSWORD_ITERATIONS).hex()
-        with self.lock:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with closing(sqlite3.connect(self.path, timeout=10)) as connection:
-                StateStore._create_schema(connection)
-                connection.execute(
-                    "UPDATE admin_account SET username = ?, salt = ?, iterations = ?, password_hash = ? WHERE id = 1",
-                    (username.strip(), salt.hex(), PASSWORD_ITERATIONS, password_hash),
-                )
-                connection.commit()
-            self.sessions.clear()
+
+    def throttled(self, key: str, limit: int = 5, seconds: int = 60) -> bool:
+        now = time.monotonic()
+        self.failures = {name: [stamp for stamp in stamps if now - stamp < seconds]
+                         for name, stamps in self.failures.items() if any(now - stamp < seconds for stamp in stamps)}
+        return len(self.failures.get(key, [])) >= limit
+
+    def fail(self, key: str) -> None:
+        self.failures.setdefault(key, []).append(time.monotonic())
+
+    def set_password(self, username: str, password: str) -> None:
+        self.validate_credentials(username, password)
+        with self.lock, closing(self.connect()) as connection, connection:
+            row = connection.execute("SELECT id FROM accounts WHERE username = ?", (username.strip(),)).fetchone()
+            account_id = row[0] if row else 1
+            salt = secrets.token_bytes(16).hex()
+            connection.execute(
+                "UPDATE accounts SET username = ?, salt = ?, iterations = ?, password_hash = ? WHERE id = ?",
+                (username.strip(), salt, PASSWORD_ITERATIONS, self._digest(password, salt, PASSWORD_ITERATIONS), account_id),
+            )
+            self.sessions = {key: value for key, value in self.sessions.items() if value[1] != account_id}
             self.failures.clear()
+
+    def register(self, username: str, password: str, confirm: str, client: str) -> tuple[int, str]:
+        self.validate_credentials(username, password)
+        if password != confirm:
+            raise ValueError("两次输入的密码不一致")
+        with self.lock:
+            key = "register:" + client
+            if self.throttled(key):
+                return 429, "注册次数过多，请一分钟后再试"
+            self.fail(key)
+            salt = secrets.token_bytes(16).hex()
+            try:
+                with closing(self.connect()) as connection, connection:
+                    cursor = connection.execute(
+                        "INSERT INTO accounts(username, salt, iterations, password_hash) VALUES (?, ?, ?, ?)",
+                        (username.strip(), salt, PASSWORD_ITERATIONS, self._digest(password, salt, PASSWORD_ITERATIONS)),
+                    )
+                    # Initialize an independent seed bank before making the account visible.
+                    STORE.for_account(cursor.lastrowid).load()
+            except sqlite3.IntegrityError:
+                return 409, "用户名已存在"
+            return 201, "注册成功，请登录"
 
     def login(self, username: str, password: str) -> tuple[int, str]:
         with self.lock:
-            now = time.monotonic()
-            self.failures = [attempt for attempt in self.failures if now - attempt < 60]
-            if len(self.failures) >= 5:
+            key = "login:" + username.casefold()
+            if self.throttled(key):
                 return 429, "尝试次数过多，请一分钟后再试"
             try:
-                with closing(sqlite3.connect(self.path, timeout=10)) as connection:
+                with closing(self.connect()) as connection:
                     credentials = connection.execute(
-                        "SELECT username, salt, iterations, password_hash FROM admin_account WHERE id = 1",
+                        "SELECT id, salt, iterations, password_hash FROM accounts WHERE username = ?", (username,),
                     ).fetchone()
             except sqlite3.Error:
-                return 503, "管理员账号数据库不可用"
+                return 503, "账号数据库不可用"
             if credentials is None:
-                return 503, "管理员账号尚未初始化"
-            saved_username, salt, iterations, saved_hash = credentials
-            digest = self._digest(password, salt, iterations)
-            if username != saved_username or not hmac.compare_digest(digest, saved_hash):
-                self.failures.append(now)
+                self.fail(key)
                 return 401, "用户名或密码错误"
-            self.failures.clear()
+            account_id, salt, iterations, saved_hash = credentials
+            if not hmac.compare_digest(self._digest(password, salt, iterations), saved_hash):
+                self.fail(key)
+                return 401, "用户名或密码错误"
+            self.failures.pop(key, None)
+            now = time.monotonic()
             self.sessions = {key: value for key, value in self.sessions.items() if value[0] > now}
             session = secrets.token_urlsafe(32)
-            self.sessions[session] = (now + SESSION_SECONDS, saved_hash)
+            self.sessions[session] = (now + SESSION_SECONDS, account_id, saved_hash)
             return 200, session
 
-    def is_authenticated(self, session: str) -> bool:
+    def account_id(self, session: str) -> int | None:
         with self.lock:
-            expires, password_hash = self.sessions.get(session, (0, ""))
-            if expires <= time.monotonic():
-                self.sessions.pop(session, None)
-                return False
-            try:
-                with closing(sqlite3.connect(self.path, timeout=10)) as connection:
-                    row = connection.execute("SELECT password_hash FROM admin_account WHERE id = 1").fetchone()
-            except sqlite3.Error:
-                return False
-            if row is None or not hmac.compare_digest(password_hash, row[0]):
-                self.sessions.pop(session, None)
-                return False
-            return True
+            expires, account_id, password_hash = self.sessions.get(session, (0, 0, ""))
+            if expires > time.monotonic():
+                try:
+                    with closing(self.connect()) as connection:
+                        row = connection.execute("SELECT password_hash FROM accounts WHERE id = ?", (account_id,)).fetchone()
+                    if row and hmac.compare_digest(password_hash, row[0]):
+                        return account_id
+                except sqlite3.Error:
+                    pass
+            self.sessions.pop(session, None)
+            return None
+
+    def is_authenticated(self, session: str) -> bool:
+        return self.account_id(session) is not None
 
     def change_password(self, session: str, current_password: str, new_password: str) -> tuple[int, str]:
         if not 10 <= len(new_password) <= 1024:
@@ -661,46 +731,108 @@ class AdminAuth:
         if current_password == new_password:
             return 400, "新密码不能与当前密码相同"
         with self.lock:
-            expires, session_hash = self.sessions.get(session, (0, ""))
-            if expires <= time.monotonic():
-                self.sessions.pop(session, None)
+            account_id = self.account_id(session)
+            if account_id is None:
                 return 401, "登录已过期，请重新登录"
             try:
-                with closing(sqlite3.connect(self.path, timeout=10)) as connection:
-                    row = connection.execute(
-                        "SELECT salt, iterations, password_hash FROM admin_account WHERE id = 1",
+                with closing(self.connect()) as connection, connection:
+                    salt, iterations, saved_hash = connection.execute(
+                        "SELECT salt, iterations, password_hash FROM accounts WHERE id = ?", (account_id,),
                     ).fetchone()
-                    if row is None:
-                        return 503, "管理员账号尚未初始化"
-                    salt, iterations, saved_hash = row
-                    if not hmac.compare_digest(session_hash, saved_hash):
-                        self.sessions.pop(session, None)
-                        return 401, "登录已过期，请重新登录"
                     if not hmac.compare_digest(self._digest(current_password, salt, iterations), saved_hash):
                         return 400, "当前密码不正确"
-                    new_salt = secrets.token_bytes(16)
-                    new_hash = hashlib.pbkdf2_hmac(
-                        "sha256", new_password.encode(), new_salt, PASSWORD_ITERATIONS,
-                    ).hex()
-                    connection.execute(
-                        "UPDATE admin_account SET salt = ?, iterations = ?, password_hash = ? WHERE id = 1",
-                        (new_salt.hex(), PASSWORD_ITERATIONS, new_hash),
-                    )
-                    connection.commit()
+                    salt = secrets.token_bytes(16).hex()
+                    new_hash = self._digest(new_password, salt, PASSWORD_ITERATIONS)
+                    connection.execute("UPDATE accounts SET salt = ?, iterations = ?, password_hash = ? WHERE id = ?",
+                                       (salt, PASSWORD_ITERATIONS, new_hash, account_id))
             except sqlite3.Error:
-                return 503, "管理员账号数据库不可用"
-            self.sessions = {session: (expires, new_hash)}
+                return 503, "账号数据库不可用"
+            expires = self.sessions[session][0]
+            self.sessions = {key: value for key, value in self.sessions.items() if value[1] != account_id}
+            self.sessions[session] = (expires, account_id, new_hash)
             return 200, ""
 
     def logout(self, session: str) -> None:
         with self.lock:
             self.sessions.pop(session, None)
 
+    def device(self, device_id: str, token: str, *, enroll: bool = False, name: str = "") -> dict[str, object] | None:
+        if not isinstance(device_id, str) or not 1 <= len(device_id) <= 80 or not re.fullmatch(r"[A-Za-z0-9_-]{40,128}", token):
+            return None
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        with self.lock, closing(self.connect()) as connection, connection:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute("SELECT * FROM device_bindings WHERE device_id = ?", (device_id,)).fetchone()
+            if row is None and enroll:
+                connection.execute("INSERT INTO device_bindings(device_id, token_hash, name) VALUES (?, ?, ?)",
+                                   (device_id, token_hash, name[:100] or device_id))
+                row = connection.execute("SELECT * FROM device_bindings WHERE device_id = ?", (device_id,)).fetchone()
+            if row is None or not hmac.compare_digest(row["token_hash"], token_hash):
+                return None
+            return dict(row)
+
+    def binding_status(self, device: dict[str, object], *, refresh: bool = False) -> dict[str, object]:
+        with self.lock, closing(self.connect()) as connection, connection:
+            if device["account_id"] is not None:
+                username = connection.execute("SELECT username FROM accounts WHERE id = ?", (device["account_id"],)).fetchone()[0]
+                return {"bound": True, "accountId": str(device["account_id"]), "username": username, "bindingId": device["binding_id"]}
+            now = int(time.time())
+            if refresh and device["expires_at"] <= now:
+                if now - device["last_code_at"] < 10:
+                    raise ValueError("请稍后再刷新绑定码")
+                connection.execute("UPDATE device_bindings SET code = NULL WHERE expires_at <= ?", (now,))
+                while True:
+                    code = f"{secrets.randbelow(1_000_000):06d}"
+                    if connection.execute("SELECT 1 FROM device_bindings WHERE code = ?", (code,)).fetchone() is None:
+                        break
+                connection.execute("UPDATE device_bindings SET code = ?, expires_at = ?, last_code_at = ? WHERE device_id = ?",
+                                   (code, now + 300, now, device["device_id"]))
+                device.update(code=code, expires_at=now + 300)
+            return {"bound": False, "code": device["code"] if device["expires_at"] > now else None,
+                    "expiresAt": device["expires_at"] * 1000}
+
+    def pairing_device(self, code: object, account_id: int) -> dict[str, object] | None:
+        with self.lock:
+            key = f"pair:{account_id}"
+            if self.throttled(key):
+                return None
+            self.fail(key)
+            if not isinstance(code, str) or not re.fullmatch(r"[0-9]{6}", code):
+                return None
+            with closing(self.connect()) as connection:
+                connection.row_factory = sqlite3.Row
+                row = connection.execute("SELECT * FROM device_bindings WHERE code = ? AND expires_at > ? AND account_id IS NULL",
+                                         (code, int(time.time()))).fetchone()
+                return dict(row) if row else None
+
+    def bind(self, code: object, device_id: object, account_id: int) -> dict[str, object] | None:
+        with self.lock:
+            device = self.pairing_device(code, account_id)
+            if device is None or device["device_id"] != device_id:
+                return None
+            with closing(self.connect()) as connection, connection:
+                connection.execute("UPDATE device_bindings SET account_id = ?, binding_id = ?, code = NULL, expires_at = 0 WHERE device_id = ?",
+                                   (account_id, uuid.uuid4().hex, device_id))
+            store = STORE.for_account(account_id)
+            with store.lock:
+                state = store.load()
+                state["devices"].setdefault(device_id, {"lastSeen": 0})["name"] = device["name"]
+                store.save(state)
+            return {"deviceId": device_id, "name": device["name"]}
+
+    def unbind(self, device_id: object, account_id: int) -> bool:
+        with self.lock, closing(self.connect()) as connection, connection:
+            cursor = connection.execute("DELETE FROM device_bindings WHERE device_id = ? AND account_id = ?",
+                                        (device_id, account_id))
+            return cursor.rowcount == 1
+
 
 AUTH = AdminAuth(DATA_FILE)
 
 
 class RequestHandler(BaseHTTPRequestHandler):
+    store: StateStore
+    account: int
     server_version = f"TvParentalAdmin/{BACKEND_VERSION}"
 
     @staticmethod
@@ -714,16 +846,31 @@ class RequestHandler(BaseHTTPRequestHandler):
         }
 
     def do_GET(self) -> None:
+        with AUTH.lock:
+            self.handle_get()
+
+    def handle_get(self) -> None:
         path = urlsplit(self.path).path
-        if path == "/api/v1/device/state":
+        if path == "/api/v1/health":
+            self.send_json(200, {"ok": True, "version": BACKEND_VERSION})
+        elif path == "/api/v1/device/binding":
+            device = self.require_device(bound=False)
+            if device:
+                self.send_json(200, AUTH.binding_status(device))
+        elif path == "/api/v1/device/state":
+            if not self.require_device():
+                return
             params = parse_qs(urlsplit(self.path).query)
-            self.send_json(200, STORE.snapshot(params.get("deviceId", [""])[0], params.get("date", [""])[0]))
+            if params.get("deviceId", [self.device_id])[0] != self.device_id:
+                self.send_json(403, {"error": "设备 ID 与凭证不匹配"})
+                return
+            self.send_json(200, self.store.snapshot(params.get("deviceId", [""])[0], params.get("date", [""])[0]))
         elif path == "/api/v1/admin/state":
             if self.require_admin():
-                self.send_json(200, STORE.snapshot())
+                self.send_json(200, self.store.snapshot())
         elif path == "/api/v1/admin/poems":
             if self.require_admin():
-                self.send_json(200, {"poems": STORE.poem_history()})
+                self.send_json(200, {"poems": self.store.poem_history()})
         elif path == "/api/v1/admin/records":
             if self.require_admin():
                 params = parse_qs(urlsplit(self.path).query)
@@ -735,8 +882,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 except ValueError:
                     self.send_json(400, {"error": "日期格式必须为 YYYY-MM-DD"})
                     return
-                with STORE.lock:
-                    state = STORE.load()
+                with self.store.lock:
+                    state = self.store.load()
                     device_ids = sorted({
                         item["deviceId"]
                         for key in ("dailyUsage", "answerRecords", "challengeRecords")
@@ -798,10 +945,13 @@ class RequestHandler(BaseHTTPRequestHandler):
                 })
         elif path == "/api/v1/admin/devices":
             if self.require_admin():
-                with STORE.lock:
-                    state = STORE.load()
+                with self.store.lock:
+                    state = self.store.load()
                     devices = state["devices"]
-                    known_ids = set(devices)
+                    with closing(AUTH.connect()) as connection:
+                        known_ids = {row[0] for row in connection.execute("SELECT device_id FROM device_bindings WHERE account_id = ?", (self.account,))}
+                    bound_ids = set(known_ids)
+                    known_ids.update(devices)
                     known_ids.update(
                         item["deviceId"]
                         for key in ("dailyUsage", "answerRecords", "challengeRecords")
@@ -810,11 +960,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                     )
                 self.send_json(200, {
                     "devices": [
-                        self.device_summary(device_id, devices.get(device_id, {}))
+                        {**self.device_summary(device_id, devices.get(device_id, {})), "bound": device_id in bound_ids}
                         for device_id in sorted(known_ids)
                     ]
                 })
-        elif path in ("/", "/index.html", "/login", "/settings", "/questions", "/poems", "/records", "/devices"):
+        elif path in ("/", "/index.html", "/login", "/register", "/settings", "/questions", "/poems", "/records", "/devices"):
             self.send_static("index.html", "text/html; charset=utf-8")
         elif path == "/app.js":
             self.send_static("app.js", "text/javascript; charset=utf-8")
@@ -825,6 +975,33 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlsplit(self.path).path
+        if path.startswith("/api/v1/device/"):
+            with AUTH.lock:
+                self.handle_post()
+        elif path in ("/api/v1/admin/devices/bind", "/api/v1/admin/devices/unbind"):
+            with AUTH.lock:
+                self.handle_post()
+        else:
+            self.handle_post()
+
+    def handle_post(self) -> None:
+        path = urlsplit(self.path).path
+        if path == "/api/v1/device/pairing":
+            if not self.same_origin():
+                return
+            try:
+                payload = self.read_json()
+                name = payload.get("deviceName", "")
+                if not isinstance(name, str):
+                    raise ValueError("设备名称无效")
+                device = self.require_device(bound=False, enroll=True, name=name)
+                if device:
+                    self.send_json(200, AUTH.binding_status(device, refresh=True))
+            except ValueError as error:
+                self.send_json(400, {"error": str(error)})
+            return
+        if path.startswith("/api/v1/device/") and not self.require_device():
+            return
         if path == "/api/v1/device/usage":
             if not self.same_origin():
                 return
@@ -840,8 +1017,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 offset = payload.get("utcOffsetMinutes")
                 if offset is not None and (isinstance(offset, bool) or not isinstance(offset, int) or not -840 <= offset <= 840):
                     raise ValueError("电视时区偏移无效")
-                with STORE.lock:
-                    state = STORE.load()
+                with self.store.lock:
+                    state = self.store.load()
                     usage = state["dailyUsage"]
                     record = next((item for item in usage if item["deviceId"] == device_id and item["date"] == record_date), None)
                     now_ms = int(time.time() * 1000)
@@ -880,7 +1057,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                         usage.append(record)
                     else:
                         record["usageMillis"] = max(record["usageMillis"], usage_millis)
-                    STORE.save(state)
+                    self.store.save(state)
                 self.send_json(200, {"accepted": True, "usageMillis": record["usageMillis"]})
             except (ValueError, TypeError) as error:
                 self.send_json(400, {"error": str(error) or "使用时长上报格式无效"})
@@ -950,8 +1127,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "trigger": trigger,
                     "resumedFromSessionId": resumed_from_session_id,
                 }
-                with STORE.lock:
-                    state = STORE.load()
+                with self.store.lock:
+                    state = self.store.load()
                     device_name = payload.get("deviceName")
                     if isinstance(device_name, str) and 1 <= len(device_name.strip()) <= 100:
                         device = state["devices"].get(device_id, {"name": device_id, "lastSeen": 0, "lastUsageMillis": 0, "lastUsageAt": 0})
@@ -963,7 +1140,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                         records.append(record)
                     elif existing["status"] == "active" or existing["status"] == status == "active":
                         existing.update(record)
-                    STORE.save(state)
+                    self.store.save(state)
                 self.send_json(200, {"accepted": True, "sessionId": session_id})
             except (ValueError, TypeError) as error:
                 self.send_json(400, {"error": str(error) or "答题会话格式无效"})
@@ -1001,8 +1178,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                         or question_snapshot.get("id") != question_id
                     ):
                         raise ValueError("题目快照无效")
-                    with STORE.lock:
-                        state = STORE.load()
+                    with self.store.lock:
+                        state = self.store.load()
                         records = state["answerRecords"]
                         existing = next((item for item in records if item["deviceId"] == device_id and item["attemptId"] == attempt_id), None)
                         if existing is not None:
@@ -1033,24 +1210,24 @@ class RequestHandler(BaseHTTPRequestHandler):
                         })
                         if correct:
                             state["questions"] = [item for item in state["questions"] if item["id"] != question_id]
-                        STORE.save(state)
+                        self.store.save(state)
                     if correct:
-                        STORE.ensure_refill()
+                        self.store.ensure_refill()
                     self.send_json(200, {"accepted": True, "correct": correct, "removed": correct})
                     return
                 question_id, answer = payload.get("questionId"), payload.get("answer")
                 if not isinstance(question_id, str) or not 1 <= len(question_id) <= 80 or not isinstance(answer, str) or not 1 <= len(answer) <= 120:
                     raise ValueError("请输入有效的题目 ID 和答案")
-                with STORE.lock:
-                    state = STORE.load()
+                with self.store.lock:
+                    state = self.store.load()
                     question = next((item for item in state["questions"] if item["id"] == question_id), None)
                     if question is not None and answer != question["answer"]:
                         self.send_json(409, {"error": "答案不正确，题目已保留"})
                         return
                     if question is not None:
                         state["questions"] = [item for item in state["questions"] if item["id"] != question_id]
-                        STORE.save(state)
-                STORE.ensure_refill()
+                        self.store.save(state)
+                self.store.ensure_refill()
                 # Unknown IDs are already gone; acknowledge retries without deleting other questions.
                 self.send_json(200, {"removed": question is not None})
             except ValueError as error:
@@ -1060,6 +1237,14 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.send_json(404, {"error": "请求地址不存在"})
             return
         if not self.same_origin():
+            return
+        if path == "/api/v1/admin/register":
+            try:
+                payload = self.read_json()
+                status, message = AUTH.register(payload.get("username"), payload.get("password"), payload.get("confirmPassword"), self.client_address[0])
+                self.send_json(status, {"message" if status == 201 else "error": message})
+            except ValueError as error:
+                self.send_json(400, {"error": str(error)})
             return
         if path == "/api/v1/admin/login":
             try:
@@ -1083,20 +1268,32 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
         try:
             payload = self.read_json()
+            if path in ("/api/v1/admin/devices/preview", "/api/v1/admin/devices/bind"):
+                if path.endswith("/preview"):
+                    device = AUTH.pairing_device(payload.get("code"), self.account)
+                    result = {"deviceId": device["device_id"], "name": device["name"]} if device else None
+                else:
+                    result = AUTH.bind(payload.get("code"), payload.get("deviceId"), self.account)
+                self.send_json(200 if result else 400, result or {"error": "绑定码无效、已过期或尝试次数过多，请在电视刷新后重试"})
+                return
+            if path == "/api/v1/admin/devices/unbind":
+                removed = AUTH.unbind(payload.get("deviceId"), self.account)
+                self.send_json(200 if removed else 404, {"unbound": True} if removed else {"error": "未找到当前账号绑定的设备"})
+                return
             priority_prefix = "/api/v1/admin/questions/"
             if path.startswith(priority_prefix) and path.endswith("/priority"):
                 question_id = unquote(path[len(priority_prefix):-len("/priority")])
                 priority = payload.get("priority")
                 if not isinstance(priority, bool):
                     raise ValueError("优先选项必须为布尔值")
-                with STORE.lock:
-                    state = STORE.load()
+                with self.store.lock:
+                    state = self.store.load()
                     question = next((item for item in state["questions"] if item["id"] == question_id), None)
                     if question is None:
                         self.send_json(404, {"error": "题目不存在或已被答对移出题库"})
                         return
                     question["priority"] = priority
-                    STORE.save(state)
+                    self.store.save(state)
                 self.send_json(200, {"question": question})
                 return
             if path == "/api/v1/admin/password/change":
@@ -1114,8 +1311,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 attempt_id = payload.get("attemptId")
                 if not isinstance(attempt_id, str) or not 1 <= len(attempt_id) <= 80:
                     raise ValueError("无效的答题记录 ID")
-                with STORE.lock:
-                    state = STORE.load()
+                with self.store.lock:
+                    state = self.store.load()
                     record = next((item for item in state["answerRecords"] if item.get("attemptId") == attempt_id), None)
                     if record is None or not record.get("correct"):
                         self.send_json(404, {"error": "找不到答对的题目记录"})
@@ -1137,7 +1334,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     if question["id"] != record.get("questionId"):
                         raise ValueError("题目快照与答题记录不匹配")
                     questions.append(question)
-                    STORE.save(state)
+                    self.store.save(state)
                 self.send_json(200, {"restored": True, "inQuestionBank": False})
                 return
             if path == "/api/v1/admin/questions/generate":
@@ -1190,8 +1387,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/v1/admin/questions/batch":
                 candidates = validate_question_batch(payload.get("questions"))
-                with STORE.lock:
-                    state = STORE.load()
+                with self.store.lock:
+                    state = self.store.load()
                     existing = {question["prompt"] for question in state["questions"]}
                     added = 0
                     for question in candidates:
@@ -1200,29 +1397,29 @@ class RequestHandler(BaseHTTPRequestHandler):
                             existing.add(question["prompt"])
                             added += 1
                     if added:
-                        STORE.save(state)
+                        self.store.save(state)
                 self.send_json(200, {"added": added, "skipped": len(candidates) - added})
                 return
             if path == "/api/v1/admin/password/reset":
-                command = STORE.queue_password_reset()
+                command = self.store.queue_password_reset()
                 self.send_json(202, {"queued": True, "id": command["id"]})
                 return
             if path == "/api/v1/admin/usage/reset":
-                command = STORE.queue_usage_reset(payload.get("deviceId"))
+                command = self.store.queue_usage_reset(payload.get("deviceId"))
                 self.send_json(202, {"queued": True, **command})
                 return
-            with STORE.lock:
-                state = STORE.load()
+            with self.store.lock:
+                state = self.store.load()
                 if path == "/api/v1/admin/settings":
                     state["settings"] = validate_settings(payload)
-                    STORE.save(state)
+                    self.store.save(state)
                     self.send_json(200, {"settings": state["settings"]})
                 elif path == "/api/v1/admin/questions":
                     question = validate_question(payload, require_id=False)
                     questions = state["questions"]
                     assert isinstance(questions, list)
                     questions.append(question)
-                    STORE.save(state)
+                    self.store.save(state)
                     self.send_json(201, question)
                 else:
                     self.send_json(404, {"error": "请求地址不存在"})
@@ -1240,8 +1437,8 @@ class RequestHandler(BaseHTTPRequestHandler):
         if not self.same_origin() or not self.require_admin():
             return
         question_id = path[len(prefix):]
-        with STORE.lock:
-            state = STORE.load()
+        with self.store.lock:
+            state = self.store.load()
             questions = state["questions"]
             assert isinstance(questions, list)
             remaining = [question for question in questions if question["id"] != question_id]
@@ -1249,8 +1446,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json(404, {"error": "题目不存在"})
                 return
             state["questions"] = remaining
-            STORE.save(state)
-        STORE.ensure_refill()
+            self.store.save(state)
+        self.store.ensure_refill()
         self.send_json(200, {"deleted": question_id, "count": len(remaining)})
 
     def read_json(self) -> dict[str, object]:
@@ -1260,12 +1457,32 @@ class RequestHandler(BaseHTTPRequestHandler):
         payload = json.loads(self.rfile.read(length).decode("utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("请求内容必须是 JSON 对象")
+        if hasattr(self, "device_id") and payload.get("deviceId", self.device_id) != self.device_id:
+            raise ValueError("设备 ID 与凭证不匹配")
         return payload
 
+    def require_device(self, *, bound: bool = True, enroll: bool = False, name: str = "") -> dict[str, object] | None:
+        authorization = self.headers.get("Authorization", "")
+        token = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
+        device = AUTH.device(self.headers.get("X-Device-Id", ""), token, enroll=enroll, name=name)
+        if device is None:
+            self.send_json(401, {"error": "设备凭证无效，请在电视上重新绑定"})
+            return None
+        if bound:
+            if device["account_id"] is None or self.headers.get("X-Binding-Id", "") != device["binding_id"]:
+                self.send_json(403, {"error": "设备尚未绑定账号或绑定已变更"})
+                return None
+            self.store = STORE.for_account(device["account_id"])
+            self.device_id = device["device_id"]
+        return device
+
     def require_admin(self) -> bool:
-        if not AUTH.is_authenticated(self.session_id()):
+        account_id = AUTH.account_id(self.session_id())
+        if account_id is None:
             self.send_json(401, {"error": "请先登录管理后台"})
             return False
+        self.account = account_id
+        self.store = STORE.for_account(account_id)
         return True
 
     def same_origin(self) -> bool:

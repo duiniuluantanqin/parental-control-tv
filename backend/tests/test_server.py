@@ -13,6 +13,7 @@ from http.cookiejar import CookieJar
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 from urllib.error import HTTPError
 from urllib.request import HTTPCookieProcessor, Request, build_opener, urlopen
 
@@ -49,6 +50,7 @@ class AdminApiTests(unittest.TestCase):
             body={"username": "admin", "password": "test-password-123"},
         )
         self.assertEqual(status, 200)
+        self.device_headers("tv-01")
 
     def tearDown(self) -> None:
         self.httpd.shutdown()
@@ -64,6 +66,9 @@ class AdminApiTests(unittest.TestCase):
 
     def request(self, path: str, *, method: str = "GET", body: object | None = None, authenticated: bool = True, headers=None):
         headers = dict(headers or {})
+        if path.startswith("/api/v1/device/"):
+            device_id = (body or {}).get("deviceId") or parse_qs(urlsplit(path).query).get("deviceId", ["tv-01"])[0]
+            headers.update(self.device_headers(device_id))
         data = None
         if body is not None:
             data = json.dumps(body).encode("utf-8")
@@ -76,6 +81,14 @@ class AdminApiTests(unittest.TestCase):
         except HTTPError as error:
             with error:
                 return error.code, json.loads(error.read().decode("utf-8"))
+
+    def device_headers(self, device_id):
+        token = "test-device-credential-" + "a" * 32
+        device = server.AUTH.device(device_id, token, enroll=True, name=device_id)
+        if device["account_id"] is None:
+            with closing(server.AUTH.connect()) as connection, connection:
+                connection.execute("UPDATE device_bindings SET account_id = 1, binding_id = 'test-binding' WHERE device_id = ?", (device_id,))
+        return {"X-Device-Id": device_id, "Authorization": "Bearer " + token, "X-Binding-Id": "test-binding"}
 
     def test_device_state_starts_with_fifty_questions_and_default_rules(self) -> None:
         status, state = self.request("/api/v1/device/state", authenticated=False)
@@ -781,7 +794,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertTrue(session)
         with closing(sqlite3.connect(database_path)) as connection:
             username, salt, iterations, password_hash = connection.execute(
-                "SELECT username, salt, iterations, password_hash FROM admin_account WHERE id = 1",
+                "SELECT username, salt, iterations, password_hash FROM accounts WHERE id = 1",
             ).fetchone()
         self.assertEqual(username, "admin")
         self.assertNotEqual(password_hash, "admin")
@@ -890,7 +903,7 @@ class AdminApiTests(unittest.TestCase):
         self.assertEqual(status, 401)
         self.assertEqual(server.AUTH.login("admin", "replacement-password")[0], 200)
         with closing(sqlite3.connect(server.AUTH.path)) as connection:
-            password_hash = connection.execute("SELECT password_hash FROM admin_account WHERE id = 1").fetchone()[0]
+            password_hash = connection.execute("SELECT password_hash FROM accounts WHERE id = 1").fetchone()[0]
         self.assertNotEqual(password_hash, "replacement-password")
 
     def test_cross_origin_writes_are_rejected(self) -> None:
