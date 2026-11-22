@@ -30,7 +30,9 @@ class BootReceiver : BroadcastReceiver() {
         Log.i(TAG, "Received $action; question alarm and usage tracking started")
 
         val resumeChallenge = QuestionBank.hasRebootChallenge(context)
-        if (Settings.canDrawOverlays(context) && (ControlState.claimStartupQuestion(context) || resumeChallenge)) {
+        if (!UsageTimingPause.isPaused(context) && Settings.canDrawOverlays(context) &&
+            (ControlState.claimStartupQuestion(context) || resumeChallenge)
+        ) {
             val questionIntent = Intent(context, QuestionOverlayService::class.java)
                 .setAction(QuestionOverlayService.ACTION_SHOW_QUESTION)
                 .putExtra(QuestionOverlayService.EXTRA_TRIGGER, QuestionBank.TRIGGER_STARTUP)

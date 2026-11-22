@@ -67,7 +67,7 @@ class MediaControlListenerService : NotificationListenerService() {
             )
             Log.i(TAG, "Requested usage tracking recovery")
         }
-        if (!QuestionOverlayService.isRunning && QuestionBank.isChallengeActive(this)) {
+        if (!UsageTimingPause.isPaused(this) && !QuestionOverlayService.isRunning && QuestionBank.isChallengeActive(this)) {
             startForegroundService(
                 Intent(this, QuestionOverlayService::class.java)
                     .setAction(QuestionOverlayService.ACTION_SHOW_QUESTION),

@@ -31,7 +31,7 @@ class QuestionAlarmReceiver : BroadcastReceiver() {
                 scheduleAfter(context, ControlState.millisUntilNextAllowedUsageWindow(context))
             }
 
-            else -> startOverlay(context, QuestionOverlayService.ACTION_SHOW_QUESTION)
+            !UsageTimingPause.isPaused(context) -> startOverlay(context, QuestionOverlayService.ACTION_SHOW_QUESTION)
         }
     }
 
@@ -41,11 +41,12 @@ class QuestionAlarmReceiver : BroadcastReceiver() {
         private const val ALARM_AT_KEY = "alarm_at"
 
         fun scheduleNext(context: Context) {
-            val interval = ControlState.settings(context).questionIntervalMinutes * MILLIS_PER_MINUTE
-            scheduleAfter(context, interval)
+            if (UsageTimingPause.isPaused(context)) scheduleForCurrentState(context)
+            else scheduleQuestionInterval(context)
         }
 
         fun ensureScheduled(context: Context) {
+            if (UsageTimingPause.isPaused(context)) return scheduleForCurrentState(context)
             val scheduledAt = alarmPreferences(context)
                 .getLong(ALARM_AT_KEY, 0L)
             when {
@@ -55,6 +56,7 @@ class QuestionAlarmReceiver : BroadcastReceiver() {
         }
 
         fun restoreScheduled(context: Context) {
+            if (UsageTimingPause.isPaused(context)) return scheduleForCurrentState(context)
             val scheduledAt = alarmPreferences(context).getLong(ALARM_AT_KEY, 0L)
             if (scheduledAt > 0L) {
                 scheduleAfter(context, scheduledAt - System.currentTimeMillis())
@@ -69,8 +71,24 @@ class QuestionAlarmReceiver : BroadcastReceiver() {
                 ControlState.isDailyLimitReached(context) -> scheduleAfter(context, ControlState.millisUntilNextDay())
                 ControlState.lockoutUntil(context) > now -> scheduleAfter(context, ControlState.lockoutUntil(context) - now)
                 !ControlState.isUsageWindowAllowed(context) -> scheduleAfter(context, ControlState.millisUntilNextAllowedUsageWindow(context))
-                else -> scheduleNext(context)
+                UsageTimingPause.isPaused(context) -> cancelScheduled(context)
+                else -> scheduleQuestionInterval(context)
             }
+        }
+
+        private fun scheduleQuestionInterval(context: Context) {
+            val interval = ControlState.settings(context).questionIntervalMinutes * MILLIS_PER_MINUTE
+            scheduleAfter(context, interval)
+        }
+
+        private fun cancelScheduled(context: Context) {
+            PendingIntent.getBroadcast(
+                context,
+                REQUEST_CODE,
+                Intent(context, QuestionAlarmReceiver::class.java),
+                PendingIntent.FLAG_NO_CREATE or immutableFlag(),
+            )?.let { context.getSystemService(AlarmManager::class.java).cancel(it) }
+            alarmPreferences(context).edit().remove(ALARM_AT_KEY).apply()
         }
 
         fun scheduleAfter(context: Context, delayMillis: Long) {

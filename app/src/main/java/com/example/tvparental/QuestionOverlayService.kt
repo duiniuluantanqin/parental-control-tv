@@ -117,6 +117,7 @@ class QuestionOverlayService : Service() {
             ControlState.isDailyLimitReached(this) -> return showDailyLock()
             ControlState.lockoutUntil(this) > System.currentTimeMillis() -> return showLockout()
             !ControlState.isUsageWindowAllowed(this) -> return showUsageWindowLock()
+            !testQuestion && UsageTimingPause.isPaused(this) -> return dismissAutomaticQuestion()
             !force && currentMode == MODE_QUESTION && overlayView != null -> return
         }
         val challengeTrigger = if (ControlState.lockoutUntil(this) > 0L) QuestionBank.TRIGGER_LOCKOUT_RETRY else trigger
@@ -1140,6 +1141,7 @@ class QuestionOverlayService : Service() {
             ControlState.isDailyLimitReached(this) -> showDailyLock()
             ControlState.lockoutUntil(this) > System.currentTimeMillis() -> showLockout()
             !ControlState.isUsageWindowAllowed(this) -> showUsageWindowLock()
+            UsageTimingPause.isPaused(this) -> dismissAutomaticQuestion()
             currentMode == MODE_QUESTION && overlayView != null -> Unit
             ControlState.lockoutUntil(this) > 0L -> showQuestion(trigger = QuestionBank.TRIGGER_LOCKOUT_RETRY)
             currentMode == MODE_DAILY_LOCK || currentMode == MODE_WRONG_LOCK || currentMode == MODE_USAGE_WINDOW ||
@@ -1157,6 +1159,12 @@ class QuestionOverlayService : Service() {
                 stopSelf()
             }
         }
+    }
+
+    private fun dismissAutomaticQuestion() {
+        if (currentMode == MODE_QUESTION && isTestQuestion) return
+        // Keep the unfinished challenge, but do not let a hidden question time out.
+        hideOverlay()
     }
 
     private fun formatRemaining(milliseconds: Long): String {

@@ -97,7 +97,9 @@ class MainActivity : Activity() {
         statusHandler.removeCallbacks(statusRefresh)
         statusRefresh.run()
         if (bindingDialog?.isShowing == true) bindingPoll.run()
-        if ((startupQuestionPending || QuestionBank.hasRebootChallenge(this)) && canDrawOverlays()) {
+        if (!UsageTimingPause.isPaused(this) && canDrawOverlays() &&
+            (startupQuestionPending || QuestionBank.hasRebootChallenge(this))
+        ) {
             startupQuestionPending = false
             if (ControlState.claimStartupQuestion(this) || QuestionBank.hasRebootChallenge(this)) showQuestionNow()
         }

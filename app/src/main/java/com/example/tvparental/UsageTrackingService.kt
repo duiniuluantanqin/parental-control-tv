@@ -109,7 +109,9 @@ class UsageTrackingService : Service() {
         usageBindingId = DeviceBinding.bindingId(this)
         val interactive = powerManager().isInteractive
         val storedPause = UsageTimingPause.isPaused(this)
-        if (storedPause && !interactive) UsageTimingPause.setPaused(this, false)
+        if (storedPause && !interactive && UsageTimingPause.setPaused(this, false)) {
+            QuestionAlarmReceiver.scheduleForCurrentState(this)
+        }
         usageSamples.start(
             SystemClock.elapsedRealtime(),
             interactive,
@@ -184,8 +186,16 @@ class UsageTrackingService : Service() {
     }
 
     private fun setTimingPause(paused: Boolean, interactive: Boolean): Boolean {
+        val wasPaused = UsageTimingPause.isPaused(this)
         val saved = UsageTimingPause.setPaused(this, paused)
-        accountElapsedTime(interactive = interactive, timingPaused = UsageTimingPause.isPaused(this))
+        val isPaused = UsageTimingPause.isPaused(this)
+        accountElapsedTime(interactive = interactive, timingPaused = isPaused)
+        if (wasPaused != isPaused) {
+            QuestionAlarmReceiver.scheduleForCurrentState(this)
+            if (isPaused && QuestionOverlayService.isRunning) {
+                startQuestionService(QuestionOverlayService.ACTION_REFRESH_STATE)
+            }
+        }
         sendBroadcast(Intent(ACTION_TIMING_PAUSE_CHANGED).setPackage(packageName))
         return saved
     }
