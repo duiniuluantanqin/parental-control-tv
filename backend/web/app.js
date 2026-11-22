@@ -91,7 +91,6 @@ function renderQuestions() {
     && (!categoryFilter.value || question.category === categoryFilter.value)
     && (!query || [question.prompt, question.answer, ...question.options].join(" ").toLowerCase().includes(query))
   );
-  document.querySelector("#questionCount").textContent = String(bank.length);
   document.querySelector("#questionResults").textContent = `显示 ${filtered.length} / ${bank.length} 道`;
   rows.replaceChildren();
   if (!filtered.length) {
@@ -297,7 +296,7 @@ function renderPoemHistory() {
   const visible = poemHistory.filter(poem => `${poem.title} ${poem.author}`.includes(query));
   const container = document.querySelector("#poemRows");
   container.replaceChildren();
-  document.querySelector("#poemCount").textContent = query ? `${visible.length} / ${poemHistory.length}` : poemHistory.length;
+  document.querySelector("#poemCount").textContent = `显示 ${visible.length} / ${poemHistory.length} 首`;
   if (!visible.length) {
     setEmptyRow(container, 2, query ? "没有匹配的作品" : "暂无已出题古诗词");
     return;
@@ -334,6 +333,27 @@ async function loadPoemHistory() {
   updatePoemHistoryHint();
 }
 
+function renderDevicePicker(selectId, buttonId, devices) {
+  const select = document.getElementById(selectId);
+  const previous = select.value;
+  select.replaceChildren();
+  for (const device of devices) select.add(new Option(`${device.name} (${device.deviceId})`, device.deviceId));
+  if (devices.some(device => device.deviceId === previous)) select.value = previous;
+  if (!devices.length) select.add(new Option("暂无已绑定电视", ""));
+  select.disabled = !devices.length;
+  document.getElementById(buttonId).disabled = !devices.length;
+}
+
+async function loadRewardDevices() {
+  try {
+    const { devices } = await api("/api/v1/admin/devices");
+    renderDevicePicker("rewardDevice", "grantReward", devices.filter(device => device.bound));
+  } catch (error) {
+    document.querySelector("#rewardDevice").replaceChildren(new Option("电视列表加载失败", ""));
+    handleError(error, document.querySelector("#rewardGrantStatus"));
+  }
+}
+
 async function loadState() {
   const state = await api("/api/v1/admin/state");
   if (state.version) document.querySelector("#backendVersion").textContent = `后台 v${state.version}`;
@@ -349,15 +369,7 @@ async function loadState() {
     const { devices: allDevices } = await api("/api/v1/admin/devices");
     const devices = allDevices.filter(device => device.bound);
     renderBoundDevices(devices);
-    for (const [selectId, buttonId] of [["usageResetDevice", "resetDeviceUsage"], ["rewardDevice", "grantReward"]]) {
-      const select = document.getElementById(selectId);
-      const previous = select.value;
-      select.replaceChildren();
-      for (const device of devices) select.add(new Option(`${device.name} (${device.deviceId})`, device.deviceId));
-      if (devices.some(device => device.deviceId === previous)) select.value = previous;
-      if (!devices.length) select.add(new Option("暂无设备，请先输入电视绑定码", ""));
-      document.getElementById(buttonId).disabled = !devices.length;
-    }
+    renderDevicePicker("usageResetDevice", "resetDeviceUsage", devices);
   }
   questions = state.questions;
   rewardQuestions = state.rewardQuestions || [];
@@ -1030,6 +1042,7 @@ async function initialize() {
     if (window.matchMedia("(max-width: 1000px)").matches) currentLink.scrollIntoView({ block: "nearest", inline: "nearest" });
     const titles = { settings: "使用规则", questions: "题库管理", poems: "已出题古诗词", records: "使用记录", devices: "设备与重置" };
     document.querySelector("#currentSection").textContent = `${["questions", "poems"].includes(page) ? "内容管理" : page === "devices" ? "设备维护" : "使用管理"} / ${titles[page]}`;
+    if (page === "settings") await loadRewardDevices();
     if (page === "records") {
       const dateInput = document.querySelector("#recordsDate");
       if (!dateInput.value) {
@@ -1110,22 +1123,28 @@ document.querySelector("#rewardGrantForm").addEventListener("submit", async even
   const select = document.querySelector("#rewardDevice");
   const input = document.querySelector("#rewardMinutes");
   const button = document.querySelector("#grantReward");
+  const status = document.querySelector("#rewardGrantStatus");
   if (!select.value || button.disabled) return;
   const deviceId = select.value;
   const name = select.selectedOptions[0].textContent;
   const minutes = input.valueAsNumber;
   if (!window.confirm(`为 ${name} 发放 ${minutes} 分钟奖励时长？`)) return;
   button.disabled = true;
+  select.disabled = true;
+  input.disabled = true;
+  status.textContent = "";
+  status.classList.remove("error");
   try {
     const { rewardBalanceMillis } = await api("/api/v1/admin/rewards/grant", {
       method: "POST", body: JSON.stringify({ deviceId, minutes }),
     });
     input.value = "";
-    document.querySelector("#rewardGrantStatus").textContent = `已发放 ${minutes} 分钟，余额 ${formatMinutes(rewardBalanceMillis)}。`;
-    await loadState();
+    status.textContent = `${name} 已收到 ${minutes} 分钟奖励，余额 ${formatMinutes(rewardBalanceMillis)}。`;
   } catch (error) {
-    handleError(error);
+    handleError(error, status);
   } finally {
+    select.disabled = false;
+    input.disabled = false;
     button.disabled = !select.value;
   }
 });

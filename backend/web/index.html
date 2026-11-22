@@ -64,39 +64,53 @@
     <div id="pageContent" class="page-content" tabindex="-1">
     <p id="notice" class="notice" role="status" aria-live="polite"></p>
 
-    <section id="settingsPage" aria-labelledby="settingsTitle" hidden>
-      <div class="section-heading">
-        <div><span class="page-eyebrow">使用管理</span><h1 id="settingsTitle">使用规则</h1><p>安排每周观看时间，设置答题与同步规则。</p></div>
-        <a class="subtle-link" href="/records">查看使用记录 <span aria-hidden="true">↗</span></a>
-      </div>
+    <section id="settingsPage" aria-label="使用规则" hidden>
+      <form id="rewardGrantForm" class="settings-panel reward-grant-panel" aria-labelledby="rewardGrantTitle">
+        <div class="settings-panel-heading">
+          <h2 id="rewardGrantTitle">发放奖励时长</h2>
+          <p>未用完的奖励余额可留到以后使用。</p>
+        </div>
+        <div class="reward-grant-fields">
+          <label class="reward-device-field" for="rewardDevice">选择电视
+            <select id="rewardDevice" required disabled><option value="">正在载入设备…</option></select>
+          </label>
+          <label for="rewardMinutes">奖励分钟数
+            <input id="rewardMinutes" type="number" min="1" max="1440" step="1" required>
+          </label>
+          <button id="grantReward" class="button primary" type="submit" disabled>发放奖励</button>
+        </div>
+        <p id="rewardGrantStatus" class="reward-grant-status" role="status"></p>
+      </form>
       <form id="settingsForm" class="settings-form">
         <section class="settings-panel" aria-labelledby="challengeSettingsTitle">
-        <div class="weekly-heading"><span class="section-number" aria-hidden="true">01</span><div><h2 id="challengeSettingsTitle">答题与同步</h2><p>五题答对至少四题可继续观看；保存后，电视将在下次同步时应用。</p></div></div>
-        <div class="settings-grid">
-          <label for="questionInterval">答题间隔 <span class="input-with-unit"><input id="questionInterval" type="number" min="1" max="240" value="10" required><span>分钟</span></span><small>观看多久后进入下一次五题答题</small></label>
-          <label for="wrongLock">答错锁定 <span class="input-with-unit"><input id="wrongLock" type="number" min="1" max="1440" value="10" required><span>分钟</span></span><small>本轮答题未通过时，需要等待的时长</small></label>
-          <label for="dailyRewardLimit">每日奖励上限 <span class="input-with-unit"><input id="dailyRewardLimit" type="number" min="0" max="1440" value="30" required><span>分钟</span></span><small>每台电视每天可用的奖励时长，设为 0 则暂停使用奖励余额</small></label>
-          <label for="syncInterval">同步间隔 <span class="input-with-unit"><input id="syncInterval" type="number" min="1" max="60" value="5" required><span>分钟</span></span><small>电视获取规则与题目的间隔</small></label>
-        </div>
+          <div class="settings-panel-heading">
+            <h2 id="challengeSettingsTitle">答题、同步与奖励上限</h2>
+            <p>五题答对至少四题可继续观看。</p>
+          </div>
+          <div class="settings-grid">
+            <label for="questionInterval">答题间隔 <span class="input-with-unit"><input id="questionInterval" type="number" min="1" max="240" value="10" required><span>分钟</span></span></label>
+            <label for="wrongLock">答错锁定 <span class="input-with-unit"><input id="wrongLock" type="number" min="1" max="1440" value="10" required><span>分钟</span></span></label>
+            <label for="syncInterval">同步间隔 <span class="input-with-unit"><input id="syncInterval" type="number" min="1" max="60" value="5" required><span>分钟</span></span></label>
+            <label for="dailyRewardLimit">每日奖励上限 <span class="input-with-unit"><input id="dailyRewardLimit" type="number" min="0" max="1440" value="30" aria-describedby="dailyRewardHint" required><span>分钟</span></span><small id="dailyRewardHint">每台电视单独计算，设为 0 暂停使用奖励。</small></label>
+          </div>
         </section>
         <section class="settings-panel" aria-labelledby="weeklyTitle">
-        <div class="weekly-heading">
-          <span class="section-number" aria-hidden="true">02</span><div><h2 id="weeklyTitle">每周观看安排</h2><p>先设置每日额度，再按需要添加允许和禁用时段。</p></div>
-        </div>
-        <div class="rules-note"><strong>禁用时段优先</strong><p>允许时段留空表示全天可用；每日时长为 0 表示当天不可用。时段可跨午夜。</p></div>
-        <div class="weekly-table-wrap">
-          <table class="weekly-table">
-            <thead><tr><th scope="col">星期</th><th scope="col">每日时长</th><th scope="col">允许时段</th><th scope="col">禁用时段</th></tr></thead>
-            <tbody id="weeklyRows"></tbody>
-          </table>
-        </div>
+          <div class="settings-panel-heading weekly-heading">
+            <h2 id="weeklyTitle">每周观看安排</h2>
+            <p><strong>禁用时段优先。</strong>允许时段留空表示不限时段。每日时长为 0 表示当天不可用。时段可跨午夜。</p>
+          </div>
+          <div class="weekly-table-wrap">
+            <table class="weekly-table">
+              <thead><tr><th scope="col">星期</th><th scope="col">每日时长</th><th scope="col">允许时段</th><th scope="col">禁用时段</th></tr></thead>
+              <tbody id="weeklyRows"></tbody>
+            </table>
+          </div>
         </section>
-        <div class="settings-footer save-bar"><p>所有规则统一保存，电视下次同步后生效。</p><button id="saveSettings" class="button primary" type="submit">保存规则</button></div>
+        <div class="settings-footer save-bar"><p>电视下次同步后应用规则。</p><button id="saveSettings" class="button primary" type="submit">保存规则</button></div>
       </form>
     </section>
 
-    <section id="devicesPage" aria-labelledby="devicesTitle" hidden>
-      <div class="section-heading"><div><span class="page-eyebrow">设备维护</span><h1 id="devicesTitle">设备与重置</h1><p>按需恢复电视 PIN 或当天使用额度。重置指令将在电视下次同步时应用。</p></div></div>
+    <section id="devicesPage" aria-label="设备与重置" hidden>
       <section class="settings-panel binding-panel" aria-labelledby="bindingTitle">
         <h2 id="bindingTitle">绑定电视</h2>
         <p class="muted">在电视打开 Bind account，将屏幕上的六位绑定码输入这里。绑定码五分钟内有效。</p>
@@ -109,14 +123,6 @@
         <div id="boundDevices" class="bound-devices"></div>
       </section>
       <div class="maintenance-grid">
-        <form id="rewardGrantForm" class="settings-panel maintenance-card" aria-labelledby="rewardGrantTitle">
-          <div class="card-heading"><h2 id="rewardGrantTitle">发放奖励时长</h2><p>奖励发放给所选电视。未用完的余额可留到以后使用。</p></div>
-          <div class="reset-device-field reward-grant-fields">
-            <label for="rewardDevice">选择设备</label><select id="rewardDevice" required><option value="">正在载入设备…</option></select>
-            <label for="rewardMinutes">奖励分钟数</label><input id="rewardMinutes" type="number" min="1" max="1440" step="1" required>
-          </div>
-          <div class="card-footer"><span id="rewardGrantStatus" role="status"></span><button id="grantReward" class="button primary" type="submit" disabled>发放奖励</button></div>
-        </form>
         <section class="settings-panel maintenance-card" aria-labelledby="usageResetTitle">
           <div class="card-heading"><span class="card-kicker">使用额度</span><h2 id="usageResetTitle">重置今日使用时长</h2><p>清零所选设备今天的计时和临时加时，恢复当天配置额度。允许时段和答题规则仍然生效。</p></div>
           <div class="reset-device-field"><label for="usageResetDevice">选择设备</label><select id="usageResetDevice"><option value="">正在载入设备…</option></select></div>
@@ -131,14 +137,11 @@
       <p id="passwordResetStatus" class="maintenance-status" role="status">重置操作会再次询问确认，请先核对设备与操作范围。</p>
     </section>
 
-    <section id="questionsPage" aria-labelledby="questionsTitle" hidden>
-      <div class="section-heading">
-        <div><span class="page-eyebrow">内容管理</span><h1 id="questionsTitle">题库管理 <span id="questionCount" class="count">0</span></h1><p>维护电视答题内容，点击题目查看完整选项与诗词原文。</p></div>
-        <div class="page-actions question-page-actions">
-          <button id="addQuestionButton" class="button secondary" type="button"><span aria-hidden="true">＋</span> 添加题目</button>
-          <button id="addRewardQuestionButton" class="button secondary" type="button">＋ 添加奖励难题</button>
-          <button id="aiQuestionButton" class="button primary" type="button">AI 出题</button>
-        </div>
+    <section id="questionsPage" aria-label="题库管理" hidden>
+      <div class="question-page-actions" role="group" aria-label="题库操作">
+        <button id="addQuestionButton" class="button secondary" type="button"><span aria-hidden="true">＋</span> 添加题目</button>
+        <button id="addRewardQuestionButton" class="button secondary" type="button">＋ 添加奖励难题</button>
+        <button id="aiQuestionButton" class="button primary" type="button">AI 出题</button>
       </div>
       <div class="page-callout"><p><strong>优先出题</strong>勾选后，电视优先抽取这些题目，不足五题时用普通题补足。下次同步后，在新一轮抽题时生效。</p><a href="/poems">添加诗词前查重 <span aria-hidden="true">→</span></a></div>
       <div class="table-panel">
@@ -162,12 +165,8 @@
       </div>
     </section>
 
-    <section id="poemsPage" aria-labelledby="poemsTitle" hidden>
-      <div class="section-heading">
-        <div><span class="page-eyebrow">内容管理</span><h1 id="poemsTitle">已出题古诗词 <span id="poemCount" class="count">0</span></h1><p>添加前先查一查，避免对同一首作品重复出题。</p></div>
-        <a class="subtle-link" href="/questions">返回题库管理 <span aria-hidden="true">↗</span></a>
-      </div>
-      <div class="page-callout"><p><strong>作品记录会保留</strong>同一作品合并显示；答对移除或手动删除题目后仍可查到。仅生成预览不会记录。</p></div>
+    <section id="poemsPage" aria-label="已出题古诗词" hidden>
+      <div class="page-callout"><p><strong>作品记录会保留</strong>同一作品合并显示；答对移除或手动删除题目后仍可查到。仅生成预览不会记录。</p><a href="/questions">返回题库管理 <span aria-hidden="true">↗</span></a></div>
       <div class="table-panel">
       <div class="table-toolbar">
         <div class="filters">
@@ -175,6 +174,7 @@
           <input id="poemSearch" type="search" placeholder="搜索作品或作者">
           <button id="refreshPoems" class="button secondary" type="button">刷新</button>
         </div>
+        <span id="poemCount" class="result-count" role="status"></span>
       </div>
       <div class="table-wrap">
         <table class="poem-history-table">
@@ -185,21 +185,18 @@
       </div>
     </section>
 
-    <section id="recordsPage" aria-labelledby="recordsTitle" hidden>
-      <div class="section-heading records-heading">
-        <div><span class="page-eyebrow">使用管理</span><h1 id="recordsTitle">使用记录</h1><p>查看每天的观看时长、连续观看时段和五题答题情况。</p></div>
+    <section id="recordsPage" aria-label="使用记录" hidden>
+      <div class="records-controls table-toolbar">
+        <div class="records-date-control">
+          <button id="previousRecordsDate" class="icon-button date-nav-button" type="button" aria-label="前一天" title="前一天">←</button>
+          <label class="records-date" for="recordsDate"><span class="sr-only">查看日期</span><input id="recordsDate" type="date"></label>
+          <button id="nextRecordsDate" class="icon-button date-nav-button" type="button" aria-label="后一天" title="后一天">→</button>
+        </div>
+        <button id="todayRecordsDate" class="button secondary" type="button">今天</button>
+        <p id="recordsSummary" class="result-count">正在载入记录…</p>
+        <button id="refreshRecords" class="button secondary" type="button">刷新</button>
         <a class="subtle-link" href="/settings">调整使用规则 <span aria-hidden="true">↗</span></a>
       </div>
-        <div class="records-controls table-toolbar">
-          <div class="records-date-control">
-            <button id="previousRecordsDate" class="icon-button date-nav-button" type="button" aria-label="前一天" title="前一天">←</button>
-            <label class="records-date" for="recordsDate"><span class="sr-only">查看日期</span><input id="recordsDate" type="date"></label>
-            <button id="nextRecordsDate" class="icon-button date-nav-button" type="button" aria-label="后一天" title="后一天">→</button>
-          </div>
-          <button id="todayRecordsDate" class="button secondary" type="button">今天</button>
-          <p id="recordsSummary" class="result-count">正在载入记录…</p>
-          <button id="refreshRecords" class="button secondary" type="button">刷新</button>
-        </div>
       <section class="records-section" aria-labelledby="usageRecordsTitle">
         <div class="records-section-heading"><div><h2 id="usageRecordsTitle">每日使用时长</h2><p>常规和奖励时长分别显示。点击详情可查看常规观看时段。</p></div></div>
         <div class="table-wrap">
