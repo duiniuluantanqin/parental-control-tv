@@ -31,8 +31,10 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.GridLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import org.json.JSONObject
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
@@ -50,6 +52,10 @@ class QuestionOverlayService : Service() {
     private var unlockButton: TextView? = null
     private var pinHint: TextView? = null
     private var pinEntryActive = false
+    private var rewardOfferMillis = 0L
+    private var rewardOfferDismissed = false
+    private var rewardChallengeOffered = false
+    private var rewardChallengeBinding = ""
     private var currentQuestion: TvQuestion? = null
     private var isTestQuestion = false
     private var failedAttempts = 0
@@ -415,6 +421,8 @@ class QuestionOverlayService : Service() {
                 if (result.settingsChanged) QuestionAlarmReceiver.scheduleForCurrentState(applicationContext)
             }
         }
+        if (currentMode == MODE_REWARD_CHALLENGE && canChallengeForRewards() &&
+            DeviceBinding.bindingId(this) == rewardChallengeBinding) return
         renderLock(MODE_DAILY_LOCK)
     }
 
@@ -447,7 +455,12 @@ class QuestionOverlayService : Service() {
         handler.removeCallbacks(lockTicker)
         handler.removeCallbacks(pinCooldown)
         removeOverlay()
-        if (currentMode != mode) failedAttempts = 0
+        if (currentMode != mode) {
+            failedAttempts = 0
+            rewardOfferDismissed = false
+        }
+        rewardOfferMillis = if (mode == MODE_DAILY_LOCK) ControlState.rewardOfferMillis(this) else 0L
+        rewardChallengeOffered = mode == MODE_DAILY_LOCK && canChallengeForRewards()
         currentMode = mode
         isTestQuestion = false
         answerSubmitted = true
@@ -464,6 +477,7 @@ class QuestionOverlayService : Service() {
             else setPadding(dp(48), dp(32), dp(48), dp(32))
             setOnKeyListener { _, _, _ -> true }
         }
+        var rewardFocus: View? = null
         if (mode == MODE_WRONG_LOCK) {
             val status = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -497,11 +511,16 @@ class QuestionOverlayService : Service() {
             addLockPoem(root)
         } else {
             val message = TextView(this).apply {
-                text = if (mode == MODE_DAILY_LOCK) {
-                    "Today's allowance is used. Access returns tomorrow."
-                } else "Try again during an allowed time window."
+                text = when {
+                    mode == MODE_USAGE_WINDOW -> "Try again during an allowed time window."
+                    rewardOfferMillis > 0L && !rewardOfferDismissed ->
+                        "Use reward time?\n${ControlState.rewardTimeLabel(rewardOfferMillis)} available today."
+                    rewardOfferMillis > 0L -> "TV is paused. You can still use reward time today."
+                    rewardChallengeOffered -> "Answer a hard question to earn reward time."
+                    else -> "Today's allowance is used. Access returns tomorrow."
+                }
                 setTextColor(Color.WHITE)
-                textSize = 38f
+                textSize = 32f
                 gravity = Gravity.CENTER
                 setPadding(0, dp(35), 0, dp(20))
             }
@@ -516,12 +535,237 @@ class QuestionOverlayService : Service() {
                 textSize = 18f
                 gravity = Gravity.CENTER
             }, matchParams())
-        } else {
+        } else if (mode == MODE_WRONG_LOCK) {
             addUnlockButton(root, mode)
+        } else if (rewardOfferMillis > 0L || rewardChallengeOffered) {
+            rewardFocus = addRewardChoices(root)
         }
         attachOverlay(root)
         updateLockCountdown()
-        unlockButton?.let { view -> root.post { view.requestFocus() } }
+        val focus = rewardFocus ?: unlockButton ?: root
+        root.post { focus.requestFocus() }
+    }
+
+    private fun addRewardChoices(root: LinearLayout): View {
+        val actions = LinearLayout(this).apply { gravity = Gravity.CENTER }
+        fun action(label: String, clicked: () -> Unit) = TextView(this).apply {
+            id = View.generateViewId()
+            text = label
+            textSize = 20f
+            gravity = Gravity.CENTER
+            setPadding(dp(22), 0, dp(22), 0)
+            isFocusable = true
+            isFocusableInTouchMode = true
+            isClickable = true
+            fun showFocus(focused: Boolean) {
+                setTextColor(if (focused) Color.rgb(20, 24, 25) else Color.WHITE)
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(10).toFloat()
+                    setColor(if (focused) Color.rgb(210, 239, 111) else Color.rgb(45, 58, 60))
+                }
+            }
+            showFocus(false)
+            setOnFocusChangeListener { _, focused -> showFocus(focused) }
+            setOnClickListener { clicked() }
+            // Back on a child must not dismiss the quota lock.
+            setOnKeyListener { _, keyCode, _ -> keyCode == KeyEvent.KEYCODE_BACK }
+        }
+        val buttons = mutableListOf<View>()
+        if (rewardOfferMillis > 0L) {
+            buttons += action("Use reward time") { useRewardTime() }
+        }
+        if (rewardChallengeOffered) {
+            buttons += action("Challenge a hard question") { openRewardChallenge() }
+        }
+        if (rewardOfferMillis > 0L && !rewardOfferDismissed) {
+            buttons += action("Not now") {
+                rewardOfferDismissed = true
+                renderLock(MODE_DAILY_LOCK, force = true)
+            }
+        }
+        buttons.forEachIndexed { index, button ->
+            actions.addView(button, LinearLayout.LayoutParams(-2, dp(52)).apply {
+                if (index > 0) marginStart = dp(16)
+            })
+            button.nextFocusLeftId = buttons.getOrElse(index - 1) { button }.id
+            button.nextFocusRightId = buttons.getOrElse(index + 1) { button }.id
+        }
+        root.addView(actions, matchParams())
+        return if (rewardOfferMillis > 0L && !rewardOfferDismissed) buttons.last() else buttons.first()
+    }
+
+    private fun canChallengeForRewards(): Boolean =
+        DeviceBinding.bindingId(this).isNotEmpty() && ControlState.canOfferRewards(this)
+
+    private fun useRewardTime() {
+        if (ControlState.activateRewardTime(this)) refreshBlockingState()
+        else renderLock(MODE_DAILY_LOCK, force = true)
+    }
+
+    private fun openRewardChallenge() {
+        if (!canChallengeForRewards()) return refreshBlockingState()
+        if (currentMode != MODE_REWARD_CHALLENGE) {
+            rewardChallengeBinding = DeviceBinding.bindingId(this)
+        }
+        requestRewardChallenge(pendingMessage = "Loading a hard question…", retry = ::openRewardChallenge) { response ->
+            val question = response.optJSONObject("question")
+            if (question == null) {
+                showRewardPanel("No hard questions are available right now.")
+            } else {
+                val options = question.getJSONArray("options")
+                val minutes = question.getInt("rewardMinutes")
+                val questionId = question.getString("id")
+                val choices = (0 until options.length()).map { index ->
+                    "${'A' + index}.  ${options.getString(index)}" to { submitRewardAnswer(questionId, index) }
+                }
+                showRewardPanel(question.getString("prompt"), "Win ${minuteLabel(minutes)}", choices)
+            }
+        }
+    }
+
+    private fun submitRewardAnswer(questionId: String, selectedIndex: Int) {
+        if (!canChallengeForRewards() || DeviceBinding.bindingId(this) != rewardChallengeBinding) {
+            return refreshBlockingState()
+        }
+        val answer = JSONObject().put("questionId", questionId).put("selectedIndex", selectedIndex)
+        requestRewardChallenge(answer, "Checking your answer…", { submitRewardAnswer(questionId, selectedIndex) }) { response ->
+            val minutes = response.getInt("earnedMinutes")
+            val available = ControlState.rewardOfferMillis(this)
+            val message = when {
+                !response.getBoolean("correct") -> "Incorrect. No reward time was earned."
+                available > 0L -> "Correct! ${minuteLabel(minutes)} added.\n${ControlState.rewardTimeLabel(available)} available today."
+                else -> "Correct! ${minuteLabel(minutes)} saved in your reward balance."
+            }
+            val actions = if (available > 0L) listOf("Use reward time" to ::useRewardTime) else emptyList()
+            showRewardPanel(message, actions = actions)
+        }
+    }
+
+    private fun requestRewardChallenge(
+        answer: JSONObject? = null,
+        pendingMessage: String,
+        retry: () -> Unit,
+        onSuccess: (JSONObject) -> Unit,
+    ) {
+        val pendingView = showRewardPanel(pendingMessage)
+        val context = applicationContext
+        val binding = rewardChallengeBinding
+        Thread {
+            val result = runCatching { RemoteSync.rewardChallenge(context, binding, answer) }
+            handler.post {
+                if (overlayView !== pendingView || DeviceBinding.bindingId(this) != binding) return@post
+                result.fold(onSuccess = { response ->
+                    when {
+                        response.optBoolean("unavailable") -> showRewardPanel("This reward challenge is no longer available.")
+                        !response.optBoolean("eligible", true) -> showRewardPanel("Today's usage could not be confirmed. Sync and try again.")
+                        else -> onSuccess(response)
+                    }
+                }, onFailure = {
+                    showRewardPanel("Could not connect. Check the connection and try again.", actions = listOf("Retry" to retry))
+                })
+            }
+        }.start()
+    }
+
+    private fun minuteLabel(minutes: Int): String = if (minutes == 1) "1 minute" else "$minutes minutes"
+
+    private fun returnToUsageLock() {
+        if (ControlState.isDailyLimitReached(this)) renderLock(MODE_DAILY_LOCK, force = true)
+        else refreshBlockingState()
+    }
+
+    private fun showRewardPanel(
+        message: String,
+        prize: String? = null,
+        actions: List<Pair<String, () -> Unit>> = emptyList(),
+    ): View {
+        handler.removeCallbacks(lockTicker)
+        removeOverlay()
+        currentMode = MODE_REWARD_CHALLENGE
+        val gold = Color.rgb(255, 213, 127)
+        val lavender = Color.rgb(238, 228, 255)
+        val root = createRoot().apply {
+            setPadding(dp(36), dp(18), dp(36), dp(18))
+            background = GradientDrawable().apply {
+                setColor(Color.rgb(40, 22, 65))
+                setStroke(dp(2), Color.rgb(164, 119, 215))
+                cornerRadius = dp(24).toFloat()
+            }
+        }
+        fun handleBack(key: Int, event: KeyEvent): Boolean {
+            if (key != KeyEvent.KEYCODE_BACK) return false
+            if (event.action == KeyEvent.ACTION_UP) returnToUsageLock()
+            return true
+        }
+        root.setOnKeyListener { _, key, event -> handleBack(key, event) }
+        fun label(copy: String, size: Float, color: Int) = TextView(this).apply {
+            text = copy
+            textSize = size
+            setTextColor(color)
+        }
+        root.addView(label("Reward challenge", 30f, gold).apply { setTypeface(null, Typeface.BOLD) }, matchParams())
+        if (prize != null) root.addView(label(prize, 19f, lavender), matchParams())
+        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val scroll = ScrollView(this).apply {
+            isFocusable = false
+            addView(body)
+        }
+        root.addView(scroll, weightedParams(1f))
+        body.addView(label(message, 24f, Color.WHITE).apply {
+            setPadding(0, dp(10), 0, dp(10))
+        }, matchParams())
+        fun button(copy: String, onClick: () -> Unit) = label(copy, 20f, lavender).apply {
+            id = View.generateViewId()
+            gravity = Gravity.CENTER_VERTICAL
+            minHeight = dp(48)
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            isFocusable = true
+            isClickable = true
+            fun paint(focused: Boolean) {
+                setTextColor(if (focused) Color.rgb(40, 22, 65) else lavender)
+                background = GradientDrawable().apply {
+                    setColor(if (focused) gold else Color.rgb(66, 43, 94))
+                    cornerRadius = dp(10).toFloat()
+                }
+            }
+            paint(false)
+            setOnFocusChangeListener { _, focused -> paint(focused) }
+            setOnKeyListener { _, key, event -> handleBack(key, event) }
+            setOnClickListener { onClick() }
+        }
+        val actionButtons = actions.map { (copy, onClick) -> button(copy, onClick) }
+        val back = button("Back to daily limit", ::returnToUsageLock)
+        root.addView(back, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) })
+        if (prize != null && actionButtons.size == 4) {
+            actionButtons.chunked(2).forEachIndexed { rowIndex, pair ->
+                val row = LinearLayout(this)
+                pair.forEachIndexed { column, option ->
+                    row.addView(option, LinearLayout.LayoutParams(0, -1, 1f).apply {
+                        if (column == 1) marginStart = dp(10)
+                    })
+                    option.nextFocusLeftId = pair[0].id
+                    option.nextFocusRightId = pair[1].id
+                    option.nextFocusUpId = actionButtons[column].id
+                    option.nextFocusDownId = if (rowIndex == 0) actionButtons[2 + column].id else back.id
+                }
+                body.addView(row, matchParams().apply { if (rowIndex == 0) bottomMargin = dp(6) })
+            }
+            back.nextFocusUpId = actionButtons[2].id
+        } else {
+            val controls = actionButtons + back
+            actionButtons.forEach { body.addView(it, matchParams().apply { bottomMargin = dp(6) }) }
+            controls.forEachIndexed { index, view ->
+                view.nextFocusUpId = controls.getOrElse(index - 1) { view }.id
+                view.nextFocusDownId = controls.getOrElse(index + 1) { view }.id
+            }
+        }
+        attachOverlay(root)
+        root.post {
+            (actionButtons.firstOrNull() ?: back).requestFocus()
+            scroll.scrollTo(0, 0)
+        }
+        handler.postDelayed(lockTicker, 1_000L)
+        return root
     }
 
     private fun addLockPoem(root: LinearLayout) {
@@ -748,7 +992,6 @@ class QuestionOverlayService : Service() {
                 pinCooldownUntil = 0L
                 when (mode) {
                     MODE_QUESTION -> skipChallenge()
-                    MODE_DAILY_LOCK -> unlockDailyLimit()
                     else -> unlockWrongLock()
                 }
             } else {
@@ -823,15 +1066,6 @@ class QuestionOverlayService : Service() {
         }
     }
 
-    private fun unlockDailyLimit() {
-        ControlState.clearQuestionTimeout(this)
-        currentQuestion = null
-        QuestionBank.finishChallenge(this, QuestionBank.STATUS_DAILY_LIMIT)
-        ControlState.grantPasswordExtension(this)
-        QuestionAlarmReceiver.scheduleNext(this)
-        hideOverlay()
-    }
-
     private fun unlockWrongLock() {
         QuestionBank.finishChallenge(this)
         ControlState.clearWrongAnswerLock(this)
@@ -864,6 +1098,12 @@ class QuestionOverlayService : Service() {
             handler.postDelayed(lockTicker, 1_000L)
             return
         }
+        if (currentMode == MODE_REWARD_CHALLENGE) {
+            if (!canChallengeForRewards() || DeviceBinding.bindingId(this) != rewardChallengeBinding) return returnToUsageLock()
+            handler.removeCallbacks(lockTicker)
+            handler.postDelayed(lockTicker, 1_000L)
+            return
+        }
         if (currentMode != MODE_DAILY_LOCK && currentMode != MODE_WRONG_LOCK && currentMode != MODE_USAGE_WINDOW) return
         if (currentMode == MODE_USAGE_WINDOW) {
             if (ControlState.isUsageWindowAllowed(this)) {
@@ -874,16 +1114,11 @@ class QuestionOverlayService : Service() {
             handler.postDelayed(lockTicker, 1_000L)
             return
         }
-        if (currentMode == MODE_DAILY_LOCK && !ControlState.isDailyLimitReached(this)) {
-            if (ControlState.lockoutUntil(this) > System.currentTimeMillis()) {
-                renderLock(MODE_WRONG_LOCK)
-            } else if (QuestionBank.isChallengeActive(this)) {
-                showQuestion()
-            } else {
-                QuestionAlarmReceiver.scheduleNext(this)
-                hideOverlay()
+        if (currentMode == MODE_DAILY_LOCK) {
+            if (!ControlState.isDailyLimitReached(this)) return refreshBlockingState()
+            if (rewardOfferMillis != ControlState.rewardOfferMillis(this) || rewardChallengeOffered != canChallengeForRewards()) {
+                return renderLock(MODE_DAILY_LOCK, force = true)
             }
-            return
         }
         if (currentMode == MODE_WRONG_LOCK) {
             val remaining = ControlState.lockoutUntil(this) - System.currentTimeMillis()
@@ -907,7 +1142,8 @@ class QuestionOverlayService : Service() {
             !ControlState.isUsageWindowAllowed(this) -> showUsageWindowLock()
             currentMode == MODE_QUESTION && overlayView != null -> Unit
             ControlState.lockoutUntil(this) > 0L -> showQuestion(trigger = QuestionBank.TRIGGER_LOCKOUT_RETRY)
-            currentMode == MODE_DAILY_LOCK || currentMode == MODE_WRONG_LOCK || currentMode == MODE_USAGE_WINDOW -> {
+            currentMode == MODE_DAILY_LOCK || currentMode == MODE_WRONG_LOCK || currentMode == MODE_USAGE_WINDOW ||
+                currentMode == MODE_REWARD_CHALLENGE -> {
                 if (QuestionBank.isChallengeActive(this)) {
                     showQuestion()
                 } else {
@@ -1086,6 +1322,7 @@ class QuestionOverlayService : Service() {
         private const val MODE_DAILY_LOCK = 2
         private const val MODE_WRONG_LOCK = 3
         private const val MODE_USAGE_WINDOW = 4
+        private const val MODE_REWARD_CHALLENGE = 5
         private const val MAX_PASSWORD_ATTEMPTS = 5
         private const val PASSWORD_COOLDOWN_MS = 30_000L
         private const val WRONG_ANSWER_FEEDBACK_MS = 5_000L

@@ -157,6 +157,107 @@ class AccountBindingTests(unittest.TestCase):
         with patch("server.time.time", return_value=new["expiresAt"] / 1000 + 1):
             self.assertEqual(self.request(self.bob, "/api/v1/admin/devices/preview", {"code": new["code"]})[0], 400)
 
+    def test_reward_grants_are_owned_persistent_and_spending_is_cumulative(self):
+        grant = "/api/v1/admin/rewards/grant"
+        usage = "/api/v1/device/usage"
+        now = server.datetime.now(server.timezone(server.timedelta(hours=8)))
+        first_day = now.date().isoformat()
+        second_day = (now.date() + server.timedelta(days=1)).isoformat()
+        minute = 60_000
+        self.bind(self.alice)
+        body = {"deviceId": "test-tv", "minutes": 45}
+        self.assertEqual(self.request(self.device, grant, body)[0], 401)
+        self.assertEqual(self.request(self.bob, grant, body)[0], 404)
+        for invalid in (0, True, 1.5, 1441):
+            self.assertEqual(self.request(self.alice, grant, {**body, "minutes": invalid})[0], 400)
+        self.assertEqual(self.request(self.alice, grant, body), (200, {"rewardBalanceMillis": 45 * minute}))
+        self.assertEqual(self.request(self.alice, grant, {**body, "minutes": 10}), (200, {"rewardBalanceMillis": 55 * minute}))
+        server.STORE = server.StateStore(self.path)
+
+        def state(day):
+            status, payload = self.request(self.device, f"/api/v1/device/state?date={day}", headers=self.headers)
+            self.assertEqual(status, 200)
+            return payload["rewardTime"]
+
+        self.assertEqual(state(first_day)["grantedMillis"], 55 * minute)
+        report = {"deviceId": "test-tv", "date": first_day, "usageMillis": 60 * minute, "utcOffsetMinutes": 480}
+        for spent in (30, 30, 20):
+            telemetry = {**report, "rewardTime": {"spentMillis": spent * minute, "usedTodayMillis": spent * minute}}
+            status, payload = self.request(self.device, usage, telemetry, self.headers)
+            self.assertEqual(status, 200)
+            self.assertEqual(payload["rewardTime"]["balanceMillis"], 25 * minute)
+        self.assertEqual(self.request(self.device, usage, {
+            **report, "rewardTime": {"spentMillis": 56 * minute, "usedTodayMillis": minute},
+        }, self.headers)[0], 400)
+
+        with patch.object(server.time, "time", return_value=now.timestamp()):
+            status, reset = self.request(self.alice, "/api/v1/admin/usage/reset", {"deviceId": "test-tv"})
+        self.assertEqual(status, 202)
+        self.assertEqual(reset["date"], first_day)
+        self.assertEqual(state(first_day)["usedTodayMillis"], 30 * minute)
+        self.assertEqual(state(second_day)["usedTodayMillis"], 0)
+        self.assertEqual(state(second_day)["balanceMillis"], 25 * minute)
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/devices")[1]["devices"][0]["rewardBalanceMillis"], 25 * minute)
+
+    def test_reward_challenges_have_separate_banks_and_grant_once_per_device(self):
+        bank = "/api/v1/admin/reward-questions"
+        challenge = "/api/v1/device/reward-challenge"
+        minute = server.MILLIS_PER_MINUTE
+        question = {"prompt": "What is 12 squared?", "options": ["144", "124", "122", "142"], "answer": "144"}
+        self.assertEqual(self.request(self.device, challenge)[0], 401)
+        self.bind(self.alice)
+        self.assertEqual(self.request(self.alice, bank, {**question, "rewardMinutes": True})[0], 400)
+        status, first = self.request(self.alice, bank, question)
+        self.assertEqual(status, 201)
+        self.assertEqual(first["rewardMinutes"], 10)
+        status, second = self.request(self.alice, bank, {**question, "prompt": "Another challenge", "rewardMinutes": 45})
+        self.assertEqual(status, 201)
+        first_answer = {"questionId": first["id"], "selectedIndex": 0}
+        second_answer = {"questionId": second["id"], "selectedIndex": 2}
+        self.assertEqual(self.request(self.bob, bank + "/" + first["id"], method="DELETE")[0], 404)
+        self.assertEqual(self.request(self.bob, "/api/v1/admin/state")[1]["rewardQuestions"], [])
+        device_state = self.request(self.device, "/api/v1/device/state", headers=self.headers)[1]
+        self.assertNotIn("rewardQuestions", device_state)
+        self.assertNotIn(first["id"], {q["id"] for q in device_state["questions"]})
+        self.assertEqual(self.request(self.device, challenge, first_answer, self.headers)[0], 409)
+
+        local_day = server.datetime.now(server.timezone.utc).date().isoformat()
+        report = {"deviceId": "test-tv", "date": local_day, "utcOffsetMinutes": 0, "usageMillis": 60 * minute}
+        self.assertEqual(self.request(self.device, "/api/v1/device/usage", report, self.headers)[0], 200)
+        status, offer = self.request(self.device, challenge, headers=self.headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(offer["question"], {key: first[key] for key in ("id", "prompt", "options", "rewardMinutes")})
+        self.assertEqual(self.request(self.device, challenge, {**first_answer, "selectedIndex": True}, self.headers)[0], 400)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            answers = list(executor.map(lambda _: self.request(build_opener(), challenge, first_answer, self.headers), range(2)))
+        self.assertEqual(answers[0], answers[1])
+        status, result = answers[0]
+        self.assertEqual(status, 200)
+        self.assertTrue(result["correct"])
+        self.assertEqual(result["earnedMinutes"], 10)
+        self.assertEqual(result["rewardTime"]["balanceMillis"], 10 * minute)
+        self.assertEqual(result["rewardTime"]["usedTodayMillis"], 0)
+        self.assertEqual(self.request(self.device, challenge, headers=self.headers)[1]["question"]["id"], second["id"])
+        status, wrong = self.request(self.device, challenge, second_answer, self.headers)
+        self.assertEqual(status, 200)
+        self.assertFalse(wrong["correct"])
+        self.assertEqual(wrong["earnedMinutes"], 0)
+        self.assertEqual(self.request(self.device, challenge, {**second_answer, "selectedIndex": 0}, self.headers), (200, wrong))
+        self.assertEqual(self.request(self.device, challenge, headers=self.headers), (200, {"eligible": True, "question": None}))
+        self.assertEqual(self.request(self.alice, bank + "/" + first["id"], method="DELETE")[0], 200)
+        server.STORE = server.StateStore(self.path)
+        self.assertEqual(self.request(self.device, challenge, first_answer, self.headers), (200, result))
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/devices")[1]["devices"][0]["rewardBalanceMillis"], 10 * minute)
+
+    def test_reward_limit_defaults_can_be_disabled_and_validates_integer_bounds(self):
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/state")[1]["settings"]["dailyRewardLimitMinutes"], 30)
+        for invalid in (-1, 1441, True, "30", 1.5):
+            self.assertEqual(self.request(self.alice, "/api/v1/admin/settings", {"dailyRewardLimitMinutes": invalid})[0], 400)
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/settings", {"dailyRewardLimitMinutes": 0})[0], 200)
+        self.bind(self.alice)
+        _, state = self.request(self.device, "/api/v1/device/state", headers=self.headers)
+        self.assertEqual(state["settings"]["dailyRewardLimitMinutes"], 0)
+
     def test_accounts_isolate_settings_questions_records_commands_and_devices(self):
         self.bind(self.alice)
         _, state = self.request(self.alice, "/api/v1/admin/state")

@@ -37,13 +37,14 @@ class MainActivity : Activity() {
             statusHandler.postDelayed(this, STATUS_REFRESH_INTERVAL_MS)
         }
     }
-    private val syncCompletedReceiver = object : BroadcastReceiver() {
+    private val dashboardReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             refreshStatus()
         }
     }
-    private var syncReceiverRegistered = false
+    private var dashboardReceiverRegistered = false
     private lateinit var usageStatus: TextView
+    private lateinit var rewardStatus: TextView
     private lateinit var settingsStatus: TextView
     private lateinit var syncStatus: TextView
     private lateinit var permissionStatus: TextView
@@ -51,6 +52,7 @@ class MainActivity : Activity() {
     private lateinit var adminStatus: TextView
     private lateinit var usageProgress: ProgressBar
     private lateinit var syncButton: Button
+    private lateinit var timingPauseButton: Button
     private var startupQuestionPending = false
     private var remoteButtonStatus: TextView? = null
     private var bindingDialog: Dialog? = null
@@ -80,7 +82,7 @@ class MainActivity : Activity() {
                 View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
             )
         setContentView(buildContent())
-        registerSyncReceiver()
+        registerDashboardReceiver()
         startUsageTracking()
         QuestionAlarmReceiver.ensureScheduled(this)
         startupQuestionPending = ControlState.showQuestionOnStartup(this)
@@ -91,7 +93,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         refreshRemoteButtonStatus()
-        registerSyncReceiver()
+        registerDashboardReceiver()
         statusHandler.removeCallbacks(statusRefresh)
         statusRefresh.run()
         if (bindingDialog?.isShowing == true) bindingPoll.run()
@@ -104,26 +106,28 @@ class MainActivity : Activity() {
     override fun onPause() {
         statusHandler.removeCallbacks(statusRefresh)
         statusHandler.removeCallbacks(bindingPoll)
-        unregisterSyncReceiver()
+        unregisterDashboardReceiver()
         super.onPause()
     }
 
-    private fun registerSyncReceiver() {
-        if (syncReceiverRegistered) return
-        val filter = IntentFilter(RemoteSync.ACTION_SYNC_COMPLETED)
+    private fun registerDashboardReceiver() {
+        if (dashboardReceiverRegistered) return
+        val filter = IntentFilter(RemoteSync.ACTION_SYNC_COMPLETED).apply {
+            addAction(UsageTrackingService.ACTION_TIMING_PAUSE_CHANGED)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(syncCompletedReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            registerReceiver(dashboardReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             @Suppress("DEPRECATION")
-            registerReceiver(syncCompletedReceiver, filter)
+            registerReceiver(dashboardReceiver, filter)
         }
-        syncReceiverRegistered = true
+        dashboardReceiverRegistered = true
     }
 
-    private fun unregisterSyncReceiver() {
-        if (!syncReceiverRegistered) return
-        unregisterReceiver(syncCompletedReceiver)
-        syncReceiverRegistered = false
+    private fun unregisterDashboardReceiver() {
+        if (!dashboardReceiverRegistered) return
+        unregisterReceiver(dashboardReceiver)
+        dashboardReceiverRegistered = false
     }
 
     private fun buildContent(): View {
@@ -176,6 +180,12 @@ class MainActivity : Activity() {
             progressBackgroundTintList = ColorStateList.valueOf(Color.rgb(45, 58, 60))
         }
         overview.addView(usageProgress, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(8)))
+        rewardStatus = statusText(17f).apply {
+            gravity = Gravity.START
+            setTextColor(Color.rgb(138, 205, 174))
+            setPadding(0, dp(14), 0, 0)
+        }
+        overview.addView(rewardStatus, matchStartParams())
         settingsStatus = statusText(17f).apply {
             gravity = Gravity.START
             setTextColor(Color.rgb(191, 203, 200))
@@ -202,7 +212,7 @@ class MainActivity : Activity() {
 
         val actionGrid = GridLayout(this).apply {
             columnCount = 2
-            rowCount = 2
+            rowCount = 3
             useDefaultMargins = false
             setPadding(0, dp(22), 0, 0)
         }
@@ -223,6 +233,15 @@ class MainActivity : Activity() {
                 setMargins(dp(5), dp(5), dp(5), dp(5))
             })
         }
+        timingPauseButton = menuButton("Pause timer", android.R.drawable.ic_media_pause) { changeTimingPause() }
+        actionGrid.addView(timingPauseButton, GridLayout.LayoutParams(
+            GridLayout.spec(2),
+            GridLayout.spec(0, 2, 1f),
+        ).apply {
+            width = 0
+            height = dp(58)
+            setMargins(dp(5), dp(5), dp(5), dp(5))
+        })
         controls.addView(actionGrid, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         syncStatus = statusText(15f).apply {
             gravity = Gravity.START
@@ -289,9 +308,17 @@ class MainActivity : Activity() {
     private fun matchStartParams() = centeredParams().apply { gravity = Gravity.START }
 
     private fun refreshStatus() {
+        val timingPaused = UsageTimingPause.isPaused(this)
+        timingPauseButton.text = if (timingPaused) "Resume timer" else "Pause timer"
+        timingPauseButton.setCompoundDrawablesWithIntrinsicBounds(
+            if (timingPaused) android.R.drawable.ic_media_play else android.R.drawable.ic_media_pause, 0, 0, 0,
+        )
         val settings = ControlState.settings(this)
         val dailyLimit = ControlState.todayDailyLimitMinutes(this)
         usageStatus.text = "${ControlState.todayUsageLabel(this)} / $dailyLimit min"
+        val balance = ControlState.rewardTimeLabel(ControlState.rewardBalanceMillis(this))
+        val available = ControlState.rewardTimeLabel(ControlState.rewardAvailableToday(this))
+        rewardStatus.text = "Reward balance · $balance\nAvailable today · $available"
         settingsStatus.text = "Question every ${settings.questionIntervalMinutes} min\nIncorrect-answer lock: ${settings.wrongLockMinutes} min\nSync every ${settings.syncIntervalMinutes} min · ${QuestionBank.all(this).size} questions"
         val dailyLimitMillis = dailyLimit * 60_000L + ControlState.tempExtension(this)
         usageProgress.progress = if (dailyLimitMillis > 0L) {
@@ -427,6 +454,28 @@ class MainActivity : Activity() {
             if (ControlState.verifyUnlockPassword(this, entered)) {
                 dialog.dismiss()
                 enterNewPassword()
+            } else {
+                hint.text = "Incorrect PIN. Try again."
+                pad.reset()
+            }
+        }
+    }
+
+    private fun changeTimingPause() {
+        val pause = !UsageTimingPause.isPaused(this)
+        val title = if (pause) "Pause timer" else "Resume timer"
+        val message = if (pause) {
+            "Enter your 6-direction parent PIN. Timing resumes when the TV is turned off and back on."
+        } else {
+            "Enter your 6-direction parent PIN to resume timing."
+        }
+        askPassword(title, message, true) { entered, pad, hint, dialog ->
+            if (ControlState.verifyUnlockPassword(this, entered)) {
+                dialog.dismiss()
+                val intent = Intent(this, UsageTrackingService::class.java)
+                    .setAction(UsageTrackingService.ACTION_SET_TIMING_PAUSED)
+                    .putExtra(UsageTrackingService.EXTRA_TIMING_PAUSED, pause)
+                startForegroundService(intent)
             } else {
                 hint.text = "Incorrect PIN. Try again."
                 pad.reset()

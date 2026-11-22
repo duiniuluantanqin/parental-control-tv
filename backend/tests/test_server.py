@@ -960,6 +960,7 @@ class AdminApiTests(unittest.TestCase):
             "questionIntervalMinutes": 12,
             "wrongLockMinutes": 10,
             "syncIntervalMinutes": 3,
+            "dailyRewardLimitMinutes": 25,
         }
         status, body = self.request("/api/v1/admin/settings", method="POST", body=settings)
         self.assertEqual(status, 200)

@@ -23,6 +23,9 @@ const weekdays = [
   ["5", "周五"], ["6", "周六"], ["7", "周日"],
 ];
 let questions = [];
+let rewardQuestions = [];
+let rewardQuestionForm = false;
+const questionTypeFilter = document.querySelector("#questionTypeFilter");
 let poemHistory = [];
 let aiQuestions = [];
 let refillTimer;
@@ -70,7 +73,7 @@ async function api(path, options = {}) {
 
 function renderCategories() {
   const selected = categoryFilter.value;
-  const categories = [...new Set(questions.map(question => question.category))].sort((a, b) => a.localeCompare(b, "zh-CN"));
+  const categories = [...new Set([...questions, ...rewardQuestions].map(question => question.category))].sort((a, b) => a.localeCompare(b, "zh-CN"));
   categoryFilter.replaceChildren(new Option("全部类别", ""));
   for (const category of categories) categoryFilter.add(new Option(category, category));
   categoryFilter.value = categories.includes(selected) ? selected : "";
@@ -82,12 +85,14 @@ function renderCategories() {
 
 function renderQuestions() {
   const query = document.querySelector("#questionSearch").value.trim().toLowerCase();
-  const filtered = questions.filter(question =>
-    (!categoryFilter.value || question.category === categoryFilter.value)
+  const bank = [...questions, ...rewardQuestions];
+  const filtered = bank.filter(question =>
+    (!questionTypeFilter.value || questionTypeFilter.value === (question.rewardMinutes ? "reward" : "regular"))
+    && (!categoryFilter.value || question.category === categoryFilter.value)
     && (!query || [question.prompt, question.answer, ...question.options].join(" ").toLowerCase().includes(query))
   );
-  document.querySelector("#questionCount").textContent = String(questions.length);
-  document.querySelector("#questionResults").textContent = `显示 ${filtered.length} / ${questions.length} 道`;
+  document.querySelector("#questionCount").textContent = String(bank.length);
+  document.querySelector("#questionResults").textContent = `显示 ${filtered.length} / ${bank.length} 道`;
   rows.replaceChildren();
   if (!filtered.length) {
     const tr = document.createElement("tr");
@@ -117,6 +122,12 @@ function renderQuestions() {
         badge.className = "category-badge";
         badge.textContent = value;
         td.append(badge);
+        if (question.rewardMinutes) {
+          const reward = document.createElement("span");
+          reward.className = "category-badge reward-question-badge";
+          reward.textContent = `奖励难题 · ${question.rewardMinutes} 分钟`;
+          td.append(reward);
+        }
       } else {
         td.textContent = value;
       }
@@ -126,20 +137,23 @@ function renderQuestions() {
     action.dataset.label = "操作";
     const actions = document.createElement("div");
     actions.className = "question-actions";
-    const priorityLabel = document.createElement("label");
-    priorityLabel.className = "question-priority";
-    const priority = document.createElement("input");
-    priority.type = "checkbox";
-    priority.checked = Boolean(question.priority);
-    priority.setAttribute("aria-label", `优先出题：${question.prompt}`);
-    priorityLabel.append(priority, "优先");
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "delete-button";
     remove.textContent = "删除";
     remove.addEventListener("click", () => deleteQuestion(question, remove));
-    priority.addEventListener("change", () => setQuestionPriority(question, priority, remove));
-    actions.append(priorityLabel, remove);
+    if (!question.rewardMinutes) {
+      const priorityLabel = document.createElement("label");
+      priorityLabel.className = "question-priority";
+      const priority = document.createElement("input");
+      priority.type = "checkbox";
+      priority.checked = Boolean(question.priority);
+      priority.setAttribute("aria-label", `优先出题：${question.prompt}`);
+      priorityLabel.append(priority, "优先");
+      priority.addEventListener("change", () => setQuestionPriority(question, priority, remove));
+      actions.append(priorityLabel);
+    }
+    actions.append(remove);
     action.append(actions);
     tr.append(action);
     rows.append(tr);
@@ -147,7 +161,9 @@ function renderQuestions() {
 }
 
 function showQuestionDetail(question) {
-  document.querySelector("#questionDetailMeta").textContent = `类别：${question.category} · 难度：${question.difficulty}`;
+  document.querySelector("#questionDetailMeta").textContent = question.rewardMinutes
+    ? `奖励难题 · 答对奖励 ${question.rewardMinutes} 分钟 · 类别：${question.category}`
+    : `类别：${question.category} · 难度：${question.difficulty}`;
   document.querySelector("#questionDetailPrompt").textContent = question.prompt;
   const options = document.querySelector("#questionDetailOptions");
   options.replaceChildren();
@@ -328,19 +344,23 @@ async function loadState() {
   document.querySelector("#questionInterval").value = state.settings.questionIntervalMinutes;
   document.querySelector("#wrongLock").value = state.settings.wrongLockMinutes;
   document.querySelector("#syncInterval").value = state.settings.syncIntervalMinutes;
+  document.querySelector("#dailyRewardLimit").value = state.settings.dailyRewardLimitMinutes;
   if (page === "devices" && !isLoginPage) {
     const { devices: allDevices } = await api("/api/v1/admin/devices");
     const devices = allDevices.filter(device => device.bound);
     renderBoundDevices(devices);
-    const select = document.querySelector("#usageResetDevice");
-    const previous = select.value;
-    select.replaceChildren();
-    for (const device of devices) select.add(new Option(`${device.name} (${device.deviceId})`, device.deviceId));
-    if (devices.some(device => device.deviceId === previous)) select.value = previous;
-    if (!devices.length) select.add(new Option("暂无设备，请先输入电视绑定码", ""));
-    document.querySelector("#resetDeviceUsage").disabled = !devices.length;
+    for (const [selectId, buttonId] of [["usageResetDevice", "resetDeviceUsage"], ["rewardDevice", "grantReward"]]) {
+      const select = document.getElementById(selectId);
+      const previous = select.value;
+      select.replaceChildren();
+      for (const device of devices) select.add(new Option(`${device.name} (${device.deviceId})`, device.deviceId));
+      if (devices.some(device => device.deviceId === previous)) select.value = previous;
+      if (!devices.length) select.add(new Option("暂无设备，请先输入电视绑定码", ""));
+      document.getElementById(buttonId).disabled = !devices.length;
+    }
   }
   questions = state.questions;
+  rewardQuestions = state.rewardQuestions || [];
   renderCategories();
   renderQuestions();
   if (page === "poems" && !isLoginPage) await loadPoemHistory();
@@ -385,7 +405,12 @@ function renderRecords(records) {
     row.append(device);
     const total = document.createElement("td");
     total.className = "usage-total-cell";
-    total.textContent = `${(record.usageMillis / 60_000).toFixed(1)} 分钟`;
+    total.textContent = `常规 ${formatMinutes(record.usageMillis)}`;
+    if (record.rewardUsedMillis > 0) {
+      const reward = document.createElement("small");
+      reward.textContent = `奖励 ${formatMinutes(record.rewardUsedMillis)}`;
+      total.append(reward);
+    }
     row.append(total);
     const reported = document.createElement("td");
     reported.className = "usage-report-cell";
@@ -552,7 +577,7 @@ function showUsageDetails(record, deviceName) {
   rows.replaceChildren();
   const intervals = record.intervals || [];
   document.querySelector("#usageDetailTitle").textContent = `${deviceName} · 使用明细`;
-  document.querySelector("#usageDetailSubtitle").textContent = `${record.date} · 累计 ${(record.usageMillis / 60_000).toFixed(1)} 分钟 · ${intervals.length} 个连续时段`;
+  document.querySelector("#usageDetailSubtitle").textContent = `${record.date} · 常规 ${formatMinutes(record.usageMillis)} · ${intervals.length} 个连续时段`;
   for (const interval of intervals) {
     const start = new Date(interval.start);
     const end = new Date(interval.end);
@@ -618,6 +643,10 @@ function shiftRecordsDate(days) {
   loadRecords().catch(handleError);
 }
 
+function formatMinutes(millis = 0) {
+  return `${(millis / 60_000).toFixed(1)} 分钟`;
+}
+
 function renderBoundDevices(devices) {
   const container = document.querySelector("#boundDevices");
   container.replaceChildren();
@@ -625,7 +654,7 @@ function renderBoundDevices(devices) {
     const row = document.createElement("div");
     row.className = "bound-device";
     const name = document.createElement("span");
-    name.textContent = `${device.name} · ${device.deviceId}`;
+    name.textContent = `${device.name} · ${device.deviceId} · 奖励余额 ${formatMinutes(device.rewardBalanceMillis)}`;
     const button = document.createElement("button");
     button.type = "button";
     button.className = "button caution";
@@ -760,6 +789,7 @@ async function saveSettings(event) {
     questionIntervalMinutes: Number(document.querySelector("#questionInterval").value),
     wrongLockMinutes: Number(document.querySelector("#wrongLock").value),
     syncIntervalMinutes: Number(document.querySelector("#syncInterval").value),
+    dailyRewardLimitMinutes: document.querySelector("#dailyRewardLimit").valueAsNumber,
   };
   button.disabled = true;
   try {
@@ -791,7 +821,9 @@ async function addQuestion(event) {
   button.disabled = true;
   document.querySelector("#questionNotice").textContent = "";
   try {
-    await api("/api/v1/admin/questions", { method: "POST", body: JSON.stringify(question) });
+    const bank = rewardQuestionForm ? "reward-questions" : "questions";
+    if (rewardQuestionForm) question.rewardMinutes = document.querySelector("#challengeRewardMinutes").valueAsNumber;
+    await api(`/api/v1/admin/${bank}`, { method: "POST", body: JSON.stringify(question) });
     questionDialog.close();
     await loadState();
     setNotice("题目已添加");
@@ -971,7 +1003,8 @@ async function deleteQuestion(question, button) {
   if (!window.confirm(`删除题目“${question.prompt}”？`)) return;
   button.disabled = true;
   try {
-    await api(`/api/v1/admin/questions/${encodeURIComponent(question.id)}`, { method: "DELETE" });
+    const bank = question.rewardMinutes ? "reward-questions" : "questions";
+    await api(`/api/v1/admin/${bank}/${encodeURIComponent(question.id)}`, { method: "DELETE" });
     await loadState();
     if (questions.length) setNotice("题目已删除");
   } catch (error) {
@@ -1072,6 +1105,30 @@ document.querySelector("#resetDevicePin").addEventListener("click", async () => 
     button.disabled = false;
   }
 });
+document.querySelector("#rewardGrantForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  const select = document.querySelector("#rewardDevice");
+  const input = document.querySelector("#rewardMinutes");
+  const button = document.querySelector("#grantReward");
+  if (!select.value || button.disabled) return;
+  const deviceId = select.value;
+  const name = select.selectedOptions[0].textContent;
+  const minutes = input.valueAsNumber;
+  if (!window.confirm(`为 ${name} 发放 ${minutes} 分钟奖励时长？`)) return;
+  button.disabled = true;
+  try {
+    const { rewardBalanceMillis } = await api("/api/v1/admin/rewards/grant", {
+      method: "POST", body: JSON.stringify({ deviceId, minutes }),
+    });
+    input.value = "";
+    document.querySelector("#rewardGrantStatus").textContent = `已发放 ${minutes} 分钟，余额 ${formatMinutes(rewardBalanceMillis)}。`;
+    await loadState();
+  } catch (error) {
+    handleError(error);
+  } finally {
+    button.disabled = !select.value;
+  }
+});
 document.querySelector("#resetDeviceUsage").addEventListener("click", async () => {
   const select = document.querySelector("#usageResetDevice");
   if (!select.value) return;
@@ -1098,12 +1155,18 @@ document.querySelector("#logoutButton").addEventListener("click", async () => {
     handleError(error);
   }
 });
-document.querySelector("#addQuestionButton").addEventListener("click", () => {
+function openQuestionForm(reward) {
+  rewardQuestionForm = reward;
   questionForm.reset();
+  document.querySelector("#questionDialogTitle").textContent = reward ? "添加奖励难题" : "添加题目";
+  document.querySelector("#rewardMinutesField").hidden = !reward;
+  document.querySelector("#challengeRewardMinutes").disabled = !reward;
   document.querySelector("#questionNotice").textContent = "";
   questionDialog.showModal();
   document.querySelector("#promptInput").focus();
-});
+}
+document.querySelector("#addQuestionButton").addEventListener("click", () => openQuestionForm(false));
+document.querySelector("#addRewardQuestionButton").addEventListener("click", () => openQuestionForm(true));
 for (const id of ["closeQuestionDialog", "cancelQuestion"]) {
   document.getElementById(id).addEventListener("click", () => questionDialog.close());
 }
@@ -1115,7 +1178,9 @@ for (const dialog of [questionDialog, questionDetailDialog]) {
     }
   });
 }
-questionDialog.addEventListener("close", () => document.querySelector("#addQuestionButton").focus());
+questionDialog.addEventListener("close", () => {
+  document.querySelector(rewardQuestionForm ? "#addRewardQuestionButton" : "#addQuestionButton").focus();
+});
 questionForm.addEventListener("submit", addQuestion);
 
 for (const id of ["closeQuestionDetail", "dismissQuestionDetail"]) {
@@ -1136,6 +1201,7 @@ document.querySelector("#aiGenerationForm").addEventListener("submit", generateA
 aiCategoryInput.addEventListener("change", updateAiCategoryFields);
 document.querySelector("#importAiQuestions").addEventListener("click", importAiQuestions);
 categoryFilter.addEventListener("change", renderQuestions);
+questionTypeFilter.addEventListener("change", renderQuestions);
 document.querySelector("#questionSearch").addEventListener("input", renderQuestions);
 document.querySelector("#poemSearch").addEventListener("input", renderPoemHistory);
 document.querySelector("#refreshPoems").addEventListener("click", () => loadPoemHistory().catch(handleError));

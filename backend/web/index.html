@@ -75,6 +75,7 @@
         <div class="settings-grid">
           <label for="questionInterval">答题间隔 <span class="input-with-unit"><input id="questionInterval" type="number" min="1" max="240" value="10" required><span>分钟</span></span><small>观看多久后进入下一次五题答题</small></label>
           <label for="wrongLock">答错锁定 <span class="input-with-unit"><input id="wrongLock" type="number" min="1" max="1440" value="10" required><span>分钟</span></span><small>本轮答题未通过时，需要等待的时长</small></label>
+          <label for="dailyRewardLimit">每日奖励上限 <span class="input-with-unit"><input id="dailyRewardLimit" type="number" min="0" max="1440" value="30" required><span>分钟</span></span><small>每台电视每天可用的奖励时长，设为 0 则暂停使用奖励余额</small></label>
           <label for="syncInterval">同步间隔 <span class="input-with-unit"><input id="syncInterval" type="number" min="1" max="60" value="5" required><span>分钟</span></span><small>电视获取规则与题目的间隔</small></label>
         </div>
         </section>
@@ -108,6 +109,14 @@
         <div id="boundDevices" class="bound-devices"></div>
       </section>
       <div class="maintenance-grid">
+        <form id="rewardGrantForm" class="settings-panel maintenance-card" aria-labelledby="rewardGrantTitle">
+          <div class="card-heading"><h2 id="rewardGrantTitle">发放奖励时长</h2><p>奖励发放给所选电视。未用完的余额可留到以后使用。</p></div>
+          <div class="reset-device-field reward-grant-fields">
+            <label for="rewardDevice">选择设备</label><select id="rewardDevice" required><option value="">正在载入设备…</option></select>
+            <label for="rewardMinutes">奖励分钟数</label><input id="rewardMinutes" type="number" min="1" max="1440" step="1" required>
+          </div>
+          <div class="card-footer"><span id="rewardGrantStatus" role="status"></span><button id="grantReward" class="button primary" type="submit" disabled>发放奖励</button></div>
+        </form>
         <section class="settings-panel maintenance-card" aria-labelledby="usageResetTitle">
           <div class="card-heading"><span class="card-kicker">使用额度</span><h2 id="usageResetTitle">重置今日使用时长</h2><p>清零所选设备今天的计时和临时加时，恢复当天配置额度。允许时段和答题规则仍然生效。</p></div>
           <div class="reset-device-field"><label for="usageResetDevice">选择设备</label><select id="usageResetDevice"><option value="">正在载入设备…</option></select></div>
@@ -125,8 +134,9 @@
     <section id="questionsPage" aria-labelledby="questionsTitle" hidden>
       <div class="section-heading">
         <div><span class="page-eyebrow">内容管理</span><h1 id="questionsTitle">题库管理 <span id="questionCount" class="count">0</span></h1><p>维护电视答题内容，点击题目查看完整选项与诗词原文。</p></div>
-        <div class="page-actions">
+        <div class="page-actions question-page-actions">
           <button id="addQuestionButton" class="button secondary" type="button"><span aria-hidden="true">＋</span> 添加题目</button>
+          <button id="addRewardQuestionButton" class="button secondary" type="button">＋ 添加奖励难题</button>
           <button id="aiQuestionButton" class="button primary" type="button">AI 出题</button>
         </div>
       </div>
@@ -136,6 +146,8 @@
         <div class="filters">
           <label class="sr-only" for="questionSearch">搜索题目、选项或答案</label>
           <input id="questionSearch" type="search" placeholder="搜索题目、选项或答案">
+          <label class="sr-only" for="questionTypeFilter">筛选题型</label>
+          <select id="questionTypeFilter"><option value="">全部题型</option><option value="regular">普通题</option><option value="reward">奖励难题</option></select>
           <label class="sr-only" for="categoryFilter">筛选类别</label>
           <select id="categoryFilter"><option value="">全部类别</option></select>
         </div>
@@ -189,7 +201,7 @@
           <button id="refreshRecords" class="button secondary" type="button">刷新</button>
         </div>
       <section class="records-section" aria-labelledby="usageRecordsTitle">
-        <div class="records-section-heading"><div><h2 id="usageRecordsTitle">每日使用时长</h2><p>点击详情，查看每个连续观看时段。</p></div></div>
+        <div class="records-section-heading"><div><h2 id="usageRecordsTitle">每日使用时长</h2><p>常规和奖励时长分别显示。点击详情可查看常规观看时段。</p></div></div>
         <div class="table-wrap">
           <table class="usage-record-table">
             <colgroup><col class="usage-col-device"><col class="usage-col-total"><col class="usage-col-report"><col class="usage-col-action"></colgroup>
@@ -230,6 +242,10 @@
         <label for="categoryInput">类别<select id="categoryInput" required><option value="其他" selected>其他</option></select></label>
         <label for="difficultyInput">难度<select id="difficultyInput"><option value="低">低</option><option value="中" selected>中</option><option value="高">高</option></select></label>
       </div>
+      <label id="rewardMinutesField" for="challengeRewardMinutes" hidden>答对奖励（分钟）
+        <input id="challengeRewardMinutes" type="number" min="1" max="1440" step="1" value="10" disabled required>
+        <small class="muted">电视达到每日限额后可挑战，每台电视每题只能作答一次。</small>
+      </label>
       <div class="options-fields">
         <label>A<input class="option-input" maxlength="120" required></label>
         <label>B<input class="option-input" maxlength="120" required></label>

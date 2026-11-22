@@ -25,6 +25,7 @@ import android.view.WindowManager
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import java.io.FileDescriptor
 import java.io.PrintWriter
 
@@ -39,6 +40,7 @@ class UsageTrackingService : Service() {
     private var networkCallbackRegistered = false
     private val wasInteractive get() = usageSamples.interactive
     private val overlayPaused get() = usageSamples.overlayPaused
+    private val timingPaused get() = usageSamples.timingPaused
     private var receiverRegistered = false
     private var lastEnforcementAction: String? = null
     private var reminderView: LinearLayout? = null
@@ -71,7 +73,12 @@ class UsageTrackingService : Service() {
                 Intent.ACTION_SCREEN_OFF, Intent.ACTION_SHUTDOWN -> false
                 else -> powerManager().isInteractive
             }
-            accountElapsedTime(interactive = interactive)
+            if (!interactive && timingPaused) {
+                // A TV power-off can be standby without a new Android boot.
+                setTimingPause(paused = false, interactive = false)
+            } else {
+                accountElapsedTime(interactive = interactive)
+            }
             if (intent?.action == Intent.ACTION_SHUTDOWN) {
                 QuestionBank.finishForReboot(this@UsageTrackingService, shuttingDown = true)
                 return
@@ -100,10 +107,14 @@ class UsageTrackingService : Service() {
         startForeground(NOTIFICATION_ID, buildNotification())
         isRunning = true
         usageBindingId = DeviceBinding.bindingId(this)
+        val interactive = powerManager().isInteractive
+        val storedPause = UsageTimingPause.isPaused(this)
+        if (storedPause && !interactive) UsageTimingPause.setPaused(this, false)
         usageSamples.start(
             SystemClock.elapsedRealtime(),
-            powerManager().isInteractive,
+            interactive,
             QuestionOverlayService.isRunning && ControlState.isQuestionOverlayActive(this),
+            timingPaused = interactive && storedPause,
         )
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
@@ -130,6 +141,13 @@ class UsageTrackingService : Service() {
                 interactive = powerManager().isInteractive,
                 paused = intent.getBooleanExtra(EXTRA_OVERLAY_PAUSED, false),
             )
+            refreshTrackedState()
+        } else if (intent?.action == ACTION_SET_TIMING_PAUSED) {
+            val interactive = powerManager().isInteractive
+            val paused = interactive && intent.getBooleanExtra(EXTRA_TIMING_PAUSED, false)
+            if (!setTimingPause(paused, interactive)) {
+                Toast.makeText(this, "Could not change the timer state.", Toast.LENGTH_SHORT).show()
+            }
             refreshTrackedState()
         } else if (intent?.action == ACTION_REFRESH_DISPLAY) {
             accountElapsedTime(interactive = powerManager().isInteractive)
@@ -161,20 +179,31 @@ class UsageTrackingService : Service() {
 
     override fun dump(fd: FileDescriptor?, writer: PrintWriter, args: Array<out String>?) {
         writer.println("Usage tracking: running=$isRunning lastSampleElapsed=${usageSamples.lastElapsed}")
-        writer.println("interactive=$wasInteractive overlayPaused=$overlayPaused")
+        writer.println("interactive=$wasInteractive overlayPaused=$overlayPaused timingPaused=$timingPaused")
         writer.println("usageDay=${ControlState.usageReportSnapshot(this).getString("date")} usedMillis=${ControlState.usedMillis(this)} clockDay=${DailyUsageLedger.localDay(System.currentTimeMillis())}")
     }
 
-    private fun accountElapsedTime(interactive: Boolean = wasInteractive, paused: Boolean = overlayPaused) {
+    private fun setTimingPause(paused: Boolean, interactive: Boolean): Boolean {
+        val saved = UsageTimingPause.setPaused(this, paused)
+        accountElapsedTime(interactive = interactive, timingPaused = UsageTimingPause.isPaused(this))
+        sendBroadcast(Intent(ACTION_TIMING_PAUSE_CHANGED).setPackage(packageName))
+        return saved
+    }
+
+    private fun accountElapsedTime(
+        interactive: Boolean = wasInteractive,
+        paused: Boolean = overlayPaused,
+        timingPaused: Boolean = this.timingPaused,
+    ) {
         val now = SystemClock.elapsedRealtime()
         val bindingId = DeviceBinding.bindingId(this)
         if (bindingId != usageBindingId) {
             usageBindingId = bindingId
-            usageSamples.start(now, interactive, paused)
+            usageSamples.start(now, interactive, paused, timingPaused)
             return
         }
-        val elapsed = usageSamples.sample(now, interactive, paused)
-        if (elapsed > 0L) ControlState.addScreenTime(this, elapsed)
+        val elapsed = usageSamples.sample(now, interactive, paused, timingPaused)
+        if (elapsed > 0L && ControlState.addScreenTime(this, elapsed)) reportUsageIfDue(force = true)
     }
 
     private fun updateEnforcement() {
@@ -195,9 +224,8 @@ class UsageTrackingService : Service() {
     }
 
     private fun updateNotification() {
-        val notification = buildNotification(
-            "Used today: ${ControlState.todayUsageLabel(this)} / ${ControlState.todayDailyLimitMinutes(this)} min",
-        )
+        val used = "Used today: ${ControlState.todayUsageLabel(this)} / ${ControlState.todayDailyLimitMinutes(this)} min"
+        val notification = buildNotification(if (timingPaused) "Timer paused · $used" else used)
         // Keep notification updates tied to foreground status, including after recovery.
         startForeground(NOTIFICATION_ID, notification)
     }
@@ -227,7 +255,8 @@ class UsageTrackingService : Service() {
     private fun maybeShowUsageReminder() {
         val remaining = ControlState.remainingDailyMillis(this)
         if (!canShowUsageReminder() ||
-            (!ControlState.alwaysShowRemainingTime(this) && remaining > TEN_MINUTE_THRESHOLD_MS && !overlayPaused)
+            (!timingPaused && !ControlState.alwaysShowRemainingTime(this) &&
+                remaining > TEN_MINUTE_THRESHOLD_MS && !overlayPaused)
         ) {
             hideUsageReminder()
             return
@@ -260,12 +289,16 @@ class UsageTrackingService : Service() {
             reminder
         }
         if (reminderView !== view) return
-        val text = if (remaining <= ONE_MINUTE_THRESHOLD_MS) {
-            val seconds = (remaining + ONE_SECOND_MS - 1L) / ONE_SECOND_MS
-            "${seconds}s"
-        } else {
-            val minutes = (remaining + MILLIS_PER_MINUTE - 1L) / MILLIS_PER_MINUTE
-            "${minutes}m"
+        val text = when {
+            timingPaused -> "Timer paused"
+            remaining <= ONE_MINUTE_THRESHOLD_MS -> {
+                val seconds = (remaining + ONE_SECOND_MS - 1L) / ONE_SECOND_MS
+                "${seconds}s"
+            }
+            else -> {
+                val minutes = (remaining + MILLIS_PER_MINUTE - 1L) / MILLIS_PER_MINUTE
+                "${minutes}m"
+            }
         }
         reminderText?.text = text
     }
@@ -406,6 +439,9 @@ class UsageTrackingService : Service() {
         const val ACTION_REFRESH_DISPLAY = "com.example.tvparental.action.REFRESH_USAGE_DISPLAY"
         const val ACTION_SET_OVERLAY_PAUSED = "com.example.tvparental.action.SET_OVERLAY_PAUSED"
         const val EXTRA_OVERLAY_PAUSED = "overlay_paused"
+        const val ACTION_SET_TIMING_PAUSED = "com.example.tvparental.action.SET_TIMING_PAUSED"
+        const val ACTION_TIMING_PAUSE_CHANGED = "com.example.tvparental.action.TIMING_PAUSE_CHANGED"
+        const val EXTRA_TIMING_PAUSED = "timing_paused"
         private const val CHANNEL_ID = "usage_tracking"
         private const val NOTIFICATION_ID = 1002
         private const val SAMPLE_INTERVAL_MS = 10_000L

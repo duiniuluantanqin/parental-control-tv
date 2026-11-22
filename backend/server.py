@@ -45,6 +45,8 @@ SESSION_COOKIE = "tvparental_session"
 PASSWORD_ITERATIONS = 600_000
 BACKEND_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 DEVICE_ONLINE_SECONDS = 180
+MILLIS_PER_MINUTE = 60_000
+MAX_REWARD_GRANT_MINUTES = 1440
 
 WEEKDAYS = tuple(str(day) for day in range(1, 8))
 DEFAULT_SETTINGS = {
@@ -54,6 +56,7 @@ DEFAULT_SETTINGS = {
     "questionIntervalMinutes": 10,
     "wrongLockMinutes": 10,
     "syncIntervalMinutes": 5,
+    "dailyRewardLimitMinutes": 30,
 }
 
 
@@ -94,6 +97,10 @@ def validate_settings(value: object) -> dict[str, object]:
         if isinstance(number, bool) or not isinstance(number, int) or not minimum <= number <= maximum:
             raise ValueError(f"{name} 必须是 {minimum} 到 {maximum} 之间的整数")
         result[name] = number
+    reward_limit = value.get("dailyRewardLimitMinutes", DEFAULT_SETTINGS["dailyRewardLimitMinutes"])
+    if type(reward_limit) is not int or not 0 <= reward_limit <= 1440:
+        raise ValueError("每日奖励时长上限必须是 0 到 1440 之间的整数")
+    result["dailyRewardLimitMinutes"] = reward_limit
     return result
 
 
@@ -225,12 +232,38 @@ def default_state() -> dict[str, object]:
     return {
         "settings": dict(DEFAULT_SETTINGS),
         "questions": normalized,
+        "rewardQuestions": [],
         "passwordReset": None,
         "dailyUsage": [],
         "answerRecords": [],
         "challengeRecords": [],
         "devices": {},
     }
+
+
+def reward_snapshot(device: dict, record_date: str = "") -> dict:
+    granted = device.get("rewardGrantedMillis", 0)
+    spent = device.get("rewardSpentMillis", 0)
+    return {
+        "grantedMillis": granted,
+        "spentMillis": spent,
+        "usedTodayMillis": device.get("rewardUsageByDate", {}).get(record_date, 0),
+        "balanceMillis": granted - spent,
+        "date": record_date,
+    }
+
+
+def record_reward_usage(device: dict, record_date: str, report: object) -> None:
+    if not isinstance(report, dict):
+        raise ValueError("奖励时长上报格式无效")
+    spent, daily = report.get("spentMillis"), report.get("usedTodayMillis")
+    if (type(spent) is not int or not 0 <= spent <= device.get("rewardGrantedMillis", 0)
+            or type(daily) is not int or not 0 <= daily <= min(spent, 86_400_000)):
+        raise ValueError("奖励使用时长无效")
+    device["rewardSpentMillis"] = max(device.get("rewardSpentMillis", 0), spent)
+    if daily:
+        history = device.setdefault("rewardUsageByDate", {})
+        history[record_date] = max(history.get(record_date, 0), daily)
 
 
 class StateStore:
@@ -273,6 +306,9 @@ class StateStore:
                         "settings": json.loads(row[0]),
                         "passwordReset": json.loads(row[1]) if row[1] is not None else None,
                         "questions": [json.loads(item[0]) for item in connection.execute("SELECT payload FROM questions ORDER BY position")],
+                        "rewardQuestions": [json.loads(item[0]) for item in connection.execute(
+                            "SELECT payload FROM reward_questions ORDER BY position"
+                        )],
                         "dailyUsage": [
                             {
                                 "deviceId": item[0], "date": item[1], "usageMillis": item[2],
@@ -292,6 +328,7 @@ class StateStore:
             return {
                 "settings": validate_settings(state.get("settings", DEFAULT_SETTINGS)),
                 "questions": [validate_question(item) for item in state["questions"]],
+                "rewardQuestions": state.get("rewardQuestions", []),
                 "passwordReset": validate_password_reset(state.get("passwordReset")),
                 "dailyUsage": state.get("dailyUsage", []),
                 "answerRecords": state.get("answerRecords", []),
@@ -336,6 +373,72 @@ class StateStore:
             self.save(state)
             return command
 
+    def grant_reward(self, device_id: str, minutes: int) -> dict:
+        if type(minutes) is not int or not 1 <= minutes <= MAX_REWARD_GRANT_MINUTES:
+            raise ValueError("每次发放的奖励时长必须是 1 到 1440 之间的整数")
+        with self.lock:
+            state = self.load()
+            device = state["devices"].setdefault(device_id, {})
+            device["rewardGrantedMillis"] = device.get("rewardGrantedMillis", 0) + minutes * MILLIS_PER_MINUTE
+            self.save(state)
+            return reward_snapshot(device)
+
+    @staticmethod
+    def reward_challenge_day(device: dict) -> datetime | None:
+        offset = device.get("utcOffsetMinutes")
+        if type(offset) is not int or not -840 <= offset <= 840:
+            return None
+        return datetime.fromtimestamp(time.time(), timezone(timedelta(minutes=offset)))
+
+    @staticmethod
+    def reward_challenge_allowed(state: dict, device_id: str, local_time: datetime | None) -> bool:
+        if local_time is None:
+            return False
+        limit = state["settings"]["weeklyDailyLimitMinutes"][str(local_time.isoweekday())]
+        record_date = local_time.date().isoformat()
+        return limit > 0 and any(
+            record["deviceId"] == device_id and record["date"] == record_date
+            and record["usageMillis"] >= limit * MILLIS_PER_MINUTE
+            for record in state["dailyUsage"]
+        )
+
+    def next_reward_question(self, device_id: str) -> dict:
+        with self.lock:
+            state = self.load()
+            device = state["devices"].get(device_id, {})
+            if not self.reward_challenge_allowed(state, device_id, self.reward_challenge_day(device)):
+                return {"eligible": False, "question": None}
+            attempts = device.get("rewardQuestionAttempts", {})
+            question = next((item for item in state["rewardQuestions"] if item["id"] not in attempts), None)
+            return {"eligible": True, "question": {
+                key: question[key] for key in ("id", "prompt", "options", "rewardMinutes")
+            } if question else None}
+
+    def answer_reward_question(self, device_id: str, question_id: object, selected: object) -> tuple[int, dict]:
+        if not isinstance(question_id, str) or not 1 <= len(question_id) <= 80 or type(selected) is not int or not 0 <= selected < 4:
+            raise ValueError("无效的奖励难题答案")
+        with self.lock:
+            state = self.load()
+            device = state["devices"].get(device_id, {})
+            local_time = self.reward_challenge_day(device)
+            attempts = device.get("rewardQuestionAttempts", {})
+            result = attempts.get(question_id)
+            if result is None:
+                if not self.reward_challenge_allowed(state, device_id, local_time):
+                    return 409, {"error": "达到每日使用限额后才可挑战"}
+                question = next((item for item in state["rewardQuestions"] if item["id"] == question_id), None)
+                if question is None:
+                    return 404, {"error": "奖励难题已删除"}
+                correct = question["options"][selected] == question["answer"]
+                minutes = question["rewardMinutes"] if correct else 0
+                result = {"correct": correct, "earnedMinutes": minutes}
+                attempts[question_id] = result
+                device["rewardQuestionAttempts"] = attempts
+                device["rewardGrantedMillis"] = device.get("rewardGrantedMillis", 0) + minutes * MILLIS_PER_MINUTE
+                self.save(state)
+            record_date = local_time.date().isoformat() if local_time is not None else ""
+            return 200, {**result, "rewardTime": reward_snapshot(device, record_date)}
+
     @staticmethod
     def _create_schema(connection: sqlite3.Connection) -> None:
         connection.executescript("""
@@ -345,6 +448,11 @@ class StateStore:
                 password_reset TEXT
             );
             CREATE TABLE IF NOT EXISTS questions (
+                position INTEGER PRIMARY KEY,
+                question_id TEXT NOT NULL UNIQUE,
+                payload TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS reward_questions (
                 position INTEGER PRIMARY KEY,
                 question_id TEXT NOT NULL UNIQUE,
                 payload TEXT NOT NULL
@@ -445,11 +553,15 @@ class StateStore:
                 "INSERT OR REPLACE INTO app_state(id, settings, password_reset) VALUES (1, ?, ?)",
                 (encoded(state["settings"]), encoded(state["passwordReset"]) if state.get("passwordReset") is not None else None),
             )
-            for table in ("questions", "daily_usage", "answer_records", "challenge_records", "devices"):
+            for table in ("questions", "reward_questions", "daily_usage", "answer_records", "challenge_records", "devices"):
                 connection.execute(f"DELETE FROM {table}")
             connection.executemany(
                 "INSERT INTO questions(position, question_id, payload) VALUES (?, ?, ?)",
                 [(index, item["id"], encoded(item)) for index, item in enumerate(state["questions"])],
+            )
+            connection.executemany(
+                "INSERT INTO reward_questions(position, question_id, payload) VALUES (?, ?, ?)",
+                [(index, item["id"], encoded(item)) for index, item in enumerate(state.get("rewardQuestions", []))],
             )
             connection.executemany(
                 "INSERT INTO daily_usage(device_id, record_date, usage_millis, intervals) VALUES (?, ?, ?, ?)",
@@ -486,8 +598,10 @@ class StateStore:
             return {
                 "settings": state["settings"],
                 "questions": state["questions"],
+                **({} if device_id else {"rewardQuestions": state["rewardQuestions"]}),
                 "passwordReset": state["passwordReset"],
                 "usageReset": state["devices"].get(device_id, {}).get("usageResets", {}).get(record_date),
+                **({"rewardTime": reward_snapshot(state["devices"].get(device_id, {}), record_date)} if device_id else {}),
                 "version": BACKEND_VERSION,
                 "refill": {"running": self.refill_running, "error": self.refill_error},
                 "poemEnrichment": {
@@ -874,7 +988,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             if params.get("deviceId", [self.device_id])[0] != self.device_id:
                 self.send_json(403, {"error": "设备 ID 与凭证不匹配"})
                 return
-            self.send_json(200, self.store.snapshot(params.get("deviceId", [""])[0], params.get("date", [""])[0]))
+            self.send_json(200, self.store.snapshot(self.device_id, params.get("date", [""])[0]))
+        elif path == "/api/v1/device/reward-challenge":
+            if self.require_device():
+                self.send_json(200, self.store.next_reward_question(self.device_id))
         elif path == "/api/v1/admin/state":
             if self.require_admin():
                 self.send_json(200, {**self.store.snapshot(), "username": AUTH.username(self.account)})
@@ -914,6 +1031,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                             "deviceId": value,
                             "date": record_date,
                             "usageMillis": daily_usage.get(value, {}).get("usageMillis", 0),
+                            "rewardUsedMillis": reward_snapshot(state["devices"].get(value, {}), record_date)["usedTodayMillis"],
                             "intervals": merge_usage_intervals(daily_usage.get(value, {}).get("intervals", [])),
                             "lastReportedAt": state["devices"].get(value, {}).get("lastSeen", 0),
                         }
@@ -970,7 +1088,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                     )
                 self.send_json(200, {
                     "devices": [
-                        {**self.device_summary(device_id, devices.get(device_id, {})), "bound": device_id in bound_ids}
+                        {
+                            **self.device_summary(device_id, devices.get(device_id, {})),
+                            "bound": device_id in bound_ids,
+                            "rewardBalanceMillis": reward_snapshot(devices.get(device_id, {}))["balanceMillis"],
+                        }
                         for device_id in sorted(known_ids)
                     ]
                 })
@@ -988,7 +1110,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/v1/device/"):
             with AUTH.lock:
                 self.handle_post()
-        elif path in ("/api/v1/admin/devices/bind", "/api/v1/admin/devices/unbind"):
+        elif path in ("/api/v1/admin/devices/bind", "/api/v1/admin/devices/unbind", "/api/v1/admin/rewards/grant"):
             with AUTH.lock:
                 self.handle_post()
         else:
@@ -1011,6 +1133,16 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json(400, {"error": str(error)})
             return
         if path.startswith("/api/v1/device/") and not self.require_device():
+            return
+        if path == "/api/v1/device/reward-challenge":
+            if not self.same_origin():
+                return
+            try:
+                payload = self.read_json()
+                status, result = self.store.answer_reward_question(self.device_id, payload.get("questionId"), payload.get("selectedIndex"))
+                self.send_json(status, result)
+            except ValueError as error:
+                self.send_json(400, {"error": str(error)})
             return
         if path == "/api/v1/device/usage":
             if not self.same_origin():
@@ -1039,6 +1171,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     if payload.get("usageResetId", "") != expected_reset_id:
                         self.send_json(409, {"accepted": False, "error": "使用时长已重置，请先同步电视"})
                         return
+                    if "rewardTime" in payload:
+                        record_reward_usage(device, record_date, payload["rewardTime"])
                     name = payload.get("deviceName")
                     if isinstance(name, str) and 1 <= len(name.strip()) <= 100:
                         device["name"] = name.strip()
@@ -1068,7 +1202,8 @@ class RequestHandler(BaseHTTPRequestHandler):
                     else:
                         record["usageMillis"] = max(record["usageMillis"], usage_millis)
                     self.store.save(state)
-                self.send_json(200, {"accepted": True, "usageMillis": record["usageMillis"]})
+                self.send_json(200, {"accepted": True, "usageMillis": record["usageMillis"],
+                                     "rewardTime": reward_snapshot(device, record_date)})
             except (ValueError, TypeError) as error:
                 self.send_json(400, {"error": str(error) or "使用时长上报格式无效"})
             return
@@ -1414,6 +1549,19 @@ class RequestHandler(BaseHTTPRequestHandler):
                 command = self.store.queue_password_reset()
                 self.send_json(202, {"queued": True, "id": command["id"]})
                 return
+            if path == "/api/v1/admin/rewards/grant":
+                device_id = payload.get("deviceId")
+                with closing(AUTH.connect()) as connection:
+                    owned = isinstance(device_id, str) and connection.execute(
+                        "SELECT 1 FROM device_bindings WHERE account_id = ? AND device_id = ?",
+                        (self.account, device_id),
+                    ).fetchone()
+                if not owned:
+                    self.send_json(404, {"error": "请选择当前账号绑定的电视"})
+                    return
+                reward = self.store.grant_reward(device_id, payload.get("minutes"))
+                self.send_json(200, {"rewardBalanceMillis": reward["balanceMillis"]})
+                return
             if path == "/api/v1/admin/usage/reset":
                 command = self.store.queue_usage_reset(payload.get("deviceId"))
                 self.send_json(202, {"queued": True, **command})
@@ -1424,6 +1572,15 @@ class RequestHandler(BaseHTTPRequestHandler):
                     state["settings"] = validate_settings(payload)
                     self.store.save(state)
                     self.send_json(200, {"settings": state["settings"]})
+                elif path == "/api/v1/admin/reward-questions":
+                    minutes = payload.get("rewardMinutes", 10)
+                    if type(minutes) is not int or not 1 <= minutes <= MAX_REWARD_GRANT_MINUTES:
+                        raise ValueError("每题奖励时长必须是 1 到 1440 之间的整数")
+                    question = validate_question({**payload, "id": f"reward-{uuid.uuid4().hex}", "priority": False})
+                    question["rewardMinutes"] = minutes
+                    state["rewardQuestions"].append(question)
+                    self.store.save(state)
+                    self.send_json(201, question)
                 elif path == "/api/v1/admin/questions":
                     question = validate_question(payload, require_id=False)
                     questions = state["questions"]
@@ -1440,24 +1597,27 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         path = urlsplit(self.path).path
-        prefix = "/api/v1/admin/questions/"
+        reward = path.startswith("/api/v1/admin/reward-questions/")
+        prefix = "/api/v1/admin/reward-questions/" if reward else "/api/v1/admin/questions/"
         if not path.startswith(prefix):
             self.send_json(404, {"error": "请求地址不存在"})
             return
         if not self.same_origin() or not self.require_admin():
             return
-        question_id = path[len(prefix):]
+        question_id = unquote(path[len(prefix):])
+        bank = "rewardQuestions" if reward else "questions"
         with self.store.lock:
             state = self.store.load()
-            questions = state["questions"]
+            questions = state[bank]
             assert isinstance(questions, list)
             remaining = [question for question in questions if question["id"] != question_id]
             if len(remaining) == len(questions):
                 self.send_json(404, {"error": "题目不存在"})
                 return
-            state["questions"] = remaining
+            state[bank] = remaining
             self.store.save(state)
-        self.store.ensure_refill()
+        if not reward:
+            self.store.ensure_refill()
         self.send_json(200, {"deleted": question_id, "count": len(remaining)})
 
     def read_json(self) -> dict[str, object]:

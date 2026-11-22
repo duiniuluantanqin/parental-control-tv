@@ -157,10 +157,12 @@ object RemoteSync {
                 questionIntervalMinutes = remoteSettings.getInt("questionIntervalMinutes").coerceIn(1, 240),
                 wrongLockMinutes = remoteSettings.getInt("wrongLockMinutes").coerceIn(1, 1440),
                 syncIntervalMinutes = remoteSettings.optInt("syncIntervalMinutes", 5).coerceIn(1, 60),
+                dailyRewardLimitMinutes = remoteSettings.optInt("dailyRewardLimitMinutes", RewardTimeLedger.DEFAULT_DAILY_LIMIT_MINUTES).coerceIn(0, 1440),
             )
             val questions = state.getJSONArray("questions")
             val parsed = QuestionBank.parseQuestions(questions.toString())
             val settingsChanged = ControlState.settings(context) != settings
+            state.optJSONObject("rewardTime")?.let { ControlState.applyRemoteRewardTime(context, it) }
             ControlState.updateSettings(context, settings)
             state.optJSONObject("usageReset")?.let { command ->
                 if (ControlState.applyRemoteUsageReset(context, command.getString("id"), command.getString("date"))) {
@@ -227,11 +229,56 @@ object RemoteSync {
                 .toString().toByteArray(Charsets.UTF_8)
             connection.setFixedLengthStreamingMode(body.size)
             connection.outputStream.use { it.write(body) }
-            connection.responseCode in 200..299
+            if (connection.responseCode !in 200..299) return false
+            val response = JSONObject(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
+            response.optJSONObject("rewardTime")?.let {
+                if (ControlState.applyRemoteRewardTime(context, it)) {
+                    context.sendBroadcast(Intent(ACTION_SYNC_COMPLETED).setPackage(context.packageName))
+                }
+            }
+            true
         } catch (_: Exception) {
             false
         } finally {
             connection?.disconnect()
+        }
+    }
+
+    @Synchronized
+    internal fun rewardChallenge(context: Context, bindingId: String, answer: JSONObject? = null): JSONObject {
+        check(bindingId.isNotEmpty() && bindingId == DeviceBinding.bindingId(context))
+        if (answer == null) {
+            // Quota locks can appear between periodic usage reports.
+            check(reportUsage(context)) { "Could not confirm today's usage." }
+        }
+        val connection = URL("${ControlState.BACKEND_URL}/api/v1/device/reward-challenge").openConnection() as HttpURLConnection
+        try {
+            DeviceBinding.authorize(context, connection)
+            connection.connectTimeout = 5_000
+            connection.readTimeout = 5_000
+            connection.useCaches = false
+            if (answer != null) {
+                connection.requestMethod = "POST"
+                connection.doOutput = true
+                connection.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                val body = answer.toString().toByteArray(Charsets.UTF_8)
+                connection.setFixedLengthStreamingMode(body.size)
+                connection.outputStream.use { it.write(body) }
+            }
+            return when (connection.responseCode) {
+                200 -> JSONObject(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }).also {
+                    it.optJSONObject("rewardTime")?.let { reward ->
+                        if (ControlState.applyRemoteRewardTime(context, reward)) {
+                            context.sendBroadcast(Intent(ACTION_SYNC_COMPLETED).setPackage(context.packageName))
+                        }
+                    }
+                }
+                409 -> JSONObject().put("eligible", false)
+                404 -> JSONObject().put("unavailable", true)
+                else -> error("Could not reach the reward challenge service.")
+            }
+        } finally {
+            connection.disconnect()
         }
     }
 

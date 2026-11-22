@@ -24,6 +24,7 @@ data class ParentSettings(
     val questionIntervalMinutes: Int = 10,
     val wrongLockMinutes: Int = 10,
     val syncIntervalMinutes: Int = 5,
+    val dailyRewardLimitMinutes: Int = RewardTimeLedger.DEFAULT_DAILY_LIMIT_MINUTES,
 )
 
 object ControlState {
@@ -45,6 +46,7 @@ object ControlState {
     private const val DISABLED_WINDOWS_KEY = "disabled_time_windows"
     private const val QUESTION_INTERVAL_KEY = "question_interval_minutes"
     private const val WRONG_LOCK_KEY = "wrong_lock_minutes"
+    private const val DAILY_REWARD_LIMIT_KEY = "daily_reward_limit_minutes"
     private const val SYNC_INTERVAL_KEY = "sync_interval_minutes"
     private const val ALWAYS_SHOW_REMAINING_TIME_KEY = "always_show_remaining_time"
     private const val SHOW_QUESTION_ON_STARTUP_KEY = "show_question_on_startup"
@@ -56,7 +58,6 @@ object ControlState {
     private const val TEMP_EXTENSION_KEY = "temp_extension_millis"
     const val TEN_MINUTE_REMINDER_MINUTES = 10
     const val ONE_MINUTE_REMINDER_MINUTES = 1
-    const val PASSWORD_EXTENSION_MINUTES = 15
 
     fun settings(context: Context): ParentSettings {
         val preferences = prefs(context)
@@ -88,6 +89,7 @@ object ControlState {
             questionIntervalMinutes = preferences.getInt(QUESTION_INTERVAL_KEY, 10).coerceIn(1, 240),
             wrongLockMinutes = preferences.getInt(WRONG_LOCK_KEY, 10).coerceIn(1, 1440),
             syncIntervalMinutes = preferences.getInt(SYNC_INTERVAL_KEY, 5).coerceIn(1, 60),
+            dailyRewardLimitMinutes = preferences.getInt(DAILY_REWARD_LIMIT_KEY, RewardTimeLedger.DEFAULT_DAILY_LIMIT_MINUTES).coerceIn(0, 1440),
         )
     }
 
@@ -172,6 +174,12 @@ object ControlState {
             .putInt(QUESTION_INTERVAL_KEY, settings.questionIntervalMinutes.coerceIn(1, 240))
             .putInt(WRONG_LOCK_KEY, newLockMinutes)
             .putInt(SYNC_INTERVAL_KEY, settings.syncIntervalMinutes.coerceIn(1, 60))
+            .putInt(DAILY_REWARD_LIMIT_KEY, settings.dailyRewardLimitMinutes.coerceIn(0, 1440))
+        if (settings.weeklyDailyLimitMinutes[weekdayIndex(Calendar.getInstance())] == 0 ||
+            RewardTimeLedger.availableToday(preferences, settings.dailyRewardLimitMinutes * MILLIS_PER_MINUTE) == 0L
+        ) {
+            editor.remove(RewardTimeLedger.ACTIVATED)
+        }
         if (lockUntil > now) {
             val lockStartedAt = if (storedLockStart in 1..lockUntil) {
                 storedLockStart
@@ -210,6 +218,9 @@ object ControlState {
             .put("utcOffsetMinutes", java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60_000)
             .put("usageMillis", preferences.getLong(USED_MILLIS_KEY, 0L).coerceAtLeast(0L))
             .put("usageResetId", preferences.getString(USAGE_RESET_ID_KEY, ""))
+            .put("rewardTime", JSONObject()
+                .put("spentMillis", preferences.getLong(RewardTimeLedger.SPENT, 0L))
+                .put("usedTodayMillis", preferences.getLong(RewardTimeLedger.USED_TODAY, 0L)))
     }
 
     @Synchronized
@@ -221,6 +232,7 @@ object ControlState {
         check(preferences.edit()
             .putLong(USED_MILLIS_KEY, 0L)
             .putLong(TEMP_EXTENSION_KEY, 0L)
+            .remove(RewardTimeLedger.ACTIVATED)
             .putString(USAGE_RESET_ID_KEY, commandId)
             .putLong(USAGE_RESET_AT_KEY, System.currentTimeMillis())
             .commit()) { "Could not reset today's usage. It will retry later." }
@@ -228,12 +240,12 @@ object ControlState {
     }
 
     @Synchronized
-    fun addScreenTime(context: Context, elapsedMillis: Long) {
-        if (elapsedMillis <= 0L) return
+    fun addScreenTime(context: Context, elapsedMillis: Long): Boolean {
+        if (elapsedMillis <= 0L) return false
         resetForNewDay(context)
         val now = System.currentTimeMillis()
         val preferences = prefs(context)
-        if (preferences.getString(DAY_KEY, null) != DailyUsageLedger.localDay(now)) return
+        if (preferences.getString(DAY_KEY, null) != DailyUsageLedger.localDay(now)) return false
         val todayStart = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0)
             set(Calendar.MINUTE, 0)
@@ -241,19 +253,66 @@ object ControlState {
             set(Calendar.MILLISECOND, 0)
         }.timeInMillis
         val start = maxOf(now - elapsedMillis, todayStart, preferences.getLong(USAGE_RESET_AT_KEY, 0L), lockoutUntil(context))
-        val countedMillis = allowedUsageMillis(settings(context), start, now)
-        if (countedMillis == 0L) return
-        val limit = todayDailyLimitMinutes(context) * MILLIS_PER_MINUTE + tempExtension(context)
-        DailyUsageLedger.addUsage(preferences, countedMillis, limit)
+        val rules = settings(context)
+        val countedMillis = allowedUsageMillis(rules, start, now)
+        val dailyLimit = todayDailyLimitMinutes(context)
+        val regularLimit = dailyLimit * MILLIS_PER_MINUTE + tempExtension(context)
+        val rewardLimit = if (dailyLimit > 0) rules.dailyRewardLimitMinutes * MILLIS_PER_MINUTE else 0L
+        return DailyUsageLedger.addUsage(preferences, countedMillis, regularLimit, rewardLimit)
     }
 
     fun isDailyLimitReached(context: Context): Boolean {
         return remainingDailyMillis(context) <= 0L
     }
 
-    fun remainingDailyMillis(context: Context): Long =
+    @Synchronized
+    fun remainingDailyMillis(context: Context): Long {
+        val regular = remainingRegularMillis(context)
+        if (regular > 0L || todayDailyLimitMinutes(context) == 0) return regular
+        if (!prefs(context).getBoolean(RewardTimeLedger.ACTIVATED, false)) return 0L
+        return rewardAvailableToday(context)
+    }
+
+    private fun remainingRegularMillis(context: Context): Long =
         (todayDailyLimitMinutes(context) * MILLIS_PER_MINUTE + tempExtension(context) - usedMillis(context))
             .coerceAtLeast(0L)
+
+    @Synchronized
+    fun rewardBalanceMillis(context: Context): Long = RewardTimeLedger.balance(prefs(context))
+
+    @Synchronized
+    fun rewardAvailableToday(context: Context): Long {
+        resetForNewDay(context)
+        if (todayDailyLimitMinutes(context) == 0) return 0L
+        return RewardTimeLedger.availableToday(prefs(context), settings(context).dailyRewardLimitMinutes * MILLIS_PER_MINUTE)
+    }
+
+    @Synchronized
+    fun canOfferRewards(context: Context): Boolean =
+        todayDailyLimitMinutes(context) > 0 && isDailyLimitReached(context) &&
+            lockoutUntil(context) <= System.currentTimeMillis() && isUsageWindowAllowed(context)
+
+    @Synchronized
+    fun rewardOfferMillis(context: Context): Long =
+        if (canOfferRewards(context)) rewardAvailableToday(context) else 0L
+
+    @Synchronized
+    fun activateRewardTime(context: Context): Boolean {
+        if (rewardOfferMillis(context) <= 0L) return false
+        return prefs(context).edit().putBoolean(RewardTimeLedger.ACTIVATED, true).commit()
+    }
+
+    @Synchronized
+    fun applyRemoteRewardTime(context: Context, reward: JSONObject): Boolean {
+        resetForNewDay(context)
+        val preferences = prefs(context)
+        return RewardTimeLedger.reconcile(preferences,
+            sameDay = reward.optString("date") == preferences.getString(DAY_KEY, null),
+            granted = reward.getLong("grantedMillis"),
+            spent = reward.getLong("spentMillis"),
+            usedToday = reward.getLong("usedTodayMillis"),
+        )
+    }
 
     fun todayDailyLimitMinutes(context: Context): Int =
         settings(context).weeklyDailyLimitMinutes[weekdayIndex(Calendar.getInstance())]
@@ -274,14 +333,6 @@ object ControlState {
     fun tempExtension(context: Context): Long {
         resetForNewDay(context)
         return prefs(context).getLong(TEMP_EXTENSION_KEY, 0L).coerceAtLeast(0L)
-    }
-
-    @Synchronized
-    fun grantPasswordExtension(context: Context) {
-        resetForNewDay(context)
-        check(prefs(context).edit()
-            .putLong(TEMP_EXTENSION_KEY, PASSWORD_EXTENSION_MINUTES * MILLIS_PER_MINUTE)
-            .commit()) { "Could not save the viewing extension." }
     }
 
     private fun allowedUsageMillis(settings: ParentSettings, startMillis: Long, endMillis: Long): Long {
@@ -453,11 +504,22 @@ object ControlState {
             QUESTION_STARTED_AT_KEY, QUESTION_TIMEOUT_AT_KEY, QUESTION_OVERLAY_ACTIVE_KEY,
             REMOTE_QUESTIONS_KEY, WEEKLY_LIMITS_KEY, USAGE_WINDOWS_KEY, DISABLED_WINDOWS_KEY,
             QUESTION_INTERVAL_KEY, WRONG_LOCK_KEY, SYNC_INTERVAL_KEY, APPLIED_PASSWORD_RESET_ID_KEY,
+            DAILY_REWARD_LIMIT_KEY, RewardTimeLedger.GRANTED, RewardTimeLedger.SPENT,
+            RewardTimeLedger.USED_TODAY, RewardTimeLedger.ACTIVATED,
         )
         val editor = preferences.edit()
         preferences.all.keys.filter { key -> accountKeys.any { key == it || key.startsWith("$it.") } }
             .forEach { editor.remove(it) }
         check(editor.commit()) { "Could not clear the previous account's data." }
+    }
+
+    fun rewardTimeLabel(millis: Long): String {
+        val seconds = (millis + 999L) / 1_000L
+        return when {
+            seconds < 60L -> "${seconds} sec"
+            seconds % 60L == 0L -> "${seconds / 60L} min"
+            else -> "${seconds / 60L} min ${seconds % 60L} sec"
+        }
     }
 
     fun todayUsageLabel(context: Context): String {
