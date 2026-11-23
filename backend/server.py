@@ -145,14 +145,59 @@ def merge_usage_intervals(value: object) -> list[dict[str, int]]:
             continue
         start, end = item.get("start"), item.get("end")
         if type(start) is int and type(end) is int and 0 <= start < end:
-            intervals.append((start, end))
+            duration = item.get("usageMillis", end - start)
+            if type(duration) is int and duration > 0:
+                intervals.append((start, end, duration, item.get("reported") is True, item.get("kind", "regular")))
     merged: list[dict[str, int]] = []
-    for start, end in sorted(intervals):
-        if merged and start <= merged[-1]["end"] + 120_000:
+    for start, end, duration, reported, kind in sorted(intervals):
+        if merged and bool(merged[-1].get("reported")) == reported and merged[-1].get("kind", "regular") == kind and start <= merged[-1]["end"] + 120_000:
+            merged[-1]["usageMillis"] += duration if reported else min(duration, max(0, end - merged[-1]["end"]))
             merged[-1]["end"] = max(merged[-1]["end"], end)
         else:
-            merged.append({"start": start, "end": end})
+            merged.append({"start": start, "end": end, "usageMillis": duration,
+                           **({"reported": True} if reported else {}), **({"kind": kind} if kind != "regular" else {})})
     return merged
+
+
+def usage_details(record: dict, reward_millis: int = 0) -> dict:
+    remaining = {"regular": record.get("usageMillis", 0), "reward": reward_millis}
+    totals = {"answering": 0, "parent_unlocked": 0}
+    intervals = []
+    for item in merge_usage_intervals(record.get("intervals", [])):
+        kind = item.get("kind", "regular")
+        duration = min(item["usageMillis"], remaining.get(kind, item["usageMillis"]))
+        if duration:
+            intervals.append({"start": item["start"], "end": item["end"], "usageMillis": duration,
+                              **({"kind": kind} if kind != "regular" else {})})
+            if kind in remaining:
+                remaining[kind] -= duration
+            elif kind in totals:
+                totals[kind] += duration
+    return {"intervals": intervals, "unlocatedUsageMillis": remaining["regular"],
+            "unlocatedRewardMillis": remaining["reward"],
+            "answeringMillis": totals["answering"], "parentUnlockedMillis": totals["parent_unlocked"]}
+
+
+def validate_usage_intervals(value: object, usage_millis: int) -> list[dict]:
+    if not isinstance(value, list):
+        raise ValueError("使用时段必须为列表")
+    intervals = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("使用时段格式无效")
+        start, end, duration = (item.get(key) for key in ("start", "end", "usageMillis"))
+        kind = item.get("kind", "regular")
+        if kind not in ("regular", "reward", "answering", "parent_unlocked"):
+            raise ValueError("使用时段类型无效")
+        if not all(type(number) is int for number in (start, end, duration)) or not 0 <= start < end or not 0 < duration <= end - start:
+            raise ValueError("使用时段或时长无效")
+        intervals.append({"start": start, "end": end, "usageMillis": duration, "reported": True,
+                          **({"kind": kind} if kind != "regular" else {})})
+    if sum(item["usageMillis"] for item in intervals if item.get("kind", "regular") == "regular") > usage_millis:
+        raise ValueError("使用时段合计不能超过当天累计时长")
+    if sum(item["usageMillis"] for item in intervals) > 172_800_000:
+        raise ValueError("使用时段合计超出范围")
+    return merge_usage_intervals(intervals)
 
 
 def validate_question(value: object, *, require_id: bool = True) -> dict[str, object]:
@@ -367,7 +412,7 @@ class StateStore:
             device.setdefault("usageResets", {})[record_date] = command
             for record in state["dailyUsage"]:
                 if record["deviceId"] == device_id and record["date"] == record_date:
-                    record.update(usageMillis=0, intervals=[])
+                    record.update(usageMillis=0, intervals=[item for item in record.get("intervals", []) if item.get("kind", "regular") != "regular"])
             if device.get("lastUsageDate", record_date) == record_date:
                 device.update(lastUsageMillis=0, lastUsageAt=0)
             self.save(state)
@@ -1032,7 +1077,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                             "date": record_date,
                             "usageMillis": daily_usage.get(value, {}).get("usageMillis", 0),
                             "rewardUsedMillis": reward_snapshot(state["devices"].get(value, {}), record_date)["usedTodayMillis"],
-                            "intervals": merge_usage_intervals(daily_usage.get(value, {}).get("intervals", [])),
+                            **usage_details(daily_usage.get(value, {}), reward_snapshot(state["devices"].get(value, {}), record_date)["usedTodayMillis"]),
                             "lastReportedAt": state["devices"].get(value, {}).get("lastSeen", 0),
                         }
                         for value in selected_ids
@@ -1156,6 +1201,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     raise ValueError("日期格式必须为 YYYY-MM-DD")
                 if isinstance(usage_millis, bool) or not isinstance(usage_millis, int) or not 0 <= usage_millis <= 172_800_000:
                     raise ValueError("使用时长无效")
+                reported_intervals = validate_usage_intervals(payload["usageIntervals"], usage_millis) if "usageIntervals" in payload else None
                 offset = payload.get("utcOffsetMinutes")
                 if offset is not None and (isinstance(offset, bool) or not isinstance(offset, int) or not -840 <= offset <= 840):
                     raise ValueError("电视时区偏移无效")
@@ -1177,11 +1223,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                     if isinstance(name, str) and 1 <= len(name.strip()) <= 100:
                         device["name"] = name.strip()
                     same_day = device.get("lastUsageDate", record_date) == record_date
-                    previous_total = device.get("lastUsageMillis", 0) if same_day else 0
+                    previous_total = max(device.get("lastUsageMillis", 0) if same_day else 0, (record or {}).get("usageMillis", 0))
                     previous_at = device.get("lastUsageAt", 0) if same_day else 0
                     delta = max(0, usage_millis - previous_total)
                     elapsed = now_ms - previous_at if isinstance(previous_at, int) and previous_at else 0
-                    if delta and elapsed > 0:
+                    if reported_intervals is None and delta and elapsed > 0:
                         interval_ms = min(delta, elapsed, 120_000)
                         interval = {"start": now_ms - interval_ms, "end": now_ms}
                         if record is None:
@@ -1191,16 +1237,38 @@ class RequestHandler(BaseHTTPRequestHandler):
                         record["intervals"] = merge_usage_intervals([*intervals, interval])
                     device["lastSeen"] = now_ms
                     device["lastUsageAt"] = now_ms
-                    device["lastUsageMillis"] = usage_millis
+                    device["lastUsageMillis"] = max(previous_total, usage_millis)
                     device["lastUsageDate"] = record_date
                     if offset is not None:
                         device["utcOffsetMinutes"] = offset
                     devices[device_id] = device
+                    current_snapshot = usage_millis >= (record or {}).get("usageMillis", 0)
+                    if reported_intervals is not None:
+                        previous_intervals = [item for item in (record or {}).get("intervals", []) if item.get("reported")]
+                        current_snapshot = current_snapshot and all(
+                            sum(item["usageMillis"] for item in reported_intervals if item.get("kind", "regular") == kind)
+                            >= sum(item["usageMillis"] for item in previous_intervals if item.get("kind", "regular") == kind)
+                            for kind in ("regular", "reward", "answering", "parent_unlocked")
+                        )
                     if record is None:
                         record = {"deviceId": device_id, "date": record_date, "usageMillis": usage_millis}
                         usage.append(record)
                     else:
                         record["usageMillis"] = max(record["usageMillis"], usage_millis)
+                    if reported_intervals is not None and current_snapshot:
+                        # Keep pre-upgrade estimates only before the first device-recorded interval.
+                        legacy = []
+                        cutoff = min((item["start"] for item in reported_intervals), default=now_ms)
+                        legacy_remaining = usage_millis - sum(item["usageMillis"] for item in reported_intervals if item.get("kind", "regular") == "regular")
+                        if legacy_remaining > 0:
+                            for item in merge_usage_intervals(record.get("intervals", [])):
+                                if not item.get("reported") and item["start"] < cutoff:
+                                    end = min(item["end"], cutoff)
+                                    duration = min(item["usageMillis"], end - item["start"], legacy_remaining)
+                                    if duration:
+                                        legacy.append({"start": item["start"], "end": end, "usageMillis": duration})
+                                        legacy_remaining -= duration
+                        record["intervals"] = merge_usage_intervals([*legacy, *reported_intervals])
                     self.store.save(state)
                 self.send_json(200, {"accepted": True, "usageMillis": record["usageMillis"],
                                      "rewardTime": reward_snapshot(device, record_date)})

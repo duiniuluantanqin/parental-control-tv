@@ -182,10 +182,11 @@ tbody tr:hover { background: #fafcfd; }
 .usage-total-cell small { display: block; font-weight: 500; }
 .usage-report-cell { color: #8894a3; font-size: 12px; }
 .usage-record-table :is(th, td):last-child { text-align: right; }
-.usage-detail-dialog { width: min(580px, calc(100% - 32px)); }
+.usage-detail-dialog { width: min(720px, calc(100% - 32px)); }
 .usage-interval-table { table-layout: fixed; }
+.usage-interval-table :is(th, td):nth-child(2) { width: 110px; }
 .usage-interval-table :is(th, td):last-child { width: 130px; text-align: right; }
-.usage-period-cell { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.usage-period-cell { font-variant-numeric: tabular-nums; }
 .usage-interval-duration { color: var(--muted); }
 .answer-record-table { min-width: 820px; table-layout: fixed; }
 .answer-record-table .answer-col-time { width: 14%; }
@@ -413,6 +414,7 @@ dialog::backdrop { background: #14253d66; backdrop-filter: blur(4px); }
   .ai-question { padding: 15px; }
   .poem-content { font-size: 18px; }
   .usage-interval-table :is(th, td):last-child { width: 100px; }
+  .usage-interval-table :is(th, td):nth-child(2) { width: 76px; }
   .usage-interval-table td { padding: 12px; font-size: 12px; }
   .login-view { margin-top: 5vh; padding: 20px; }
   .login-card { padding: 28px; }

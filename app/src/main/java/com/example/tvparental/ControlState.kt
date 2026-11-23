@@ -40,6 +40,7 @@ object ControlState {
     private const val QUESTION_STARTED_AT_KEY = "question_started_at"
     private const val QUESTION_TIMEOUT_AT_KEY = "question_timeout_at"
     private const val QUESTION_OVERLAY_ACTIVE_KEY = "question_overlay_active"
+    private const val ANSWERING_ACTIVE_KEY = "answering_active"
     private const val REMOTE_QUESTIONS_KEY = "remote_questions"
     private const val WEEKLY_LIMITS_KEY = "weekly_daily_limit_minutes"
     private const val USAGE_WINDOWS_KEY = "usage_time_windows"
@@ -217,6 +218,12 @@ object ControlState {
             .put("date", preferences.getString(DAY_KEY, ""))
             .put("utcOffsetMinutes", java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60_000)
             .put("usageMillis", preferences.getLong(USED_MILLIS_KEY, 0L).coerceAtLeast(0L))
+            .put("usageIntervals", JSONArray().apply {
+                DailyUsageLedger.intervals(preferences).forEach { interval ->
+                    put(JSONObject().put("start", interval.start).put("end", interval.end)
+                        .put("usageMillis", interval.usageMillis).put("kind", interval.kind))
+                }
+            })
             .put("usageResetId", preferences.getString(USAGE_RESET_ID_KEY, ""))
             .put("rewardTime", JSONObject()
                 .put("spentMillis", preferences.getLong(RewardTimeLedger.SPENT, 0L))
@@ -232,6 +239,8 @@ object ControlState {
         check(preferences.edit()
             .putLong(USED_MILLIS_KEY, 0L)
             .putLong(TEMP_EXTENSION_KEY, 0L)
+            .putString(DailyUsageLedger.INTERVALS, DailyUsageLedger.encodeIntervals(
+                DailyUsageLedger.intervals(preferences).filter { it.kind != UsageInterval.REGULAR }))
             .remove(RewardTimeLedger.ACTIVATED)
             .putString(USAGE_RESET_ID_KEY, commandId)
             .putLong(USAGE_RESET_AT_KEY, System.currentTimeMillis())
@@ -254,12 +263,31 @@ object ControlState {
         }.timeInMillis
         val start = maxOf(now - elapsedMillis, todayStart, preferences.getLong(USAGE_RESET_AT_KEY, 0L), lockoutUntil(context))
         val rules = settings(context)
-        val countedMillis = allowedUsageMillis(rules, start, now)
+        val intervals = allowedUsageIntervals(rules, start, now)
+        val countedMillis = intervals.sumOf { it.usageMillis }
         val dailyLimit = todayDailyLimitMinutes(context)
         val regularLimit = dailyLimit * MILLIS_PER_MINUTE + tempExtension(context)
         val rewardLimit = if (dailyLimit > 0) rules.dailyRewardLimitMinutes * MILLIS_PER_MINUTE else 0L
-        return DailyUsageLedger.addUsage(preferences, countedMillis, regularLimit, rewardLimit,
-            dailyLimitUnlocked = DailyLimitUnlock.isActive(context))
+        return DailyUsageLedger.addUsage(preferences, countedMillis, regularLimit, rewardLimit, usageIntervals = intervals)
+    }
+
+    @Synchronized
+    fun addActivityTime(context: Context, elapsedMillis: Long, kind: String) {
+        if (elapsedMillis <= 0L) return
+        resetForNewDay(context)
+        val now = System.currentTimeMillis()
+        val preferences = prefs(context)
+        if (preferences.getString(DAY_KEY, null) != DailyUsageLedger.localDay(now)) return
+        val todayStart = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        val start = maxOf(now - elapsedMillis, todayStart)
+        val periods = if (kind == UsageInterval.ANSWERING) listOf(UsageInterval(start, now))
+            else allowedUsageIntervals(settings(context), start, now)
+        DailyUsageLedger.addActivity(preferences, periods.filter { it.end > it.start }, kind)
     }
 
     fun isDailyLimitReached(context: Context): Boolean {
@@ -336,9 +364,9 @@ object ControlState {
         return prefs(context).getLong(TEMP_EXTENSION_KEY, 0L).coerceAtLeast(0L)
     }
 
-    private fun allowedUsageMillis(settings: ParentSettings, startMillis: Long, endMillis: Long): Long {
+    internal fun allowedUsageIntervals(settings: ParentSettings, startMillis: Long, endMillis: Long): List<UsageInterval> {
         var cursor = startMillis
-        var total = 0L
+        val intervals = mutableListOf<UsageInterval>()
         while (cursor < endMillis) {
             val nextMinute = Calendar.getInstance().apply {
                 timeInMillis = cursor
@@ -347,10 +375,10 @@ object ControlState {
                 add(Calendar.MINUTE, 1)
             }.timeInMillis.coerceAtLeast(cursor + 1L)
             val segmentEnd = minOf(endMillis, nextMinute)
-            if (isUsageWindowAllowed(settings, cursor)) total += segmentEnd - cursor
+            if (isUsageWindowAllowed(settings, cursor)) intervals += UsageInterval(cursor, segmentEnd)
             cursor = segmentEnd
         }
-        return total
+        return intervals
     }
 
     private fun isUsageWindowAllowed(settings: ParentSettings, timeMillis: Long): Boolean {
@@ -440,12 +468,14 @@ object ControlState {
             .apply()
     }
 
-    fun setQuestionOverlayActive(context: Context, active: Boolean) {
-        prefs(context).edit().putBoolean(QUESTION_OVERLAY_ACTIVE_KEY, active).apply()
+    fun setQuestionOverlayActive(context: Context, active: Boolean, answering: Boolean) {
+        prefs(context).edit().putBoolean(QUESTION_OVERLAY_ACTIVE_KEY, active).putBoolean(ANSWERING_ACTIVE_KEY, answering).apply()
     }
 
     fun isQuestionOverlayActive(context: Context): Boolean =
         prefs(context).getBoolean(QUESTION_OVERLAY_ACTIVE_KEY, false)
+
+    fun isAnsweringActive(context: Context): Boolean = prefs(context).getBoolean(ANSWERING_ACTIVE_KEY, false)
 
     @Synchronized
     fun startWrongAnswerLock(context: Context, poem: Poem): Long {
@@ -502,8 +532,10 @@ object ControlState {
         val accountKeys = setOf(
             DAY_KEY, USED_MILLIS_KEY, TEMP_EXTENSION_KEY, USAGE_RESET_ID_KEY, USAGE_RESET_AT_KEY,
             DailyLimitUnlock.UNLOCKED_BOOT,
+            DailyUsageLedger.INTERVALS,
             "usage_history_days", LOCKOUT_UNTIL_KEY, LOCKOUT_STARTED_AT_KEY, LOCKOUT_POEM_KEY,
             QUESTION_STARTED_AT_KEY, QUESTION_TIMEOUT_AT_KEY, QUESTION_OVERLAY_ACTIVE_KEY,
+            ANSWERING_ACTIVE_KEY,
             REMOTE_QUESTIONS_KEY, WEEKLY_LIMITS_KEY, USAGE_WINDOWS_KEY, DISABLED_WINDOWS_KEY,
             QUESTION_INTERVAL_KEY, WRONG_LOCK_KEY, SYNC_INTERVAL_KEY, APPLIED_PASSWORD_RESET_ID_KEY,
             DAILY_REWARD_LIMIT_KEY, RewardTimeLedger.GRANTED, RewardTimeLedger.SPENT,

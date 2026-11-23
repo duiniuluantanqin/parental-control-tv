@@ -119,6 +119,8 @@ class UsageTrackingService : Service() {
             interactive,
             QuestionOverlayService.isRunning && ControlState.isQuestionOverlayActive(this),
             timingPaused = interactive && storedPause,
+            answering = QuestionOverlayService.isRunning && ControlState.isAnsweringActive(this),
+            parentUnlocked = DailyLimitUnlock.isActive(this),
         )
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
@@ -144,6 +146,7 @@ class UsageTrackingService : Service() {
             accountElapsedTime(
                 interactive = powerManager().isInteractive,
                 paused = intent.getBooleanExtra(EXTRA_OVERLAY_PAUSED, false),
+                answering = intent.getBooleanExtra(EXTRA_ANSWERING, false),
             )
             refreshTrackedState()
         } else if (intent?.action == ACTION_SET_TIMING_PAUSED) {
@@ -206,16 +209,23 @@ class UsageTrackingService : Service() {
         interactive: Boolean = wasInteractive,
         paused: Boolean = overlayPaused,
         timingPaused: Boolean = this.timingPaused,
+        answering: Boolean = usageSamples.answering,
     ) {
         val now = SystemClock.elapsedRealtime()
         val bindingId = DeviceBinding.bindingId(this)
         if (bindingId != usageBindingId) {
             usageBindingId = bindingId
-            usageSamples.start(now, interactive, paused, timingPaused)
+            usageSamples.start(now, interactive, paused, timingPaused, answering, DailyLimitUnlock.isActive(this))
             return
         }
-        val elapsed = usageSamples.sample(now, interactive, paused, timingPaused)
-        if (elapsed > 0L && ControlState.addScreenTime(this, elapsed)) reportUsageIfDue(force = true)
+        val kind = usageSamples.trackedKind
+        val duration = (now - usageSamples.lastElapsed).coerceAtLeast(0L)
+        val elapsed = usageSamples.sample(now, interactive, paused, timingPaused, answering, DailyLimitUnlock.isActive(this))
+        if (kind == UsageInterval.REGULAR) {
+            if (elapsed > 0L && ControlState.addScreenTime(this, elapsed)) reportUsageIfDue(force = true)
+        } else if (kind != null) {
+            ControlState.addActivityTime(this, duration, kind)
+        }
     }
 
     private fun updateEnforcement() {
@@ -453,6 +463,7 @@ class UsageTrackingService : Service() {
         const val ACTION_REFRESH_DISPLAY = "com.example.tvparental.action.REFRESH_USAGE_DISPLAY"
         const val ACTION_SET_OVERLAY_PAUSED = "com.example.tvparental.action.SET_OVERLAY_PAUSED"
         const val EXTRA_OVERLAY_PAUSED = "overlay_paused"
+        const val EXTRA_ANSWERING = "answering"
         const val ACTION_SET_TIMING_PAUSED = "com.example.tvparental.action.SET_TIMING_PAUSED"
         const val ACTION_TIMING_PAUSE_CHANGED = "com.example.tvparental.action.TIMING_PAUSE_CHANGED"
         const val EXTRA_TIMING_PAUSED = "timing_paused"

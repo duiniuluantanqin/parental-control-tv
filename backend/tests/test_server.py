@@ -390,7 +390,7 @@ class AdminApiTests(unittest.TestCase):
         _, records = self.request("/api/v1/admin/records?date=2026-11-05")
 
         self.assertEqual(records["usage"][0]["intervals"], [
-            {"start": 100, "end": 121_000},
+            {"start": 100, "end": 121_000, "usageMillis": 850},
         ])
 
     def test_usage_record_delete_endpoint_is_removed(self) -> None:
@@ -399,6 +399,144 @@ class AdminApiTests(unittest.TestCase):
             method="DELETE",
         )
         self.assertEqual(status, 404)
+
+    def test_first_offline_usage_snapshot_retains_all_device_intervals(self) -> None:
+        intervals = [
+            {"start": 1795326000000, "end": 1795327200000, "usageMillis": 1200000},
+            {"start": 1795351200000, "end": 1795353600000, "usageMillis": 2400000},
+        ]
+        payload = {"deviceId": "tv-01", "date": "2026-11-22", "usageMillis": 3600000, "usageIntervals": intervals}
+        for _ in range(2):
+            status, _ = self.request("/api/v1/device/usage", method="POST", authenticated=False, body=payload)
+            self.assertEqual(status, 200)
+        stale = {**payload, "usageMillis": 1200000, "usageIntervals": intervals[:1]}
+        self.request("/api/v1/device/usage", method="POST", authenticated=False, body=stale)
+        _, records = self.request("/api/v1/admin/records?date=2026-11-22")
+        record = records["usage"][0]
+        self.assertEqual(sum(item["usageMillis"] for item in record["intervals"]), 3600000)
+        self.assertEqual(record["unlocatedUsageMillis"], 0)
+
+    def test_usage_detail_does_not_count_pauses_inside_a_continuous_period(self) -> None:
+        payload = {
+            "deviceId": "tv-01", "date": "2026-11-22", "usageMillis": 120000,
+            "usageIntervals": [
+                {"start": 1795326000000, "end": 1795326060000, "usageMillis": 60000},
+                {"start": 1795326120000, "end": 1795326180000, "usageMillis": 60000},
+            ],
+        }
+        self.request("/api/v1/device/usage", method="POST", authenticated=False, body=payload)
+        _, records = self.request("/api/v1/admin/records?date=2026-11-22")
+        intervals = records["usage"][0]["intervals"]
+        self.assertEqual(len(intervals), 1)
+        self.assertEqual(intervals[0]["end"] - intervals[0]["start"], 180000)
+        self.assertEqual(intervals[0]["usageMillis"], 120000)
+
+    def test_historical_usage_details_explicitly_account_for_unlocated_time(self) -> None:
+        state = server.STORE.load()
+        state["dailyUsage"] = [{
+            "deviceId": "tv-01", "date": "2026-11-22", "usageMillis": 3600000,
+            "intervals": [
+                {"start": 1795326078161, "end": 1795326139653},
+                {"start": 1795337154692, "end": 1795337215166},
+                {"start": 1795351342272, "end": 1795352848894},
+            ],
+        }]
+        server.STORE.save(state)
+        _, records = self.request("/api/v1/admin/records?date=2026-11-22")
+        record = records["usage"][0]
+        self.assertEqual(record["unlocatedUsageMillis"], 1971412)
+        self.assertEqual(sum(item["usageMillis"] for item in record["intervals"]) + record["unlocatedUsageMillis"], record["usageMillis"])
+
+    def test_usage_interval_snapshot_rejects_invalid_or_excess_duration(self) -> None:
+        for intervals in (None, [{"start": 100, "end": 200, "usageMillis": 101}],
+                          [{"start": 100, "end": 200, "usageMillis": True}],
+                          [{"start": 100, "end": 200, "usageMillis": 100}]):
+            with self.subTest(intervals=intervals):
+                status, _ = self.request("/api/v1/device/usage", method="POST", authenticated=False, body={
+                    "deviceId": "tv-01", "date": "2026-11-22", "usageMillis": 50, "usageIntervals": intervals,
+                })
+                self.assertEqual(status, 400)
+
+    def test_device_interval_snapshots_preserve_pre_upgrade_details_without_duplicates(self) -> None:
+        state = server.STORE.load()
+        state["dailyUsage"] = [{
+            "deviceId": "tv-01", "date": "2026-11-22", "usageMillis": 60000,
+            "intervals": [{"start": 1000000, "end": 1060000}],
+        }]
+        server.STORE.save(state)
+        payload = {
+            "deviceId": "tv-01", "date": "2026-11-22", "usageMillis": 120000,
+            "usageIntervals": [{"start": 2000000, "end": 2060000, "usageMillis": 60000}],
+        }
+        for _ in range(2):
+            self.request("/api/v1/device/usage", method="POST", authenticated=False, body=payload)
+        _, records = self.request("/api/v1/admin/records?date=2026-11-22")
+        record = records["usage"][0]
+        self.assertEqual(sum(item["usageMillis"] for item in record["intervals"]), 120000)
+        self.assertEqual(record["unlocatedUsageMillis"], 0)
+
+    def test_usage_reset_clears_device_intervals_and_rejects_a_pre_reset_snapshot(self) -> None:
+        today = server.datetime.now(server.timezone.utc).date().isoformat()
+        payload = {
+            "deviceId": "tv-01", "date": today, "usageMillis": 60000, "utcOffsetMinutes": 0,
+            "usageIntervals": [{"start": 1000000, "end": 1060000, "usageMillis": 60000}],
+        }
+        self.request("/api/v1/device/usage", method="POST", authenticated=False, body=payload)
+        command = server.STORE.queue_usage_reset("tv-01")
+        status, _ = self.request("/api/v1/device/usage", method="POST", authenticated=False, body=payload)
+        self.assertEqual(status, 409)
+        self.request("/api/v1/device/usage", method="POST", authenticated=False, body={
+            **payload, "usageMillis": 0, "usageIntervals": [], "usageResetId": command["id"],
+        })
+        _, records = self.request(f"/api/v1/admin/records?date={today}")
+        self.assertEqual(records["usage"][0]["intervals"], [])
+        self.assertEqual(records["usage"][0]["unlocatedUsageMillis"], 0)
+
+    def test_answering_parent_and_reward_time_are_separate_from_the_daily_quota(self) -> None:
+        minute = 60000
+        self.request("/api/v1/admin/rewards/grant", method="POST", body={"deviceId": "tv-01", "minutes": 10})
+        periods = [
+            {"start": 1000000, "end": 1060000, "usageMillis": minute},
+            {"start": 1060000, "end": 1180000, "usageMillis": 2 * minute, "kind": "answering"},
+            {"start": 1180000, "end": 1480000, "usageMillis": 5 * minute, "kind": "parent_unlocked"},
+            {"start": 1480000, "end": 1540000, "usageMillis": minute, "kind": "reward"},
+        ]
+        payload = {"deviceId": "tv-01", "date": "2026-11-22", "usageMillis": minute, "usageIntervals": periods,
+                   "rewardTime": {"spentMillis": minute, "usedTodayMillis": minute}}
+        status, _ = self.request("/api/v1/device/usage", method="POST", authenticated=False, body=payload)
+        self.assertEqual(status, 200)
+        _, records = self.request("/api/v1/admin/records?date=2026-11-22")
+        record = records["usage"][0]
+        self.assertEqual((record["usageMillis"], record["answeringMillis"], record["parentUnlockedMillis"], record["rewardUsedMillis"]),
+                         (minute, 2 * minute, 5 * minute, minute))
+        self.assertEqual(len(record["intervals"]), 4)
+        self.assertEqual(record["unlocatedUsageMillis"], 0)
+        self.assertEqual(record["unlocatedRewardMillis"], 0)
+        # The quota is unchanged while parent viewing grows. An older snapshot must not erase it.
+        newer = [{**item, "end": item["end"] + minute, "usageMillis": item["usageMillis"] + minute}
+                 if item.get("kind") == "parent_unlocked" else item for item in periods]
+        self.request("/api/v1/device/usage", method="POST", authenticated=False, body={**payload, "usageIntervals": newer})
+        self.request("/api/v1/device/usage", method="POST", authenticated=False, body=payload)
+        _, records = self.request("/api/v1/admin/records?date=2026-11-22")
+        self.assertEqual(records["usage"][0]["parentUnlockedMillis"], 6 * minute)
+
+    def test_quota_reset_preserves_answering_and_parent_viewing_details(self) -> None:
+        today = server.datetime.now(server.timezone.utc).date().isoformat()
+        periods = [
+            {"start": 1000000, "end": 1060000, "usageMillis": 60000},
+            {"start": 1060000, "end": 1120000, "usageMillis": 60000, "kind": "answering"},
+            {"start": 1120000, "end": 1180000, "usageMillis": 60000, "kind": "parent_unlocked"},
+        ]
+        payload = {"deviceId": "tv-01", "date": today, "utcOffsetMinutes": 0, "usageMillis": 60000, "usageIntervals": periods}
+        self.request("/api/v1/device/usage", method="POST", authenticated=False, body=payload)
+        command = server.STORE.queue_usage_reset("tv-01")
+        self.request("/api/v1/device/usage", method="POST", authenticated=False, body={
+            **payload, "usageMillis": 0, "usageIntervals": periods[1:], "usageResetId": command["id"],
+        })
+        _, records = self.request(f"/api/v1/admin/records?date={today}")
+        self.assertEqual(records["usage"][0]["usageMillis"], 0)
+        self.assertEqual(records["usage"][0]["answeringMillis"], 60000)
+        self.assertEqual(records["usage"][0]["parentUnlockedMillis"], 60000)
 
     def test_answer_attempts_record_correctness_and_retry_without_duplicates(self) -> None:
         question = server.STORE.load()["questions"][0]

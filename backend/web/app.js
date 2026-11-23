@@ -428,11 +428,13 @@ function renderRecords(records) {
     row.append(device);
     const total = document.createElement("td");
     total.className = "usage-total-cell";
-    total.textContent = `常规 ${formatMinutes(record.usageMillis)}`;
-    if (record.rewardUsedMillis > 0) {
-      const reward = document.createElement("small");
-      reward.textContent = `奖励 ${formatMinutes(record.rewardUsedMillis)}`;
-      total.append(reward);
+    total.textContent = `总计 ${formatMinutes(record.usageMillis + (record.rewardUsedMillis || 0) + (record.parentUnlockedMillis || 0) + (record.answeringMillis || 0))}`;
+    for (const [label, millis] of [["计入限额", record.usageMillis], ["奖励", record.rewardUsedMillis],
+      ["家长放行", record.parentUnlockedMillis], ["答题", record.answeringMillis]]) {
+      if (label !== "计入限额" && !(millis > 0)) continue;
+      const detail = document.createElement("small");
+      detail.textContent = `${label} ${formatMinutes(millis)}`;
+      total.append(detail);
     }
     row.append(total);
     const reported = document.createElement("td");
@@ -600,30 +602,40 @@ function showUsageDetails(record, deviceName) {
   rows.replaceChildren();
   const intervals = record.intervals || [];
   document.querySelector("#usageDetailTitle").textContent = `${deviceName} · 使用明细`;
-  document.querySelector("#usageDetailSubtitle").textContent = `${record.date} · 常规 ${formatMinutes(record.usageMillis)} · ${intervals.length} 个连续时段`;
-  for (const interval of intervals) {
-    const start = new Date(interval.start);
-    const end = new Date(interval.end);
-    const durationSeconds = Math.max(0, Math.round((interval.end - interval.start) / 1_000));
+  const summary = [`${record.date}`, `总计 ${formatMinutes(record.usageMillis + (record.rewardUsedMillis || 0) + (record.parentUnlockedMillis || 0) + (record.answeringMillis || 0))}`,
+    `计入限额 ${formatMinutes(record.usageMillis)}`];
+  for (const [label, millis] of [["奖励", record.rewardUsedMillis], ["家长放行", record.parentUnlockedMillis], ["答题", record.answeringMillis]]) {
+    if (millis > 0) summary.push(`${label} ${formatMinutes(millis)}`);
+  }
+  document.querySelector("#usageDetailSubtitle").textContent = summary.join(" · ");
+  const labels = { regular: "计入限额", reward: "奖励观看", answering: "答题", parent_unlocked: "家长放行" };
+  function appendDuration(periodText, millis, kind = "regular") {
+    const durationSeconds = Math.max(0, Math.round(millis / 1_000));
     const hours = Math.floor(durationSeconds / 3_600);
     const minutes = Math.floor((durationSeconds % 3_600) / 60);
     const seconds = durationSeconds % 60;
-    const duration = hours
-      ? `${hours}小时${minutes ? `${minutes}分` : ""}`
-      : minutes
-        ? `${minutes}分${seconds ? `${seconds}秒` : ""}`
-        : `${seconds}秒`;
+    const duration = `${hours ? `${hours}小时` : ""}${minutes ? `${minutes}分` : ""}${seconds || (!hours && !minutes) ? `${seconds}秒` : ""}`;
     const row = document.createElement("tr");
     const period = document.createElement("td");
     period.className = "usage-period-cell";
-    period.textContent = `${start.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}–${end.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`;
+    period.textContent = periodText;
+    const type = document.createElement("td");
+    type.textContent = labels[kind] || labels.regular;
     const elapsed = document.createElement("td");
     elapsed.className = "usage-interval-duration";
     elapsed.textContent = duration;
-    row.append(period, elapsed);
+    row.append(period, type, elapsed);
     rows.append(row);
   }
-  if (!rows.children.length) setEmptyRow(rows, 2, "暂无可还原的使用时段；设备完成多次时长上报后会显示明细");
+  for (const interval of intervals) {
+    const start = new Date(interval.start);
+    const end = new Date(interval.end);
+    appendDuration(`${start.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}–${end.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`,
+      interval.usageMillis ?? interval.end - interval.start, interval.kind);
+  }
+  if (record.unlocatedUsageMillis > 0) appendDuration("未定位到具体时段（历史上报缺少明细）", record.unlocatedUsageMillis);
+  if (record.unlocatedRewardMillis > 0) appendDuration("未定位到具体时段（历史上报缺少明细）", record.unlocatedRewardMillis, "reward");
+  if (!rows.children.length) setEmptyRow(rows, 3, "暂无使用时段");
   dialog.showModal();
 }
 

@@ -758,7 +758,7 @@ class QuestionOverlayService : Service() {
                 view.nextFocusDownId = controls.getOrElse(index + 1) { view }.id
             }
         }
-        attachOverlay(root)
+        attachOverlay(root, answering = prize != null)
         root.post {
             (actionButtons.firstOrNull() ?: back).requestFocus()
             scroll.scrollTo(0, 0)
@@ -902,12 +902,13 @@ class QuestionOverlayService : Service() {
         hideOverlay()
     }
 
-    private fun setUsagePaused(paused: Boolean) {
-        if (ControlState.isQuestionOverlayActive(this) == paused) return
-        ControlState.setQuestionOverlayActive(this, paused)
+    private fun setUsagePaused(paused: Boolean, answering: Boolean = false) {
+        if (ControlState.isQuestionOverlayActive(this) == paused && ControlState.isAnsweringActive(this) == answering) return
+        ControlState.setQuestionOverlayActive(this, paused, answering)
         val intent = Intent(this, UsageTrackingService::class.java)
             .setAction(UsageTrackingService.ACTION_SET_OVERLAY_PAUSED)
             .putExtra(UsageTrackingService.EXTRA_OVERLAY_PAUSED, paused)
+            .putExtra(UsageTrackingService.EXTRA_ANSWERING, answering)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
     }
 
@@ -1202,7 +1203,7 @@ class QuestionOverlayService : Service() {
         setOnKeyListener { _, keyCode, _ -> keyCode == KeyEvent.KEYCODE_BACK }
     }
 
-    private fun attachOverlay(root: View) {
+    private fun attachOverlay(root: View, answering: Boolean = currentMode == MODE_QUESTION && !pinEntryActive) {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -1223,7 +1224,7 @@ class QuestionOverlayService : Service() {
         }
         windowManager?.addView(root, params)
         overlayView = root
-        setUsagePaused(true)
+        setUsagePaused(true, answering)
     }
 
     private fun renderOptionSelection(options: List<TextView>, selectedIndex: Int) {

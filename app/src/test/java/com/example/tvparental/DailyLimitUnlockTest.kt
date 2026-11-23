@@ -28,18 +28,17 @@ class DailyLimitUnlockTest {
         ))
         val preferences = store.open()
         DailyLimitUnlock.setActive(preferences, boot = 12, active = true)
-        assertFalse(DailyUsageLedger.addUsage(preferences, 10 * minute, 60 * minute, 30 * minute,
-            dailyLimitUnlocked = DailyLimitUnlock.isActive(preferences, boot = 12)))
-        assertEquals(70 * minute, preferences.getLong("used_millis", 0L))
+        DailyUsageLedger.addActivity(preferences, listOf(UsageInterval(minute, 11 * minute)), UsageInterval.PARENT_UNLOCKED)
+        assertEquals(60 * minute, preferences.getLong("used_millis", 0L))
+        assertEquals(10 * minute, DailyUsageLedger.intervals(preferences).sumOf { it.usageMillis })
         assertEquals(20 * minute, RewardTimeLedger.balance(preferences))
         assertEquals(0L, preferences.getLong(RewardTimeLedger.USED_TODAY, 0L))
 
         assertTrue(DailyLimitUnlock.setActive(preferences, boot = 12, active = false))
         val restored = store.restart().open()
         assertFalse(DailyLimitUnlock.isActive(restored, boot = 12))
-        DailyUsageLedger.addUsage(restored, minute, 60 * minute, 30 * minute,
-            dailyLimitUnlocked = DailyLimitUnlock.isActive(restored, boot = 12))
-        assertEquals(70 * minute, restored.getLong("used_millis", 0L))
+        DailyUsageLedger.addUsage(restored, minute, 60 * minute, 30 * minute)
+        assertEquals(60 * minute, restored.getLong("used_millis", 0L))
         assertEquals(20 * minute, RewardTimeLedger.balance(restored))
     }
 
@@ -52,8 +51,8 @@ class DailyLimitUnlockTest {
             RewardTimeLedger.USED_TODAY to 5 * minute,
             RewardTimeLedger.ACTIVATED to true,
         )).open()
-        DailyUsageLedger.addUsage(preferences, 10 * minute, 60 * minute, 30 * minute, dailyLimitUnlocked = true)
-        assertEquals(70 * minute, preferences.getLong("used_millis", 0L))
+        DailyUsageLedger.addActivity(preferences, listOf(UsageInterval(minute, 11 * minute)), UsageInterval.PARENT_UNLOCKED)
+        assertEquals(60 * minute, preferences.getLong("used_millis", 0L))
         assertEquals(15 * minute, RewardTimeLedger.balance(preferences))
         assertEquals(5 * minute, preferences.getLong(RewardTimeLedger.USED_TODAY, 0L))
     }
