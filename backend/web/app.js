@@ -24,6 +24,7 @@ const weekdays = [
 ];
 let questions = [];
 let rewardQuestions = [];
+let rewardDevices = [];
 let rewardQuestionForm = false;
 const questionTypeFilter = document.querySelector("#questionTypeFilter");
 let poemHistory = [];
@@ -344,14 +345,24 @@ function renderDevicePicker(selectId, buttonId, devices) {
   document.getElementById(buttonId).disabled = !devices.length;
 }
 
+function renderRewardBalance() {
+  const device = rewardDevices.find(device => device.deviceId === document.querySelector("#rewardDevice").value);
+  document.querySelector("#rewardBalance").textContent = device
+    ? `剩余奖励时间：${formatMinutes(device.rewardBalanceMillis)}`
+    : "剩余奖励时间：—";
+}
+
 async function loadRewardDevices() {
   try {
     const { devices } = await api("/api/v1/admin/devices");
-    renderDevicePicker("rewardDevice", "grantReward", devices.filter(device => device.bound));
+    rewardDevices = devices.filter(device => device.bound);
+    renderDevicePicker("rewardDevice", "grantReward", rewardDevices);
   } catch (error) {
+    rewardDevices = [];
     document.querySelector("#rewardDevice").replaceChildren(new Option("电视列表加载失败", ""));
     handleError(error, document.querySelector("#rewardGrantStatus"));
   }
+  renderRewardBalance();
 }
 
 async function loadState() {
@@ -666,7 +677,7 @@ function renderBoundDevices(devices) {
     const row = document.createElement("div");
     row.className = "bound-device";
     const name = document.createElement("span");
-    name.textContent = `${device.name} · ${device.deviceId} · 奖励余额 ${formatMinutes(device.rewardBalanceMillis)}`;
+    name.textContent = `${device.name} · ${device.deviceId}`;
     const button = document.createElement("button");
     button.type = "button";
     button.className = "button caution";
@@ -1118,6 +1129,7 @@ document.querySelector("#resetDevicePin").addEventListener("click", async () => 
     button.disabled = false;
   }
 });
+document.querySelector("#rewardDevice").addEventListener("change", renderRewardBalance);
 document.querySelector("#rewardGrantForm").addEventListener("submit", async event => {
   event.preventDefault();
   const select = document.querySelector("#rewardDevice");
@@ -1138,6 +1150,8 @@ document.querySelector("#rewardGrantForm").addEventListener("submit", async even
     const { rewardBalanceMillis } = await api("/api/v1/admin/rewards/grant", {
       method: "POST", body: JSON.stringify({ deviceId, minutes }),
     });
+    rewardDevices.find(device => device.deviceId === deviceId).rewardBalanceMillis = rewardBalanceMillis;
+    renderRewardBalance();
     input.value = "";
     status.textContent = `${name} 已收到 ${minutes} 分钟奖励，余额 ${formatMinutes(rewardBalanceMillis)}。`;
   } catch (error) {

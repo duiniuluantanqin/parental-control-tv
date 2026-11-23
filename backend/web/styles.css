@@ -82,8 +82,9 @@ button:disabled { opacity: .5; cursor: default; }
 .weekly-heading { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .weekly-heading strong { color: #966039; }
 .card-heading p { margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.85; }
-.reward-grant-fields { display: grid; grid-template-columns: minmax(0, 400px) 110px auto; align-items: end; justify-content: start; gap: 10px 12px; padding: 10px 16px 12px; }
+.reward-grant-fields { display: grid; grid-template-columns: minmax(0, 400px) 110px auto auto; align-items: end; justify-content: start; gap: 10px 12px; padding: 10px 16px 12px; }
 .reward-grant-fields select, .reward-grant-fields input { min-width: 0; width: 100%; }
+.reward-balance { display: flex; align-items: center; min-height: 36px; color: var(--accent); font-size: 13px; }
 .reward-grant-status { margin: 0 16px 12px; color: var(--accent); font-size: 12px; }
 .reward-grant-status.error { color: var(--danger); }
 .reward-grant-status:empty { margin: 0; }
@@ -418,9 +419,10 @@ dialog::backdrop { background: #14253d66; backdrop-filter: blur(4px); }
   .login-card h1 { font-size: 23px; }
   .skip-link { left: 16px; }
 }
-@media (max-width: 520px) {
+@media (max-width: 760px) {
   .reward-grant-fields { grid-template-columns: minmax(0, 1fr) auto; }
   .reward-device-field { grid-column: 1 / -1; }
+  .reward-balance { grid-column: 1 / -1; min-height: 0; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
