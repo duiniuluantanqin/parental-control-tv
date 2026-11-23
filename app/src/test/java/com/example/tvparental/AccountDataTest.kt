@@ -19,6 +19,7 @@ class AccountDataTest {
             RewardTimeLedger.ACTIVATED to true,
             "daily_reward_limit_minutes" to 45,
             "temp_extension_millis" to 900_000L,
+            DailyLimitUnlock.UNLOCKED_BOOT to 12,
             "usage_reset_id.2026-11-18" to "previous-command",
             "remote_questions" to "previous account questions",
             "weekly_daily_limit_minutes" to "previous account rules",

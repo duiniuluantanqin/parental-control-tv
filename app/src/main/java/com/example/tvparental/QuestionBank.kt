@@ -431,6 +431,11 @@ object QuestionBank {
         }
     }
 
+    fun poemForDailyLimitLock(context: Context): Poem =
+        checkNotNull(selectLockoutPoem(emptyList(), bankQuestions(context), bundledQuestions(context))) {
+            "No complete poems are available."
+        }
+
     internal fun selectLockoutPoem(
         incorrectQuestions: List<TvQuestion>,
         bank: List<TvQuestion>,

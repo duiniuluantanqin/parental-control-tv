@@ -53,10 +53,12 @@ internal object DailyUsageLedger {
     }
 
     /** Returns true when the sample exhausts the accepted reward time. */
-    fun addUsage(preferences: SharedPreferences, elapsedMillis: Long, limitMillis: Long, rewardLimitMillis: Long = 0L): Boolean {
+    fun addUsage(preferences: SharedPreferences, elapsedMillis: Long, limitMillis: Long, rewardLimitMillis: Long = 0L,
+                 dailyLimitUnlocked: Boolean = false): Boolean {
         if (elapsedMillis <= 0L) return false
         val current = preferences.getLong(USED, 0L).coerceAtLeast(0L)
-        val regular = minOf(elapsedMillis, (limitMillis - current).coerceAtLeast(0L))
+        val regular = if (dailyLimitUnlocked) elapsedMillis
+            else minOf(elapsedMillis, (limitMillis - current).coerceAtLeast(0L))
         val rewardRemaining = if (preferences.getBoolean(RewardTimeLedger.ACTIVATED, false)) {
             RewardTimeLedger.availableToday(preferences, rewardLimitMillis)
         } else 0L

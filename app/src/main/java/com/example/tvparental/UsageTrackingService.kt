@@ -79,6 +79,7 @@ class UsageTrackingService : Service() {
             } else {
                 accountElapsedTime(interactive = interactive)
             }
+            if (!interactive) DailyLimitUnlock.setActive(this@UsageTrackingService, false)
             if (intent?.action == Intent.ACTION_SHUTDOWN) {
                 QuestionBank.finishForReboot(this@UsageTrackingService, shuttingDown = true)
                 return
@@ -108,6 +109,7 @@ class UsageTrackingService : Service() {
         isRunning = true
         usageBindingId = DeviceBinding.bindingId(this)
         val interactive = powerManager().isInteractive
+        if (!interactive) DailyLimitUnlock.setActive(this, false)
         val storedPause = UsageTimingPause.isPaused(this)
         if (storedPause && !interactive && UsageTimingPause.setPaused(this, false)) {
             QuestionAlarmReceiver.scheduleForCurrentState(this)
@@ -247,7 +249,7 @@ class UsageTrackingService : Service() {
         val remaining = ControlState.remainingDailyMillis(this)
         val quotaDelay = if (remaining > 0L) remaining.coerceAtLeast(100L) else SAMPLE_INTERVAL_MS
         val windowDelay = ControlState.millisUntilNextUsageWindowBoundary(this) ?: SAMPLE_INTERVAL_MS
-        val reminderDelay = if (canShowUsageReminder()) {
+        val reminderDelay = if (canShowUsageReminder() && !DailyLimitUnlock.isActive(this)) {
             when {
                 remaining > TEN_MINUTE_THRESHOLD_MS -> remaining - TEN_MINUTE_THRESHOLD_MS
                 remaining <= ONE_MINUTE_THRESHOLD_MS -> ONE_SECOND_MS
@@ -265,6 +267,7 @@ class UsageTrackingService : Service() {
     private fun maybeShowUsageReminder() {
         val remaining = ControlState.remainingDailyMillis(this)
         if (!canShowUsageReminder() ||
+            (DailyLimitUnlock.isActive(this) && !timingPaused && !ControlState.alwaysShowRemainingTime(this)) ||
             (!timingPaused && !ControlState.alwaysShowRemainingTime(this) &&
                 remaining > TEN_MINUTE_THRESHOLD_MS && !overlayPaused)
         ) {
@@ -301,6 +304,7 @@ class UsageTrackingService : Service() {
         if (reminderView !== view) return
         val text = when {
             timingPaused -> "Timer paused"
+            DailyLimitUnlock.isActive(this) -> "Daily limit unlocked"
             remaining <= ONE_MINUTE_THRESHOLD_MS -> {
                 val seconds = (remaining + ONE_SECOND_MS - 1L) / ONE_SECOND_MS
                 "${seconds}s"

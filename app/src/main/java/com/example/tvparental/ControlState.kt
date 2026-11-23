@@ -258,11 +258,12 @@ object ControlState {
         val dailyLimit = todayDailyLimitMinutes(context)
         val regularLimit = dailyLimit * MILLIS_PER_MINUTE + tempExtension(context)
         val rewardLimit = if (dailyLimit > 0) rules.dailyRewardLimitMinutes * MILLIS_PER_MINUTE else 0L
-        return DailyUsageLedger.addUsage(preferences, countedMillis, regularLimit, rewardLimit)
+        return DailyUsageLedger.addUsage(preferences, countedMillis, regularLimit, rewardLimit,
+            dailyLimitUnlocked = DailyLimitUnlock.isActive(context))
     }
 
     fun isDailyLimitReached(context: Context): Boolean {
-        return remainingDailyMillis(context) <= 0L
+        return !DailyLimitUnlock.isActive(context) && remainingDailyMillis(context) <= 0L
     }
 
     @Synchronized
@@ -500,6 +501,7 @@ object ControlState {
     internal fun clearAccountData(preferences: SharedPreferences) {
         val accountKeys = setOf(
             DAY_KEY, USED_MILLIS_KEY, TEMP_EXTENSION_KEY, USAGE_RESET_ID_KEY, USAGE_RESET_AT_KEY,
+            DailyLimitUnlock.UNLOCKED_BOOT,
             "usage_history_days", LOCKOUT_UNTIL_KEY, LOCKOUT_STARTED_AT_KEY, LOCKOUT_POEM_KEY,
             QUESTION_STARTED_AT_KEY, QUESTION_TIMEOUT_AT_KEY, QUESTION_OVERLAY_ACTIVE_KEY,
             REMOTE_QUESTIONS_KEY, WEEKLY_LIMITS_KEY, USAGE_WINDOWS_KEY, DISABLED_WINDOWS_KEY,

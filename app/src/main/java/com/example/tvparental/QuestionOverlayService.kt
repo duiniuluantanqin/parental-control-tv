@@ -53,7 +53,7 @@ class QuestionOverlayService : Service() {
     private var pinHint: TextView? = null
     private var pinEntryActive = false
     private var rewardOfferMillis = 0L
-    private var rewardOfferDismissed = false
+    private var dailyLimitPoem: Poem? = null
     private var rewardChallengeOffered = false
     private var rewardChallengeBinding = ""
     private var currentQuestion: TvQuestion? = null
@@ -458,7 +458,6 @@ class QuestionOverlayService : Service() {
         removeOverlay()
         if (currentMode != mode) {
             failedAttempts = 0
-            rewardOfferDismissed = false
         }
         rewardOfferMillis = if (mode == MODE_DAILY_LOCK) ControlState.rewardOfferMillis(this) else 0L
         rewardChallengeOffered = mode == MODE_DAILY_LOCK && canChallengeForRewards()
@@ -474,11 +473,11 @@ class QuestionOverlayService : Service() {
         val root = createRoot().apply {
             gravity = Gravity.CENTER
             orientation = LinearLayout.VERTICAL
-            if (mode == MODE_WRONG_LOCK) setPadding(dp(24), dp(16), dp(24), dp(16))
+            if (mode == MODE_WRONG_LOCK || mode == MODE_DAILY_LOCK) setPadding(dp(24), dp(16), dp(24), dp(16))
             else setPadding(dp(48), dp(32), dp(48), dp(32))
             setOnKeyListener { _, _, _ -> true }
         }
-        var rewardFocus: View? = null
+        var dailyLockFocus: View? = null
         if (mode == MODE_WRONG_LOCK) {
             val status = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -502,30 +501,34 @@ class QuestionOverlayService : Service() {
                 text = if (mode == MODE_DAILY_LOCK) "Today's screen-time limit has been reached"
                 else "Outside allowed hours"
                 setTextColor(Color.rgb(220, 235, 222))
-                textSize = 28f
+                textSize = if (mode == MODE_DAILY_LOCK) 22f else 28f
                 gravity = Gravity.CENTER
             }
             root.addView(title, matchParams())
         }
 
         if (mode == MODE_WRONG_LOCK) {
-            addLockPoem(root)
+            addLockPoem(root, ControlState.wrongAnswerLockPoem(this))
         } else {
             val message = TextView(this).apply {
                 text = when {
                     mode == MODE_USAGE_WINDOW -> "Try again during an allowed time window."
-                    rewardOfferMillis > 0L && !rewardOfferDismissed ->
+                    rewardOfferMillis > 0L ->
                         "Use reward time?\n${ControlState.rewardTimeLabel(rewardOfferMillis)} available today."
-                    rewardOfferMillis > 0L -> "TV is paused. You can still use reward time today."
                     rewardChallengeOffered -> "Answer a hard question to earn reward time."
                     else -> "Today's allowance is used. Access returns tomorrow."
                 }
                 setTextColor(Color.WHITE)
-                textSize = 32f
+                textSize = if (mode == MODE_DAILY_LOCK) 18f else 32f
                 gravity = Gravity.CENTER
-                setPadding(0, dp(35), 0, dp(20))
+                if (mode == MODE_DAILY_LOCK) setPadding(0, dp(8), 0, dp(8))
+                else setPadding(0, dp(35), 0, dp(20))
             }
-            root.addView(message, weightedParams(1f))
+            root.addView(message, if (mode == MODE_DAILY_LOCK) matchParams() else weightedParams(1f))
+            if (mode == MODE_DAILY_LOCK) {
+                val poem = dailyLimitPoem ?: QuestionBank.poemForDailyLimitLock(this).also { dailyLimitPoem = it }
+                addLockPoem(root, poem)
+            }
         }
 
         if (mode == MODE_USAGE_WINDOW) addLockCountdown(root)
@@ -538,16 +541,16 @@ class QuestionOverlayService : Service() {
             }, matchParams())
         } else if (mode == MODE_WRONG_LOCK) {
             addUnlockButton(root, mode)
-        } else if (rewardOfferMillis > 0L || rewardChallengeOffered) {
-            rewardFocus = addRewardChoices(root)
+        } else if (mode == MODE_DAILY_LOCK) {
+            dailyLockFocus = addDailyLockChoices(root)
         }
         attachOverlay(root)
         updateLockCountdown()
-        val focus = rewardFocus ?: unlockButton ?: root
+        val focus = dailyLockFocus ?: unlockButton ?: root
         root.post { focus.requestFocus() }
     }
 
-    private fun addRewardChoices(root: LinearLayout): View {
+    private fun addDailyLockChoices(root: LinearLayout): View {
         val actions = LinearLayout(this).apply { gravity = Gravity.CENTER }
         fun action(label: String, clicked: () -> Unit) = TextView(this).apply {
             id = View.generateViewId()
@@ -578,12 +581,7 @@ class QuestionOverlayService : Service() {
         if (rewardChallengeOffered) {
             buttons += action("Challenge a hard question") { openRewardChallenge() }
         }
-        if (rewardOfferMillis > 0L && !rewardOfferDismissed) {
-            buttons += action("Not now") {
-                rewardOfferDismissed = true
-                renderLock(MODE_DAILY_LOCK, force = true)
-            }
-        }
+        buttons += action("Unlock with PIN") { showPasswordEntry(MODE_DAILY_LOCK) }
         buttons.forEachIndexed { index, button ->
             actions.addView(button, LinearLayout.LayoutParams(-2, dp(52)).apply {
                 if (index > 0) marginStart = dp(16)
@@ -592,7 +590,7 @@ class QuestionOverlayService : Service() {
             button.nextFocusRightId = buttons.getOrElse(index + 1) { button }.id
         }
         root.addView(actions, matchParams())
-        return if (rewardOfferMillis > 0L && !rewardOfferDismissed) buttons.last() else buttons.first()
+        return buttons.last()
     }
 
     private fun canChallengeForRewards(): Boolean =
@@ -769,8 +767,7 @@ class QuestionOverlayService : Service() {
         return root
     }
 
-    private fun addLockPoem(root: LinearLayout) {
-        val poem = ControlState.wrongAnswerLockPoem(this)
+    private fun addLockPoem(root: LinearLayout, poem: Poem) {
         val title = TextView(this).apply {
             text = poem.title
             textSize = 28f
@@ -886,7 +883,8 @@ class QuestionOverlayService : Service() {
 
     private fun updateRemainingTimeLabel() {
         val minutes = (ControlState.remainingDailyMillis(this) + 59_999L) / 60_000L
-        remainingTimeLabel?.text = "Time remaining today · ${minutes} min"
+        remainingTimeLabel?.text = if (DailyLimitUnlock.isActive(this)) "Daily limit unlocked until standby"
+        else "Time remaining today · ${minutes} min"
     }
 
     private fun handleQuestionTimeout(question: TvQuestion) {
@@ -993,6 +991,7 @@ class QuestionOverlayService : Service() {
                 pinCooldownUntil = 0L
                 when (mode) {
                     MODE_QUESTION -> skipChallenge()
+                    MODE_DAILY_LOCK -> unlockDailyLimit()
                     else -> unlockWrongLock()
                 }
             } else {
@@ -1067,6 +1066,16 @@ class QuestionOverlayService : Service() {
         }
     }
 
+    private fun unlockDailyLimit() {
+        if (!DailyLimitUnlock.setActive(this, true)) {
+            pinHint?.text = "Could not unlock the daily limit. Try again."
+            unlockPad?.reset()
+            return
+        }
+        QuestionAlarmReceiver.scheduleForCurrentState(this)
+        refreshBlockingState()
+    }
+
     private fun unlockWrongLock() {
         QuestionBank.finishChallenge(this)
         ControlState.clearWrongAnswerLock(this)
@@ -1117,7 +1126,8 @@ class QuestionOverlayService : Service() {
         }
         if (currentMode == MODE_DAILY_LOCK) {
             if (!ControlState.isDailyLimitReached(this)) return refreshBlockingState()
-            if (rewardOfferMillis != ControlState.rewardOfferMillis(this) || rewardChallengeOffered != canChallengeForRewards()) {
+            if (!pinEntryActive && (rewardOfferMillis != ControlState.rewardOfferMillis(this) ||
+                    rewardChallengeOffered != canChallengeForRewards())) {
                 return renderLock(MODE_DAILY_LOCK, force = true)
             }
         }
@@ -1251,6 +1261,7 @@ class QuestionOverlayService : Service() {
         handler.removeCallbacks(pinCooldown)
         removeOverlay()
         pinEntryActive = false
+        dailyLimitPoem = null
         currentMode = MODE_NONE
         currentQuestion = null
         if (!preserveQuestionTimeout && !isTestQuestion) ControlState.clearQuestionTimeout(this)
