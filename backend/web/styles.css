@@ -252,6 +252,7 @@ dialog::backdrop { background: #14253d66; backdrop-filter: blur(4px); }
 .form-heading h2 { margin-bottom: 5px; font-size: 21px; }
 .form-heading .muted { font-size: 12px; }
 .form-meta { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-top: 18px; }
+#rewardAnswerTypeField, #numericAnswerField { margin-top: 20px; }
 .options-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; margin-top: 22px; }
 .options-fields label { grid-template-columns: 18px minmax(0, 1fr); align-items: center; color: var(--accent); font-weight: 700; }
 .options-fields input { width: 100%; min-width: 0; font-weight: 400; }

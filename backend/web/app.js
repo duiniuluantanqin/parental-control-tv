@@ -90,7 +90,7 @@ function renderQuestions() {
   const filtered = bank.filter(question =>
     (!questionTypeFilter.value || questionTypeFilter.value === (question.rewardMinutes ? "reward" : "regular"))
     && (!categoryFilter.value || question.category === categoryFilter.value)
-    && (!query || [question.prompt, question.answer, ...question.options].join(" ").toLowerCase().includes(query))
+    && (!query || [question.prompt, question.answer, question.numericAnswer, ...(question.options || [])].join(" ").toLowerCase().includes(query))
   );
   document.querySelector("#questionResults").textContent = `显示 ${filtered.length} / ${bank.length} 道`;
   rows.replaceChildren();
@@ -106,7 +106,7 @@ function renderQuestions() {
   }
   for (const question of filtered) {
     const tr = document.createElement("tr");
-    for (const [column, value] of [question.category, question.prompt, question.answer].entries()) {
+    for (const [column, value] of [question.category, question.prompt, question.numericAnswer ?? question.answer].entries()) {
       const td = document.createElement("td");
       td.dataset.label = ["类别", "题目", "正确答案"][column];
       if (column === 1) {
@@ -125,7 +125,7 @@ function renderQuestions() {
         if (question.rewardMinutes) {
           const reward = document.createElement("span");
           reward.className = "category-badge reward-question-badge";
-          reward.textContent = `奖励难题 · ${question.rewardMinutes} 分钟`;
+          reward.textContent = `奖励难题 · ${question.type === "numeric" ? "计算题" : "选择题"} · ${question.rewardMinutes} 分钟`;
           td.append(reward);
         }
       } else {
@@ -162,12 +162,18 @@ function renderQuestions() {
 
 function showQuestionDetail(question) {
   document.querySelector("#questionDetailMeta").textContent = question.rewardMinutes
-    ? `奖励难题 · 答对奖励 ${question.rewardMinutes} 分钟 · 类别：${question.category}`
+    ? `奖励难题 · ${question.type === "numeric" ? "计算题" : "选择题"} · 答对奖励 ${question.rewardMinutes} 分钟 · 类别：${question.category}`
     : `类别：${question.category} · 难度：${question.difficulty}`;
   document.querySelector("#questionDetailPrompt").textContent = question.prompt;
   const options = document.querySelector("#questionDetailOptions");
   options.replaceChildren();
-  for (const [index, option] of question.options.entries()) {
+  if (question.type === "numeric") {
+    const item = document.createElement("li");
+    item.textContent = `数字答案：${question.numericAnswer}`;
+    item.className = "correct";
+    options.append(item);
+  }
+  for (const [index, option] of (question.options || []).entries()) {
     const item = document.createElement("li");
     item.textContent = `${"ABCD"[index]}. ${option}`;
     if (option === question.answer) {
@@ -842,14 +848,20 @@ async function addQuestion(event) {
   const button = document.querySelector("#submitQuestion");
   const options = [...document.querySelectorAll(".option-input")].map(input => input.value.trim());
   const answerIndex = Number(document.querySelector("#answerInput").value);
+  const numeric = rewardQuestionForm && document.querySelector("#rewardAnswerType").value === "numeric";
   const question = {
     prompt: document.querySelector("#promptInput").value.trim(),
     category: categoryInput.value,
     difficulty: document.querySelector("#difficultyInput").value,
-    options,
-    answer: options[answerIndex],
   };
-  if (new Set(options).size !== 4) {
+  if (numeric) {
+    question.type = "numeric";
+    question.numericAnswer = document.querySelector("#numericAnswerInput").value.trim();
+  } else {
+    question.options = options;
+    question.answer = options[answerIndex];
+  }
+  if (!numeric && new Set(options).size !== 4) {
     document.querySelector("#questionNotice").textContent = "四个选项需要各不相同";
     return;
   }
@@ -857,7 +869,10 @@ async function addQuestion(event) {
   document.querySelector("#questionNotice").textContent = "";
   try {
     const bank = rewardQuestionForm ? "reward-questions" : "questions";
-    if (rewardQuestionForm) question.rewardMinutes = document.querySelector("#challengeRewardMinutes").valueAsNumber;
+    if (rewardQuestionForm) {
+      question.rewardMinutes = document.querySelector("#challengeRewardMinutes").valueAsNumber;
+      if (!numeric) question.type = "choice";
+    }
     await api(`/api/v1/admin/${bank}`, { method: "POST", body: JSON.stringify(question) });
     questionDialog.close();
     await loadState();
@@ -1200,16 +1215,33 @@ document.querySelector("#logoutButton").addEventListener("click", async () => {
     handleError(error);
   }
 });
+function updateQuestionAnswerFields() {
+  const numeric = rewardQuestionForm && document.querySelector("#rewardAnswerType").value === "numeric";
+  document.querySelector("#numericAnswerField").hidden = !numeric;
+  document.querySelector("#numericAnswerInput").required = numeric;
+  document.querySelector("#numericAnswerInput").disabled = !numeric;
+  document.querySelector("#choiceAnswerFields").hidden = numeric;
+  for (const input of document.querySelectorAll("#choiceAnswerFields input, #choiceAnswerFields select")) {
+    input.required = !numeric;
+    input.disabled = numeric;
+  }
+}
+
 function openQuestionForm(reward) {
   rewardQuestionForm = reward;
   questionForm.reset();
   document.querySelector("#questionDialogTitle").textContent = reward ? "添加奖励难题" : "添加题目";
   document.querySelector("#rewardMinutesField").hidden = !reward;
   document.querySelector("#challengeRewardMinutes").disabled = !reward;
+  document.querySelector("#rewardAnswerTypeField").hidden = !reward;
+  document.querySelector("#rewardAnswerType").disabled = !reward;
+  document.querySelector("#rewardAnswerType").value = "choice";
+  updateQuestionAnswerFields();
   document.querySelector("#questionNotice").textContent = "";
   questionDialog.showModal();
   document.querySelector("#promptInput").focus();
 }
+document.querySelector("#rewardAnswerType").addEventListener("change", updateQuestionAnswerFields);
 document.querySelector("#addQuestionButton").addEventListener("click", () => openQuestionForm(false));
 document.querySelector("#addRewardQuestionButton").addEventListener("click", () => openQuestionForm(true));
 for (const id of ["closeQuestionDialog", "cancelQuestion"]) {

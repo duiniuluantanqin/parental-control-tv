@@ -611,13 +611,19 @@ class QuestionOverlayService : Service() {
             if (question == null) {
                 showRewardPanel("No hard questions are available right now.")
             } else {
-                val options = question.getJSONArray("options")
                 val minutes = question.getInt("rewardMinutes")
                 val questionId = question.getString("id")
-                val choices = (0 until options.length()).map { index ->
-                    "${'A' + index}.  ${options.getString(index)}" to { submitRewardAnswer(questionId, index) }
+                if (question.optString("type") == "numeric") {
+                    showRewardPanel(question.getString("prompt"), "Win ${minuteLabel(minutes)}") { answer ->
+                        submitRewardAnswer(questionId, answer)
+                    }
+                } else {
+                    val options = question.getJSONArray("options")
+                    val choices = (0 until options.length()).map { index ->
+                        "${'A' + index}.  ${options.getString(index)}" to { submitRewardAnswer(questionId, index) }
+                    }
+                    showRewardPanel(question.getString("prompt"), "Win ${minuteLabel(minutes)}", choices)
                 }
-                showRewardPanel(question.getString("prompt"), "Win ${minuteLabel(minutes)}", choices)
             }
         }
     }
@@ -628,16 +634,30 @@ class QuestionOverlayService : Service() {
         }
         val answer = JSONObject().put("questionId", questionId).put("selectedIndex", selectedIndex)
         requestRewardChallenge(answer, "Checking your answer…", { submitRewardAnswer(questionId, selectedIndex) }) { response ->
-            val minutes = response.getInt("earnedMinutes")
-            val available = ControlState.rewardOfferMillis(this)
-            val message = when {
-                !response.getBoolean("correct") -> "Incorrect. No reward time was earned."
-                available > 0L -> "Correct! ${minuteLabel(minutes)} added.\n${ControlState.rewardTimeLabel(available)} available today."
-                else -> "Correct! ${minuteLabel(minutes)} saved in your reward balance."
-            }
-            val actions = if (available > 0L) listOf("Use reward time" to ::useRewardTime) else emptyList()
-            showRewardPanel(message, actions = actions)
+            showRewardAnswerResult(response)
         }
+    }
+
+    private fun submitRewardAnswer(questionId: String, numericAnswer: String) {
+        if (!canChallengeForRewards() || DeviceBinding.bindingId(this) != rewardChallengeBinding) {
+            return refreshBlockingState()
+        }
+        val answer = JSONObject().put("questionId", questionId).put("numericAnswer", numericAnswer)
+        requestRewardChallenge(answer, "Checking your answer…", { submitRewardAnswer(questionId, numericAnswer) }) { response ->
+            showRewardAnswerResult(response)
+        }
+    }
+
+    private fun showRewardAnswerResult(response: JSONObject) {
+        val minutes = response.getInt("earnedMinutes")
+        val available = ControlState.rewardOfferMillis(this)
+        val message = when {
+            !response.getBoolean("correct") -> "Incorrect. No reward time was earned."
+            available > 0L -> "Correct! ${minuteLabel(minutes)} added.\n${ControlState.rewardTimeLabel(available)} available today."
+            else -> "Correct! ${minuteLabel(minutes)} saved in your reward balance."
+        }
+        val actions = if (available > 0L) listOf("Use reward time" to ::useRewardTime) else emptyList()
+        showRewardPanel(message, actions = actions)
     }
 
     private fun requestRewardChallenge(
@@ -677,6 +697,7 @@ class QuestionOverlayService : Service() {
         message: String,
         prize: String? = null,
         actions: List<Pair<String, () -> Unit>> = emptyList(),
+        onNumericAnswer: ((String) -> Unit)? = null,
     ): View {
         handler.removeCallbacks(lockTicker)
         removeOverlay()
@@ -713,6 +734,20 @@ class QuestionOverlayService : Service() {
         body.addView(label(message, 24f, Color.WHITE).apply {
             setPadding(0, dp(10), 0, dp(10))
         }, matchParams())
+        var numericAnswer = ""
+        var refreshNumericAnswer: () -> Unit = {}
+        val answerDisplay = if (onNumericAnswer != null) {
+            label("", 28f, Color.WHITE).apply {
+                gravity = Gravity.CENTER
+                background = GradientDrawable().apply {
+                    setColor(Color.rgb(28, 18, 43))
+                    setStroke(dp(1), Color.rgb(164, 119, 215))
+                    cornerRadius = dp(8).toFloat()
+                }
+                minHeight = dp(52)
+                setPadding(dp(10), dp(4), dp(10), dp(4))
+            }.also { body.addView(it, matchParams()) }
+        } else null
         fun button(copy: String, onClick: () -> Unit) = label(copy, 20f, lavender).apply {
             id = View.generateViewId()
             gravity = Gravity.CENTER_VERTICAL
@@ -732,10 +767,82 @@ class QuestionOverlayService : Service() {
             setOnKeyListener { _, key, event -> handleBack(key, event) }
             setOnClickListener { onClick() }
         }
-        val actionButtons = actions.map { (copy, onClick) -> button(copy, onClick) }
         val back = button("Back to daily limit", ::returnToUsageLock)
+        val actionButtons = if (onNumericAnswer != null) {
+            listOf(
+                button("Clear") { numericAnswer = ""; refreshNumericAnswer() },
+                button("Submit") {
+                    if (numericAnswer.isNotEmpty() && numericAnswer != "-") onNumericAnswer(numericAnswer)
+                }.apply { isEnabled = false },
+            )
+        } else actions.map { (copy, onClick) -> button(copy, onClick) }
+        val keyboardButtons = mutableListOf<TextView>()
+        if (onNumericAnswer != null) {
+            refreshNumericAnswer = {
+                answerDisplay?.text = numericAnswer.ifEmpty { "Enter an answer" }
+                actionButtons.lastOrNull()?.isEnabled = numericAnswer.isNotEmpty() && numericAnswer != "-"
+            }
+            val keypad = GridLayout(this).apply {
+                columnCount = 3
+                rowCount = 4
+            }
+            val keyLabels = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "±", "0", "Del")
+            keyLabels.forEachIndexed { index, keyLabel ->
+                val key = button(keyLabel) {
+                    when (keyLabel) {
+                        "±" -> numericAnswer = if (numericAnswer.startsWith("-")) numericAnswer.drop(1) else "-$numericAnswer"
+                        "Del" -> numericAnswer = numericAnswer.dropLast(1)
+                        else -> if (numericAnswer.count(Char::isDigit) < 120) numericAnswer += keyLabel
+                    }
+                    refreshNumericAnswer()
+                }.apply {
+                    gravity = Gravity.CENTER
+                    textSize = if (keyLabel == "Del") 18f else 24f
+                }
+                keyboardButtons += key
+                keypad.addView(key, GridLayout.LayoutParams(
+                    GridLayout.spec(index / 3, 1f),
+                    GridLayout.spec(index % 3, 1f),
+                ).apply {
+                    width = 0
+                    height = dp(48)
+                    setMargins(dp(4), dp(3), dp(4), dp(3))
+                })
+            }
+            keyboardButtons.forEachIndexed { index, key ->
+                key.nextFocusLeftId = keyboardButtons[if (index % 3 == 0) index else index - 1].id
+                key.nextFocusRightId = keyboardButtons[if (index % 3 == 2) index else index + 1].id
+                key.nextFocusUpId = keyboardButtons[(index - 3).coerceAtLeast(index % 3)].id
+                key.nextFocusDownId = if (index >= 9) actionButtons[if (index == 9) 0 else 1].id
+                else keyboardButtons[index + 3].id
+            }
+            body.addView(keypad, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { setMargins(dp(44), dp(8), dp(44), dp(4)) })
+            actionButtons.forEachIndexed { index, control ->
+                control.nextFocusLeftId = actionButtons.getOrElse(index - 1) { control }.id
+                control.nextFocusRightId = actionButtons.getOrElse(index + 1) { control }.id
+                control.nextFocusUpId = keyboardButtons[9 + index].id
+                control.nextFocusDownId = back.id
+            }
+            refreshNumericAnswer()
+        }
         root.addView(back, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) })
-        if (prize != null && actionButtons.size == 4) {
+        if (onNumericAnswer != null && actionButtons.size == 2) {
+            val controls = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+            }
+            actionButtons.forEachIndexed { index, control ->
+                controls.addView(control, LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+                    if (index > 0) marginStart = dp(8)
+                })
+            }
+            body.addView(controls, matchParams())
+            back.nextFocusUpId = actionButtons.first().id
+            actionButtons.forEach { it.nextFocusDownId = back.id }
+        } else if (prize != null && actionButtons.size == 4) {
             actionButtons.chunked(2).forEachIndexed { rowIndex, pair ->
                 val row = LinearLayout(this)
                 pair.forEachIndexed { column, option ->
@@ -760,7 +867,7 @@ class QuestionOverlayService : Service() {
         }
         attachOverlay(root, answering = prize != null)
         root.post {
-            (actionButtons.firstOrNull() ?: back).requestFocus()
+            (keyboardButtons.firstOrNull() ?: actionButtons.firstOrNull() ?: back).requestFocus()
             scroll.scrollTo(0, 0)
         }
         handler.postDelayed(lockTicker, 1_000L)

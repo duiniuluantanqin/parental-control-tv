@@ -47,6 +47,15 @@ BACKEND_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 DEVICE_ONLINE_SECONDS = 180
 MILLIS_PER_MINUTE = 60_000
 MAX_REWARD_GRANT_MINUTES = 1440
+DEFAULT_REWARD_QUESTION = {
+    "id": "builtin-reward-sequence-30",
+    "category": "数学",
+    "difficulty": "中",
+    "prompt": "有一列数：2, 5, 9, 14, 20, 27, 35, ...，这列数的第 30 个是多少？",
+    "type": "numeric",
+    "numericAnswer": "495",
+    "rewardMinutes": 10,
+}
 
 WEEKDAYS = tuple(str(day) for day in range(1, 8))
 DEFAULT_SETTINGS = {
@@ -256,6 +265,41 @@ def validate_question_batch(value: object) -> list[dict[str, object]]:
     return result
 
 
+def validate_reward_question(value: object, *, question_id: str | None = None) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError("题目格式不正确")
+    answer_type = value.get("type", "choice")
+    if answer_type not in ("choice", "numeric"):
+        raise ValueError("题目类型无效")
+    prompt = value.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt.strip()) > 240:
+        raise ValueError("题目内容长度必须为 1 到 240 个字符")
+    minutes = value.get("rewardMinutes", 10)
+    if type(minutes) is not int or not 1 <= minutes <= MAX_REWARD_GRANT_MINUTES:
+        raise ValueError("每题奖励时长必须是 1 到 1440 之间的整数")
+    question = {
+        "id": question_id or value.get("id") or f"reward-{uuid.uuid4().hex}",
+        "prompt": prompt.strip(),
+        "category": value.get("category", "其他"),
+        "difficulty": value.get("difficulty", "中"),
+        "rewardMinutes": minutes,
+    }
+    for key, maximum in (("category", 40), ("difficulty", 40)):
+        item = question[key]
+        if not isinstance(item, str) or not item.strip() or len(item.strip()) > maximum:
+            raise ValueError("题目类别或难度无效")
+        question[key] = item.strip()
+    if answer_type == "numeric":
+        numeric_answer = value.get("numericAnswer")
+        if not isinstance(numeric_answer, str) or not re.fullmatch(r"[+-]?[0-9]{1,120}", numeric_answer.strip()):
+            raise ValueError("正确答案必须为整数")
+        question["type"] = "numeric"
+        question["numericAnswer"] = str(int(numeric_answer.strip()))
+    else:
+        question.update(validate_question({**value, "id": question["id"], "priority": False}))
+    return question
+
+
 def validate_password_reset(value: object) -> dict[str, str] | None:
     if value is None:
         return None
@@ -277,7 +321,7 @@ def default_state() -> dict[str, object]:
     return {
         "settings": dict(DEFAULT_SETTINGS),
         "questions": normalized,
-        "rewardQuestions": [],
+        "rewardQuestions": [dict(DEFAULT_REWARD_QUESTION)],
         "passwordReset": None,
         "dailyUsage": [],
         "answerRecords": [],
@@ -346,6 +390,8 @@ class StateStore:
                 if row is None:
                     state = default_state()
                     self._write_state(connection, state)
+                    connection.execute("INSERT OR IGNORE INTO state_migrations(name) VALUES ('numeric_reward_questions')")
+                    connection.commit()
                 else:
                     state = {
                         "settings": json.loads(row[0]),
@@ -368,6 +414,16 @@ class StateStore:
                             for item in connection.execute("SELECT device_id, payload FROM devices")
                         },
                     }
+                    migration = connection.execute(
+                        "SELECT 1 FROM state_migrations WHERE name = 'numeric_reward_questions'",
+                    ).fetchone()
+                    if migration is None:
+                        reward_questions = state["rewardQuestions"]
+                        if not any(item.get("id") == DEFAULT_REWARD_QUESTION["id"] for item in reward_questions):
+                            reward_questions.append(dict(DEFAULT_REWARD_QUESTION))
+                        self._write_state(connection, state)
+                        connection.execute("INSERT INTO state_migrations(name) VALUES ('numeric_reward_questions')")
+                        connection.commit()
             if not isinstance(state, dict) or not isinstance(state.get("questions"), list):
                 raise RuntimeError("backend state database has an invalid format")
             return {
@@ -455,12 +511,23 @@ class StateStore:
                 return {"eligible": False, "question": None}
             attempts = device.get("rewardQuestionAttempts", {})
             question = next((item for item in state["rewardQuestions"] if item["id"] not in attempts), None)
-            return {"eligible": True, "question": {
-                key: question[key] for key in ("id", "prompt", "options", "rewardMinutes")
-            } if question else None}
+            if question is None:
+                public_question = None
+            elif question.get("type") == "numeric":
+                public_question = {key: question[key] for key in ("id", "prompt", "type", "rewardMinutes")}
+            else:
+                public_question = {key: question[key] for key in ("id", "prompt", "options", "rewardMinutes")}
+            return {"eligible": True, "question": public_question}
 
-    def answer_reward_question(self, device_id: str, question_id: object, selected: object) -> tuple[int, dict]:
-        if not isinstance(question_id, str) or not 1 <= len(question_id) <= 80 or type(selected) is not int or not 0 <= selected < 4:
+    def answer_reward_question(self, device_id: str, question_id: object, selected: object = None,
+                               numeric_answer: object = None) -> tuple[int, dict]:
+        selected_is_valid = type(selected) is int and 0 <= selected < 4
+        numeric_is_valid = (
+            selected is None and isinstance(numeric_answer, str)
+            and re.fullmatch(r"[+-]?[0-9]{1,120}", numeric_answer.strip()) is not None
+        )
+        if (not isinstance(question_id, str) or not 1 <= len(question_id) <= 80
+                or selected_is_valid == numeric_is_valid):
             raise ValueError("无效的奖励难题答案")
         with self.lock:
             state = self.load()
@@ -468,13 +535,18 @@ class StateStore:
             local_time = self.reward_challenge_day(device)
             attempts = device.get("rewardQuestionAttempts", {})
             result = attempts.get(question_id)
+            question = next((item for item in state["rewardQuestions"] if item["id"] == question_id), None)
+            if question is not None and (question.get("type") == "numeric") != numeric_is_valid:
+                raise ValueError("无效的奖励难题答案")
             if result is None:
                 if not self.reward_challenge_allowed(state, device_id, local_time):
                     return 409, {"error": "达到每日使用限额后才可挑战"}
-                question = next((item for item in state["rewardQuestions"] if item["id"] == question_id), None)
                 if question is None:
                     return 404, {"error": "奖励难题已删除"}
-                correct = question["options"][selected] == question["answer"]
+                if question.get("type") == "numeric":
+                    correct = str(int(numeric_answer.strip())) == question["numericAnswer"]
+                else:
+                    correct = question["options"][selected] == question["answer"]
                 minutes = question["rewardMinutes"] if correct else 0
                 result = {"correct": correct, "earnedMinutes": minutes}
                 attempts[question_id] = result
@@ -501,6 +573,9 @@ class StateStore:
                 position INTEGER PRIMARY KEY,
                 question_id TEXT NOT NULL UNIQUE,
                 payload TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS state_migrations (
+                name TEXT PRIMARY KEY
             );
             CREATE TABLE IF NOT EXISTS poem_history (
                 title TEXT NOT NULL,
@@ -1184,7 +1259,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             try:
                 payload = self.read_json()
-                status, result = self.store.answer_reward_question(self.device_id, payload.get("questionId"), payload.get("selectedIndex"))
+                status, result = self.store.answer_reward_question(
+                    self.device_id, payload.get("questionId"), payload.get("selectedIndex"), payload.get("numericAnswer"),
+                )
                 self.send_json(status, result)
             except ValueError as error:
                 self.send_json(400, {"error": str(error)})
@@ -1641,11 +1718,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     self.store.save(state)
                     self.send_json(200, {"settings": state["settings"]})
                 elif path == "/api/v1/admin/reward-questions":
-                    minutes = payload.get("rewardMinutes", 10)
-                    if type(minutes) is not int or not 1 <= minutes <= MAX_REWARD_GRANT_MINUTES:
-                        raise ValueError("每题奖励时长必须是 1 到 1440 之间的整数")
-                    question = validate_question({**payload, "id": f"reward-{uuid.uuid4().hex}", "priority": False})
-                    question["rewardMinutes"] = minutes
+                    question = validate_reward_question(payload, question_id=f"reward-{uuid.uuid4().hex}")
                     state["rewardQuestions"].append(question)
                     self.store.save(state)
                     self.send_json(201, question)

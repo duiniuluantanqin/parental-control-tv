@@ -59,5 +59,21 @@ if ($avds -cnotcontains $AvdName) {
     throw "Unknown AVD '$AvdName'. Run with -List to see available names."
 }
 
-Start-Process -FilePath $emulatorPath -ArgumentList @('-avd', ('"{0}"' -f $AvdName)) -WindowStyle Hidden
-Write-Host "Starting $AvdName. Wait for Android to finish booting before running scripts\install_emulator.bat."
+$avdPattern = '(?:-avd\s+"?' + [regex]::Escape($AvdName) + '"?(?:\s|$)|@"?' + [regex]::Escape($AvdName) + '"?(?:\s|$))'
+$existingInstance = Get-CimInstance Win32_Process -Filter "name = 'emulator.exe'" |
+    Where-Object { $_.CommandLine -match $avdPattern } |
+    Select-Object -First 1
+if ($existingInstance) {
+    $mode = if ($existingInstance.CommandLine -match '(^|\s)-no-window(\s|$)') { 'headless' } else { 'with a window' }
+    Write-Host "An emulator for $AvdName is already running (PID $($existingInstance.ProcessId), $mode)."
+    Write-Host 'Use the existing emulator with scripts\install_emulator.bat, or close the existing instance before starting it again.'
+    exit 0
+}
+
+$arguments = @('-avd', ('"{0}"' -f $AvdName))
+$emulatorProcess = Start-Process -FilePath $emulatorPath -ArgumentList $arguments -PassThru
+Start-Sleep -Seconds 2
+if ($emulatorProcess.HasExited) {
+    throw "Emulator exited during startup (exit code $($emulatorProcess.ExitCode)). Check the AVD configuration and emulator logs."
+}
+Write-Host "Started $AvdName (PID $($emulatorProcess.Id)). Wait for Android to finish booting before running scripts\install_emulator.bat."

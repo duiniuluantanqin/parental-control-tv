@@ -234,7 +234,7 @@
 
   <dialog id="questionDialog" aria-labelledby="questionDialogTitle">
     <form id="questionForm" class="question-form">
-      <div class="form-heading"><div><h2 id="questionDialogTitle">添加题目</h2><p class="muted">填写四个选项，并指定正确答案。</p></div><button id="closeQuestionDialog" class="icon-button" type="button" aria-label="关闭添加题目对话框">×</button></div>
+      <div class="form-heading"><div><h2 id="questionDialogTitle">添加题目</h2></div><button id="closeQuestionDialog" class="icon-button" type="button" aria-label="关闭添加题目对话框">×</button></div>
       <label for="promptInput">题目内容<textarea id="promptInput" maxlength="240" rows="2" required></textarea></label>
       <div class="form-meta">
         <label for="categoryInput">类别<select id="categoryInput" required><option value="其他" selected>其他</option></select></label>
@@ -244,13 +244,21 @@
         <input id="challengeRewardMinutes" type="number" min="1" max="1440" step="1" value="10" disabled required>
         <small class="muted">电视达到每日限额后可挑战，每台电视每题只能作答一次。</small>
       </label>
-      <div class="options-fields">
-        <label>A<input class="option-input" maxlength="120" required></label>
-        <label>B<input class="option-input" maxlength="120" required></label>
-        <label>C<input class="option-input" maxlength="120" required></label>
-        <label>D<input class="option-input" maxlength="120" required></label>
+      <label id="rewardAnswerTypeField" for="rewardAnswerType" hidden>答题类型
+        <select id="rewardAnswerType" disabled><option value="choice">选择题</option><option value="numeric">计算题（数字答案）</option></select>
+      </label>
+      <label id="numericAnswerField" for="numericAnswerInput" hidden>正确答案（整数）
+        <input id="numericAnswerInput" type="text" inputmode="numeric" pattern="[+-]?[0-9]+" maxlength="120" disabled>
+      </label>
+      <div id="choiceAnswerFields">
+        <div class="options-fields">
+          <label>A<input class="option-input" maxlength="120" required></label>
+          <label>B<input class="option-input" maxlength="120" required></label>
+          <label>C<input class="option-input" maxlength="120" required></label>
+          <label>D<input class="option-input" maxlength="120" required></label>
+        </div>
+        <label class="correct-answer" for="answerInput">正确选项<select id="answerInput"><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select></label>
       </div>
-      <label class="correct-answer" for="answerInput">正确选项<select id="answerInput"><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select></label>
       <p id="questionNotice" class="form-notice error" role="alert"></p>
       <div class="form-actions"><button id="cancelQuestion" class="button secondary" type="button">取消</button><button id="submitQuestion" class="button primary" type="submit">保存题目</button></div>
     </form>

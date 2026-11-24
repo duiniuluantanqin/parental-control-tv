@@ -206,6 +206,9 @@ class AccountBindingTests(unittest.TestCase):
         question = {"prompt": "What is 12 squared?", "options": ["144", "124", "122", "142"], "answer": "144"}
         self.assertEqual(self.request(self.device, challenge)[0], 401)
         self.bind(self.alice)
+        self.assertEqual(self.request(
+            self.alice, bank + "/" + server.DEFAULT_REWARD_QUESTION["id"], method="DELETE",
+        )[0], 200)
         self.assertEqual(self.request(self.alice, bank, {**question, "rewardMinutes": True})[0], 400)
         status, first = self.request(self.alice, bank, question)
         self.assertEqual(status, 201)
@@ -215,7 +218,8 @@ class AccountBindingTests(unittest.TestCase):
         first_answer = {"questionId": first["id"], "selectedIndex": 0}
         second_answer = {"questionId": second["id"], "selectedIndex": 2}
         self.assertEqual(self.request(self.bob, bank + "/" + first["id"], method="DELETE")[0], 404)
-        self.assertEqual(self.request(self.bob, "/api/v1/admin/state")[1]["rewardQuestions"], [])
+        bob_rewards = self.request(self.bob, "/api/v1/admin/state")[1]["rewardQuestions"]
+        self.assertEqual([item["id"] for item in bob_rewards], [server.DEFAULT_REWARD_QUESTION["id"]])
         device_state = self.request(self.device, "/api/v1/device/state", headers=self.headers)[1]
         self.assertNotIn("rewardQuestions", device_state)
         self.assertNotIn(first["id"], {q["id"] for q in device_state["questions"]})
@@ -248,6 +252,74 @@ class AccountBindingTests(unittest.TestCase):
         server.STORE = server.StateStore(self.path)
         self.assertEqual(self.request(self.device, challenge, first_answer, self.headers), (200, result))
         self.assertEqual(self.request(self.alice, "/api/v1/admin/devices")[1]["devices"][0]["rewardBalanceMillis"], 10 * minute)
+
+    def test_numeric_reward_challenge_normalizes_answers_and_grants_once(self):
+        bank = "/api/v1/admin/reward-questions"
+        challenge = "/api/v1/device/reward-challenge"
+        minute = server.MILLIS_PER_MINUTE
+        self.bind(self.alice)
+        prompt = "有一列数：2, 5, 9, 14, 20, 27, 35, ...，这列数的第 30 个是多少？"
+        seeded = self.request(self.alice, "/api/v1/admin/state")[1]["rewardQuestions"][0]
+        self.assertEqual(seeded["id"], server.DEFAULT_REWARD_QUESTION["id"])
+        self.assertEqual(seeded["prompt"], prompt)
+        self.assertEqual(seeded["type"], "numeric")
+        self.assertEqual(seeded["numericAnswer"], "495")
+
+        status, created = self.request(self.alice, bank, {
+            "prompt": "Add these values", "type": "numeric", "numericAnswer": "+00042", "rewardMinutes": 7,
+        })
+        self.assertEqual(status, 201)
+        self.assertEqual(created["numericAnswer"], "42")
+        for invalid in (42, True, "4.2", "", "x" * 121):
+            self.assertEqual(self.request(self.alice, bank, {
+                "prompt": "Bad numeric answer", "type": "numeric", "numericAnswer": invalid,
+            })[0], 400)
+
+        local_day = server.datetime.now(server.timezone.utc).date().isoformat()
+        self.assertEqual(self.request(self.device, "/api/v1/device/usage", {
+            "deviceId": "test-tv", "date": local_day, "utcOffsetMinutes": 0,
+            "usageMillis": 60 * minute,
+        }, self.headers)[0], 200)
+        status, offer = self.request(self.device, challenge, headers=self.headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(offer["question"], {
+            "id": seeded["id"], "prompt": prompt, "type": "numeric", "rewardMinutes": 10,
+        })
+        self.assertNotIn("numericAnswer", offer["question"])
+        self.assertNotIn("options", offer["question"])
+        for invalid in (495, True, "495.0", "x" * 121):
+            self.assertEqual(self.request(self.device, challenge, {
+                "questionId": seeded["id"], "numericAnswer": invalid,
+            }, self.headers)[0], 400)
+
+        body = {"questionId": seeded["id"], "numericAnswer": "000495"}
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            answers = list(executor.map(lambda _: self.request(build_opener(), challenge, body, self.headers), range(2)))
+        self.assertEqual(answers[0], answers[1])
+        status, result = answers[0]
+        self.assertEqual(status, 200)
+        self.assertTrue(result["correct"])
+        self.assertEqual(result["earnedMinutes"], 10)
+        self.assertEqual(result["rewardTime"]["balanceMillis"], 10 * minute)
+        self.assertEqual(self.request(self.device, challenge, {
+            "questionId": seeded["id"], "numericAnswer": "0",
+        }, self.headers), (200, result))
+        self.assertEqual(self.request(self.device, challenge, headers=self.headers)[1]["question"]["id"], created["id"])
+
+    def test_default_reward_question_migration_runs_once_and_preserves_deletion(self):
+        store = server.STORE.for_account(1)
+        state = store.load()
+        self.assertEqual(state["rewardQuestions"][0]["id"], server.DEFAULT_REWARD_QUESTION["id"])
+        state["rewardQuestions"] = []
+        store.save(state)
+        with closing(sqlite3.connect(self.path)) as db:
+            db.execute("DELETE FROM state_migrations WHERE name = 'numeric_reward_questions'")
+            db.commit()
+        self.assertEqual(store.load()["rewardQuestions"][0]["id"], server.DEFAULT_REWARD_QUESTION["id"])
+        state = store.load()
+        state["rewardQuestions"] = []
+        store.save(state)
+        self.assertEqual(store.load()["rewardQuestions"], [])
 
     def test_reward_limit_defaults_can_be_disabled_and_validates_integer_bounds(self):
         self.assertEqual(self.request(self.alice, "/api/v1/admin/state")[1]["settings"]["dailyRewardLimitMinutes"], 30)
