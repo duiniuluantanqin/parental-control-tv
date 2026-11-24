@@ -510,7 +510,10 @@ class StateStore:
             if not self.reward_challenge_allowed(state, device_id, self.reward_challenge_day(device)):
                 return {"eligible": False, "question": None}
             attempts = device.get("rewardQuestionAttempts", {})
-            question = next((item for item in state["rewardQuestions"] if item["id"] not in attempts), None)
+            question = next((
+                item for item in state["rewardQuestions"]
+                if attempts.get(item["id"], {}).get("correct") is not True
+            ), None)
             if question is None:
                 public_question = None
             elif question.get("type") == "numeric":
@@ -534,7 +537,8 @@ class StateStore:
             device = state["devices"].get(device_id, {})
             local_time = self.reward_challenge_day(device)
             attempts = device.get("rewardQuestionAttempts", {})
-            result = attempts.get(question_id)
+            previous_result = attempts.get(question_id)
+            result = previous_result if previous_result and previous_result.get("correct") is True else None
             question = next((item for item in state["rewardQuestions"] if item["id"] == question_id), None)
             if question is not None and (question.get("type") == "numeric") != numeric_is_valid:
                 raise ValueError("无效的奖励难题答案")
@@ -549,10 +553,11 @@ class StateStore:
                     correct = question["options"][selected] == question["answer"]
                 minutes = question["rewardMinutes"] if correct else 0
                 result = {"correct": correct, "earnedMinutes": minutes}
-                attempts[question_id] = result
-                device["rewardQuestionAttempts"] = attempts
-                device["rewardGrantedMillis"] = device.get("rewardGrantedMillis", 0) + minutes * MILLIS_PER_MINUTE
-                self.save(state)
+                if correct:
+                    attempts[question_id] = result
+                    device["rewardQuestionAttempts"] = attempts
+                    device["rewardGrantedMillis"] = device.get("rewardGrantedMillis", 0) + minutes * MILLIS_PER_MINUTE
+                    self.save(state)
             record_date = local_time.date().isoformat() if local_time is not None else ""
             return 200, {**result, "rewardTime": reward_snapshot(device, record_date)}
 

@@ -135,6 +135,10 @@ tbody tr:hover { background: #fafcfd; }
 .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; }
 .filters select { min-width: 135px; background-color: #fafcfe; }
 .filters input { width: 280px; min-width: 0; background: #fafcfe; }
+.question-type-tabs { display: inline-flex; align-items: stretch; padding: 3px; border: 1px solid #dce5e8; border-radius: 7px; background: #f5f8f9; }
+.question-type-tab { min-height: 34px; padding: 0 14px; border: 0; border-radius: 5px; color: #637486; background: transparent; font-size: 12px; white-space: nowrap; }
+.question-type-tab[aria-pressed="true"] { color: #176f66; background: #fff; box-shadow: 0 1px 3px #19283d18; font-weight: 650; }
+.question-type-tab:focus-visible { position: relative; z-index: 1; }
 .result-count { color: #7f8c9c; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .table-wrap { overflow-x: auto; background: #fff; border: 1px solid var(--line); border-radius: 10px; }
 .table-panel > .table-wrap { border-right: 0; border-left: 0; border-bottom: 0; border-radius: 0 0 var(--radius) var(--radius); }

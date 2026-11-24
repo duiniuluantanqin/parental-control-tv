@@ -26,7 +26,8 @@ let questions = [];
 let rewardQuestions = [];
 let rewardDevices = [];
 let rewardQuestionForm = false;
-const questionTypeFilter = document.querySelector("#questionTypeFilter");
+let questionTypeFilter = "";
+const questionTypeTabs = [...document.querySelectorAll(".question-type-tab")];
 let poemHistory = [];
 let aiQuestions = [];
 let refillTimer;
@@ -88,7 +89,7 @@ function renderQuestions() {
   const query = document.querySelector("#questionSearch").value.trim().toLowerCase();
   const bank = [...questions, ...rewardQuestions];
   const filtered = bank.filter(question =>
-    (!questionTypeFilter.value || questionTypeFilter.value === (question.rewardMinutes ? "reward" : "regular"))
+    (!questionTypeFilter || questionTypeFilter === (question.rewardMinutes ? "reward" : "regular"))
     && (!categoryFilter.value || question.category === categoryFilter.value)
     && (!query || [question.prompt, question.answer, question.numericAnswer, ...(question.options || [])].join(" ").toLowerCase().includes(query))
   );
@@ -1278,7 +1279,15 @@ document.querySelector("#aiGenerationForm").addEventListener("submit", generateA
 aiCategoryInput.addEventListener("change", updateAiCategoryFields);
 document.querySelector("#importAiQuestions").addEventListener("click", importAiQuestions);
 categoryFilter.addEventListener("change", renderQuestions);
-questionTypeFilter.addEventListener("change", renderQuestions);
+for (const tab of questionTypeTabs) {
+  tab.addEventListener("click", () => {
+    questionTypeFilter = questionTypeFilter === tab.dataset.questionType ? "" : tab.dataset.questionType;
+    for (const item of questionTypeTabs) {
+      item.setAttribute("aria-pressed", String(questionTypeFilter === item.dataset.questionType));
+    }
+    renderQuestions();
+  });
+}
 document.querySelector("#questionSearch").addEventListener("input", renderQuestions);
 document.querySelector("#poemSearch").addEventListener("input", renderPoemHistory);
 document.querySelector("#refreshPoems").addEventListener("click", () => loadPoemHistory().catch(handleError));

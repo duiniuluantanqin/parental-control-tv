@@ -246,12 +246,21 @@ class AccountBindingTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertFalse(wrong["correct"])
         self.assertEqual(wrong["earnedMinutes"], 0)
-        self.assertEqual(self.request(self.device, challenge, {**second_answer, "selectedIndex": 0}, self.headers), (200, wrong))
+        self.assertEqual(self.request(self.device, challenge, headers=self.headers)[1]["question"]["id"], second["id"])
+        status, retried = self.request(self.device, challenge, {**second_answer, "selectedIndex": 0}, self.headers)
+        self.assertEqual(status, 200)
+        self.assertTrue(retried["correct"])
+        self.assertEqual(retried["earnedMinutes"], 45)
+        self.assertEqual(retried["rewardTime"]["balanceMillis"], 55 * minute)
         self.assertEqual(self.request(self.device, challenge, headers=self.headers), (200, {"eligible": True, "question": None}))
         self.assertEqual(self.request(self.alice, bank + "/" + first["id"], method="DELETE")[0], 200)
         server.STORE = server.StateStore(self.path)
-        self.assertEqual(self.request(self.device, challenge, first_answer, self.headers), (200, result))
-        self.assertEqual(self.request(self.alice, "/api/v1/admin/devices")[1]["devices"][0]["rewardBalanceMillis"], 10 * minute)
+        status, repeated = self.request(self.device, challenge, first_answer, self.headers)
+        self.assertEqual(status, 200)
+        self.assertTrue(repeated["correct"])
+        self.assertEqual(repeated["earnedMinutes"], 10)
+        self.assertEqual(repeated["rewardTime"]["balanceMillis"], 55 * minute)
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/devices")[1]["devices"][0]["rewardBalanceMillis"], 55 * minute)
 
     def test_numeric_reward_challenge_normalizes_answers_and_grants_once(self):
         bank = "/api/v1/admin/reward-questions"
@@ -291,6 +300,14 @@ class AccountBindingTests(unittest.TestCase):
             self.assertEqual(self.request(self.device, challenge, {
                 "questionId": seeded["id"], "numericAnswer": invalid,
             }, self.headers)[0], 400)
+
+        status, wrong = self.request(self.device, challenge, {
+            "questionId": seeded["id"], "numericAnswer": "0",
+        }, self.headers)
+        self.assertEqual(status, 200)
+        self.assertFalse(wrong["correct"])
+        self.assertEqual(wrong["earnedMinutes"], 0)
+        self.assertEqual(self.request(self.device, challenge, headers=self.headers)[1]["question"]["id"], seeded["id"])
 
         body = {"questionId": seeded["id"], "numericAnswer": "000495"}
         with ThreadPoolExecutor(max_workers=2) as executor:

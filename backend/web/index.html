@@ -150,8 +150,10 @@
         <div class="filters">
           <label class="sr-only" for="questionSearch">搜索题目、选项或答案</label>
           <input id="questionSearch" type="search" placeholder="搜索题目、选项或答案">
-          <label class="sr-only" for="questionTypeFilter">筛选题型</label>
-          <select id="questionTypeFilter"><option value="">全部题型</option><option value="regular">普通题</option><option value="reward">奖励难题</option></select>
+          <div class="question-type-tabs" role="group" aria-label="题型">
+            <button class="question-type-tab" type="button" aria-pressed="false" data-question-type="regular">普通题</button>
+            <button class="question-type-tab" type="button" aria-pressed="false" data-question-type="reward">奖励难题</button>
+          </div>
           <label class="sr-only" for="categoryFilter">筛选类别</label>
           <select id="categoryFilter"><option value="">全部类别</option></select>
         </div>
@@ -242,7 +244,7 @@
       </div>
       <label id="rewardMinutesField" for="challengeRewardMinutes" hidden>答对奖励（分钟）
         <input id="challengeRewardMinutes" type="number" min="1" max="1440" step="1" value="10" disabled required>
-        <small class="muted">电视达到每日限额后可挑战，每台电视每题只能作答一次。</small>
+        <small class="muted">电视达到每日限额后可挑战；答错可重试，答对后每台电视只奖励一次。</small>
       </label>
       <label id="rewardAnswerTypeField" for="rewardAnswerType" hidden>答题类型
         <select id="rewardAnswerType" disabled><option value="choice">选择题</option><option value="numeric">计算题（数字答案）</option></select>

@@ -1,11 +1,13 @@
 package com.example.tvparental
 
 import android.animation.ObjectAnimator
+import android.app.AlertDialog
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.DialogInterface
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Paint
@@ -53,6 +55,8 @@ class QuestionOverlayService : Service() {
     private var pinHint: TextView? = null
     private var pinEntryActive = false
     private var rewardOfferMillis = 0L
+    private var rewardConfirmDialog: AlertDialog? = null
+    private var rewardConfirmReturnFocus: View? = null
     private var dailyLimitPoem: Poem? = null
     private var rewardChallengeOffered = false
     private var rewardChallengeBinding = ""
@@ -597,6 +601,40 @@ class QuestionOverlayService : Service() {
         DeviceBinding.bindingId(this).isNotEmpty() && ControlState.canOfferRewards(this)
 
     private fun useRewardTime() {
+        if (rewardConfirmDialog?.isShowing == true) return
+
+        val returnFocus = overlayView?.findFocus()
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Use reward time?")
+            .setMessage("Using reward time starts access until the TV is turned off. After restart, the daily limit screen appears again.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Use time", null)
+            .create()
+        rewardConfirmReturnFocus = returnFocus
+        dialog.window?.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
+        dialog.setCanceledOnTouchOutside(false)
+        dialog.setOnShowListener {
+            dialog.getButton(DialogInterface.BUTTON_NEGATIVE).requestFocus()
+            dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener {
+                dialog.dismiss()
+                activateRewardTime()
+            }
+        }
+        dialog.setOnDismissListener {
+            if (rewardConfirmDialog === dialog) rewardConfirmDialog = null
+            if (rewardConfirmReturnFocus === returnFocus) {
+                rewardConfirmReturnFocus = null
+                if (returnFocus?.isAttachedToWindow == true &&
+                    overlayView?.isAttachedToWindow == true && returnFocus.rootView === overlayView) {
+                    returnFocus.requestFocus()
+                }
+            }
+        }
+        rewardConfirmDialog = dialog
+        dialog.show()
+    }
+
+    private fun activateRewardTime() {
         if (ControlState.activateRewardTime(this)) refreshBlockingState()
         else renderLock(MODE_DAILY_LOCK, force = true)
     }
@@ -649,10 +687,16 @@ class QuestionOverlayService : Service() {
     }
 
     private fun showRewardAnswerResult(response: JSONObject) {
+        if (!response.getBoolean("correct")) {
+            showRewardPanel(
+                "Incorrect. Try this question again.",
+                actions = listOf("Try again" to ::openRewardChallenge),
+            )
+            return
+        }
         val minutes = response.getInt("earnedMinutes")
         val available = ControlState.rewardOfferMillis(this)
         val message = when {
-            !response.getBoolean("correct") -> "Incorrect. No reward time was earned."
             available > 0L -> "Correct! ${minuteLabel(minutes)} added.\n${ControlState.rewardTimeLabel(available)} available today."
             else -> "Correct! ${minuteLabel(minutes)} saved in your reward balance."
         }
@@ -797,16 +841,18 @@ class QuestionOverlayService : Service() {
                     refreshNumericAnswer()
                 }.apply {
                     gravity = Gravity.CENTER
-                    textSize = if (keyLabel == "Del") 18f else 24f
+                    minHeight = dp(40)
+                    setPadding(dp(8), dp(4), dp(8), dp(4))
+                    textSize = if (keyLabel == "Del") 16f else 20f
                 }
                 keyboardButtons += key
                 keypad.addView(key, GridLayout.LayoutParams(
-                    GridLayout.spec(index / 3, 1f),
-                    GridLayout.spec(index % 3, 1f),
+                    GridLayout.spec(index / 3),
+                    GridLayout.spec(index % 3),
                 ).apply {
-                    width = 0
-                    height = dp(48)
-                    setMargins(dp(4), dp(3), dp(4), dp(3))
+                    width = dp(112)
+                    height = dp(42)
+                    setMargins(dp(4), dp(2), dp(4), dp(2))
                 })
             }
             keyboardButtons.forEachIndexed { index, key ->
@@ -817,9 +863,12 @@ class QuestionOverlayService : Service() {
                 else keyboardButtons[index + 3].id
             }
             body.addView(keypad, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { setMargins(dp(44), dp(8), dp(44), dp(4)) })
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                setMargins(0, dp(8), 0, dp(4))
+            })
             actionButtons.forEachIndexed { index, control ->
                 control.nextFocusLeftId = actionButtons.getOrElse(index - 1) { control }.id
                 control.nextFocusRightId = actionButtons.getOrElse(index + 1) { control }.id
@@ -1359,6 +1408,12 @@ class QuestionOverlayService : Service() {
     }
 
     private fun removeOverlay() {
+        rewardConfirmDialog?.let { dialog ->
+            rewardConfirmDialog = null
+            rewardConfirmReturnFocus = null
+            dialog.setOnDismissListener(null)
+            dialog.dismiss()
+        }
         clearOverlayState()
         overlayView?.let { view -> runCatching { windowManager?.removeViewImmediate(view) } }
         overlayView = null
