@@ -54,7 +54,7 @@
       <div class="nav-group">
         <p class="nav-group-title">内容管理</p>
         <a href="/questions" data-page="questions"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5zM8 8h8m-8 4h8m-8 4h4"/></svg>题库管理</a>
-        <a href="/poems" data-page="poems"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v15M3 4h5l4 2 4-2h5v15h-5l-4 2-4-2H3z"/></svg>已出题古诗词</a>
+        <a href="/poems" data-page="poems"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v15M3 4h5l4 2 4-2h5v15h-5l-4 2-4-2H3z"/></svg>已答题目</a>
       </div>
       <div class="nav-group">
         <p class="nav-group-title">设备维护</p>
@@ -171,12 +171,16 @@
       </div>
     </section>
 
-    <section id="poemsPage" aria-label="已出题古诗词" hidden>
-      <div class="page-callout"><p><strong>作品记录会保留</strong>同一作品合并显示；答对移除或手动删除题目后仍可查到。仅生成预览不会记录。</p><a href="/questions">返回题库管理 <span aria-hidden="true">↗</span></a></div>
+    <section id="poemsPage" aria-label="已答题目" hidden>
+      <div class="page-callout"><p><strong>历史记录会保留</strong>古诗词保留已入库作品，进阶题收录已作答题目；同一作品或题目合并显示，移出题库后仍可查询。</p><a href="/questions">返回题库管理 <span aria-hidden="true">↗</span></a></div>
       <div class="table-panel">
       <div class="table-toolbar">
         <div class="filters">
-          <label class="sr-only" for="poemSearch">搜索作品或作者</label>
+          <div class="question-type-tabs" role="group" aria-label="已答题目类别">
+            <button class="question-type-tab" type="button" aria-pressed="true" data-history-type="poems">古诗词</button>
+            <button class="question-type-tab" type="button" aria-pressed="false" data-history-type="advanced">进阶题</button>
+          </div>
+          <label id="poemSearchLabel" class="sr-only" for="poemSearch">搜索作品或作者</label>
           <input id="poemSearch" type="search" placeholder="搜索作品或作者">
           <button id="refreshPoems" class="button secondary" type="button">刷新</button>
         </div>
@@ -184,7 +188,7 @@
       </div>
       <div class="table-wrap">
         <table class="poem-history-table">
-          <thead><tr><th>作品名称</th><th>作者</th></tr></thead>
+          <thead><tr id="answeredHistoryHeaders"><th>作品名称</th><th>作者</th></tr></thead>
           <tbody id="poemRows"></tbody>
         </table>
       </div>

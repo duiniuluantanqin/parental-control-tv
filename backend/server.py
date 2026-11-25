@@ -686,10 +686,20 @@ class StateStore:
                 self._remember_poems(connection, state["questions"] + [
                     item.get("question") or {"prompt": item.get("prompt", ""), "id": item.get("questionId")}
                     for item in state["answerRecords"]
+                    if item.get("questionKind") != "reward"
                 ])
                 rows = connection.execute("SELECT title, author FROM poem_history ORDER BY title, author").fetchall()
             known_titles = {title for title, author in rows if author}
             return [{"title": title, "author": author} for title, author in rows if author or title not in known_titles]
+
+    def advanced_question_history(self) -> list[dict]:
+        with self.lock:
+            questions = {}
+            for record in sorted(self.load()["answerRecords"], key=lambda item: item.get("answeredAt", 0), reverse=True):
+                if record.get("questionKind") != "reward" or not isinstance(record.get("question"), dict):
+                    continue
+                questions.setdefault(record["questionId"], record["question"])
+            return list(questions.values())
 
     @staticmethod
     def _write_state(connection: sqlite3.Connection, state: dict[str, object]) -> None:
@@ -701,6 +711,7 @@ class StateStore:
             ] + state["questions"] + [
                 item.get("question") or {"prompt": item.get("prompt", ""), "id": item.get("questionId")}
                 for item in state["answerRecords"]
+                if item.get("questionKind") != "reward"
             ])
             connection.execute(
                 "INSERT OR REPLACE INTO app_state(id, settings, password_reset) VALUES (1, ?, ?)",
@@ -1160,7 +1171,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json(200, {"deviceId": device_id, "settings": settings})
         elif path == "/api/v1/admin/poems":
             if self.require_admin():
-                self.send_json(200, {"poems": self.store.poem_history()})
+                self.send_json(200, {"poems": self.store.poem_history(), "advancedQuestions": self.store.advanced_question_history()})
         elif path == "/api/v1/admin/records":
             if self.require_admin():
                 params = parse_qs(urlsplit(self.path).query)

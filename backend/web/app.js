@@ -29,8 +29,11 @@ let settingsDeviceId = "";
 let settingsLoadRequest = 0;
 let rewardQuestionForm = false;
 let questionTypeFilter = "";
-const questionTypeTabs = [...document.querySelectorAll(".question-type-tab")];
+const questionTypeTabs = [...document.querySelectorAll("[data-question-type]")];
 let poemHistory = [];
+let advancedQuestionHistory = [];
+let answeredHistoryType = "poems";
+const answeredHistoryTabs = [...document.querySelectorAll("[data-history-type]")];
 let aiQuestions = [];
 let refillTimer;
 
@@ -302,20 +305,49 @@ function renderWeeklySettings(settings) {
 }
 
 function renderPoemHistory() {
-  const query = document.querySelector("#poemSearch").value.trim();
-  const visible = poemHistory.filter(poem => `${poem.title} ${poem.author}`.includes(query));
+  const advanced = answeredHistoryType === "advanced";
+  const search = document.querySelector("#poemSearch");
+  search.placeholder = advanced ? "搜索题目或答案" : "搜索作品或作者";
+  document.querySelector("#poemSearchLabel").textContent = search.placeholder;
+  const query = search.value.trim().toLowerCase();
+  const history = advanced ? advancedQuestionHistory : poemHistory;
+  const visible = history.filter(item => (advanced
+    ? [item.prompt, item.answer, item.numericAnswer, ...(item.options || [])].join(" ")
+    : `${item.title} ${item.author}`).toLowerCase().includes(query));
+  const headers = advanced ? ["题目", "正确答案", "答对奖励"] : ["作品名称", "作者"];
+  const heading = document.querySelector("#answeredHistoryHeaders");
+  heading.replaceChildren();
+  for (const value of headers) {
+    const cell = document.createElement("th");
+    cell.textContent = value;
+    heading.append(cell);
+  }
   const container = document.querySelector("#poemRows");
   container.replaceChildren();
-  document.querySelector("#poemCount").textContent = `显示 ${visible.length} / ${poemHistory.length} 首`;
+  document.querySelector("#poemCount").textContent = `显示 ${visible.length} / ${history.length} ${advanced ? "道" : "首"}`;
   if (!visible.length) {
-    setEmptyRow(container, 2, query ? "没有匹配的作品" : "暂无已出题古诗词");
+    setEmptyRow(container, headers.length, query ? (advanced ? "没有匹配的题目" : "没有匹配的作品")
+      : (advanced ? "暂无已作答进阶题" : "暂无古诗词历史"));
     return;
   }
-  for (const poem of visible) {
+  for (const item of visible) {
     const row = document.createElement("tr");
-    for (const value of [`《${poem.title}》`, poem.author || "待补全"]) {
+    const values = advanced
+      ? [item.prompt, item.numericAnswer ?? item.answer, `${item.rewardMinutes} 分钟`]
+      : [`《${item.title}》`, item.author || "待补全"];
+    for (const [index, value] of values.entries()) {
       const cell = document.createElement("td");
-      cell.textContent = value;
+      if (advanced && index === 0) {
+        const prompt = document.createElement("button");
+        prompt.type = "button";
+        prompt.className = "question-link";
+        prompt.textContent = value;
+        prompt.setAttribute("aria-haspopup", "dialog");
+        prompt.addEventListener("click", () => showQuestionDetail(item));
+        cell.append(prompt);
+      } else {
+        cell.textContent = value;
+      }
       row.append(cell);
     }
     container.append(row);
@@ -339,6 +371,7 @@ function updatePoemHistoryHint() {
 async function loadPoemHistory() {
   const result = await api("/api/v1/admin/poems");
   poemHistory = result.poems;
+  advancedQuestionHistory = result.advancedQuestions || [];
   renderPoemHistory();
   updatePoemHistoryHint();
 }
@@ -1192,7 +1225,7 @@ async function initialize() {
     const currentLink = document.querySelector(`[data-page="${page}"]`);
     currentLink.setAttribute("aria-current", "page");
     if (window.matchMedia("(max-width: 1000px)").matches) currentLink.scrollIntoView({ block: "nearest", inline: "nearest" });
-    const titles = { settings: "使用规则", questions: "题库管理", poems: "已出题古诗词", records: "使用记录", devices: "设备与重置" };
+    const titles = { settings: "使用规则", questions: "题库管理", poems: "已答题目", records: "使用记录", devices: "设备与重置" };
     document.querySelector("#currentSection").textContent = `${["questions", "poems"].includes(page) ? "内容管理" : page === "devices" ? "设备维护" : "使用管理"} / ${titles[page]}`;
     if (page === "settings") await loadSettingsDevices();
     if (page === "records") {
@@ -1408,6 +1441,17 @@ for (const tab of questionTypeTabs) {
 }
 document.querySelector("#questionSearch").addEventListener("input", renderQuestions);
 document.querySelector("#poemSearch").addEventListener("input", renderPoemHistory);
+
+for (const tab of answeredHistoryTabs) {
+  tab.addEventListener("click", () => {
+    answeredHistoryType = tab.dataset.historyType;
+    for (const item of answeredHistoryTabs) {
+      item.setAttribute("aria-pressed", String(item === tab));
+    }
+    document.querySelector("#poemSearch").value = "";
+    renderPoemHistory();
+  });
+}
 document.querySelector("#refreshPoems").addEventListener("click", () => loadPoemHistory().catch(handleError));
 poemTitleInput.addEventListener("input", updatePoemHistoryHint);
 updateAiCategoryFields();

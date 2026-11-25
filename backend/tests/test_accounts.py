@@ -286,6 +286,54 @@ class AccountBindingTests(unittest.TestCase):
         repeated = self.request(self.alice, restore, {"attemptId": "second-correct"})
         self.assertEqual(repeated, (200, {"restored": False, "inQuestionBank": True}))
 
+    def test_answered_advanced_history_is_unique_and_survives_removal(self):
+        path = "/api/v1/admin/poems"
+        self.assertEqual(self.request(self.device, path)[0], 401)
+        self.bind(self.alice)
+        history = self.request(self.alice, path)[1]
+        poems = history["poems"]
+        self.assertEqual(history["advancedQuestions"], [])
+        seeded = self.request(self.alice, "/api/v1/admin/state")[1]["rewardQuestions"][0]
+        _, choice = self.request(self.alice, "/api/v1/admin/reward-questions", {
+            "prompt": "Which number is prime?", "category": "数学", "options": ["2", "4", "6", "8"], "answer": "2",
+        })
+        now = server.datetime.now(server.timezone.utc)
+        self.request(self.device, "/api/v1/device/usage", {
+            "deviceId": "test-tv", "date": now.date().isoformat(), "utcOffsetMinutes": 0,
+            "usageMillis": 60 * server.MILLIS_PER_MINUTE,
+        }, self.headers)
+        answered_at = int(now.timestamp() * 1000)
+        challenge = "/api/v1/device/reward-challenge"
+        for attempt_id, question, answer, offset in (
+            ("history-numeric-wrong", seeded, {"numericAnswer": "0"}, 0),
+            ("history-choice-wrong", choice, {"selectedIndex": 1}, 3000),
+            ("history-numeric-correct", seeded, {"numericAnswer": "495"}, 2000),
+        ):
+            self.assertEqual(self.request(self.device, challenge, {
+                "questionId": question["id"], "attemptId": attempt_id, "answeredAt": answered_at + offset, **answer,
+            }, self.headers)[0], 200)
+        self.assertNotIn(seeded["id"], {item["id"] for item in self.request(self.alice, "/api/v1/admin/state")[1]["rewardQuestions"]})
+        server.STORE = server.StateStore(self.path)
+        self.assertEqual(self.request(self.alice, path)[1], {"poems": poems, "advancedQuestions": [choice, seeded]})
+        self.assertEqual(self.request(self.bob, path)[1]["advancedQuestions"], [])
+        self.assertEqual(self.request(self.admin, path)[1]["advancedQuestions"], [])
+
+    def test_answered_advanced_history_uses_the_latest_snapshot_without_polluting_poems(self):
+        store = server.STORE.for_account(2)
+        state = store.load()
+        original_poems = store.poem_history()
+        question = {**state["rewardQuestions"][0], "prompt": "《不是古诗词》的数列问题"}
+        question.pop("category", None)
+        latest = {**question, "prompt": "最新题目内容", "numericAnswer": "0"}
+        state["answerRecords"] = [
+            {"questionKind": "reward", "questionId": question["id"], "question": latest, "answeredAt": 2000},
+            {"questionKind": "reward", "questionId": question["id"], "question": question, "answeredAt": 1000},
+        ]
+        store.save(state)
+        _, history = self.request(self.alice, "/api/v1/admin/poems")
+        self.assertEqual(history["poems"], original_poems)
+        self.assertEqual(history["advancedQuestions"], [latest])
+
     def test_advanced_numeric_retries_are_recorded_and_transport_retries_are_idempotent(self):
         bank = "/api/v1/admin/reward-questions"
         challenge = "/api/v1/device/reward-challenge"
