@@ -295,6 +295,8 @@ def validate_reward_question(value: object, *, question_id: str | None = None) -
             raise ValueError("正确答案必须为整数")
         question["type"] = "numeric"
         question["numericAnswer"] = str(int(numeric_answer.strip()))
+        if value.get("poem") is not None:
+            question["poem"] = validate_poem(value["poem"])
     else:
         question.update(validate_question({**value, "id": question["id"], "priority": False}))
     return question
@@ -694,11 +696,18 @@ class StateStore:
 
     def advanced_question_history(self) -> list[dict]:
         with self.lock:
+            state = self.load()
             questions = {}
-            for record in sorted(self.load()["answerRecords"], key=lambda item: item.get("answeredAt", 0), reverse=True):
+            for record in sorted(state["answerRecords"], key=lambda item: item.get("answeredAt", 0), reverse=True):
                 if record.get("questionKind") != "reward" or not isinstance(record.get("question"), dict):
                     continue
-                questions.setdefault(record["questionId"], record["question"])
+                question = questions.setdefault(record["questionId"], {**record["question"], "answeredDevices": []})
+                device_id = record.get("deviceId")
+                if device_id and not any(item["deviceId"] == device_id for item in question["answeredDevices"]):
+                    question["answeredDevices"].append({
+                        "deviceId": device_id,
+                        "name": state["devices"].get(device_id, {}).get("name") or device_id,
+                    })
             return list(questions.values())
 
     @staticmethod
@@ -1536,15 +1545,17 @@ class RequestHandler(BaseHTTPRequestHandler):
                         if existing is not None:
                             self.send_json(200, {"accepted": True, "correct": existing["correct"], "removed": False})
                             return
-                        question = next((item for item in state["questions"] if item["id"] == question_id), None)
-                        if question is None and isinstance(question_snapshot, dict):
-                            question = validate_question(question_snapshot)
+                        bank_question = next((item for item in state["questions"] if item["id"] == question_id), None)
+                        question = validate_question(question_snapshot) if isinstance(question_snapshot, dict) else bank_question
                         if question is None and answered:
                             self.send_json(404, {"error": "题目不存在或已被使用"})
                             return
                         if answered and selected_answer not in question["options"]:
                             raise ValueError("作答内容不属于该题选项")
                         correct = answered and selected_answer == question["answer"]
+                        removed = bool(correct and bank_question is not None and
+                                       {key: value for key, value in bank_question.items() if key != "priority"} ==
+                                       {key: value for key, value in question.items() if key != "priority"})
                         records.append({
                             "attemptId": attempt_id,
                             "deviceId": device_id,
@@ -1559,12 +1570,12 @@ class RequestHandler(BaseHTTPRequestHandler):
                             "correct": bool(correct),
                             "question": question,
                         })
-                        if correct:
+                        if removed:
                             state["questions"] = [item for item in state["questions"] if item["id"] != question_id]
                         self.store.save(state)
-                    if correct:
+                    if removed:
                         self.store.ensure_refill()
-                    self.send_json(200, {"accepted": True, "correct": correct, "removed": correct})
+                    self.send_json(200, {"accepted": True, "correct": correct, "removed": removed})
                     return
                 question_id, answer = payload.get("questionId"), payload.get("answer")
                 if not isinstance(question_id, str) or not 1 <= len(question_id) <= 80 or not isinstance(answer, str) or not 1 <= len(answer) <= 120:
@@ -1783,6 +1794,27 @@ class RequestHandler(BaseHTTPRequestHandler):
                     state["devices"].setdefault(device_id, {})["settings"] = settings
                     self.store.save(state)
                 self.send_json(200, {"deviceId": device_id, "settings": settings})
+                return
+            reward_edit = path.startswith("/api/v1/admin/reward-questions/")
+            edit_prefix = "/api/v1/admin/reward-questions/" if reward_edit else "/api/v1/admin/questions/"
+            if path.startswith(edit_prefix):
+                question_id = unquote(path[len(edit_prefix):])
+                bank = "rewardQuestions" if reward_edit else "questions"
+                with self.store.lock:
+                    state = self.store.load()
+                    questions = state[bank]
+                    index = next((index for index, item in enumerate(questions) if item["id"] == question_id), None)
+                    if index is None:
+                        self.send_json(404, {"error": "题目不存在或已被答对移出题库"})
+                        return
+                    candidate = {**payload, "id": question_id}
+                    for key in ("priority", "poem"):
+                        if key not in candidate and key in questions[index]:
+                            candidate[key] = questions[index][key]
+                    question = validate_reward_question(candidate, question_id=question_id) if reward_edit else validate_question(candidate)
+                    questions[index] = question
+                    self.store.save(state)
+                self.send_json(200, {"question": question})
                 return
             with self.store.lock:
                 state = self.store.load()

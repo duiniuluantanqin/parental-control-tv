@@ -314,7 +314,10 @@ class AccountBindingTests(unittest.TestCase):
             }, self.headers)[0], 200)
         self.assertNotIn(seeded["id"], {item["id"] for item in self.request(self.alice, "/api/v1/admin/state")[1]["rewardQuestions"]})
         server.STORE = server.StateStore(self.path)
-        self.assertEqual(self.request(self.alice, path)[1], {"poems": poems, "advancedQuestions": [choice, seeded]})
+        devices = [{"deviceId": "test-tv", "name": "Living room TV"}]
+        self.assertEqual(self.request(self.alice, path)[1], {
+            "poems": poems, "advancedQuestions": [{**choice, "answeredDevices": devices}, {**seeded, "answeredDevices": devices}],
+        })
         self.assertEqual(self.request(self.bob, path)[1]["advancedQuestions"], [])
         self.assertEqual(self.request(self.admin, path)[1]["advancedQuestions"], [])
 
@@ -332,7 +335,125 @@ class AccountBindingTests(unittest.TestCase):
         store.save(state)
         _, history = self.request(self.alice, "/api/v1/admin/poems")
         self.assertEqual(history["poems"], original_poems)
-        self.assertEqual(history["advancedQuestions"], [latest])
+        self.assertEqual(history["advancedQuestions"], [{**latest, "answeredDevices": []}])
+
+    def test_regular_question_edits_preserve_identity_poem_priority_and_answer_history(self):
+        self.bind(self.alice)
+        poem = {"title": "相思", "author": "王维", "content": "红豆生南国，春来发几枝。"}
+        _, original = self.request(self.alice, "/api/v1/admin/questions", {
+            "prompt": "编辑前的题目", "category": "古诗词", "difficulty": "中", "priority": True,
+            "options": ["甲", "乙", "丙", "丁"], "answer": "甲", "poem": poem,
+        })
+        self.assertEqual(self.request(self.device, "/api/v1/device/answers", {
+            "deviceId": "test-tv", "attemptId": "before-question-edit", "date": "2026-11-25", "answeredAt": 1000,
+            "questionId": original["id"], "selectedAnswer": "乙", "question": original,
+        }, self.headers)[0], 200)
+        store = server.STORE.for_account(2)
+        before = store.load()
+        endpoint = "/api/v1/admin/questions/" + original["id"]
+        changes = {"id": "replacement-id", "prompt": "编辑后的题目", "category": "古诗词", "difficulty": "高",
+                   "options": ["一", "二", "三", "四"], "answer": "四"}
+        self.assertEqual(self.request(self.device, endpoint, changes)[0], 401)
+        self.assertEqual(self.request(self.bob, endpoint, changes)[0], 404)
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/questions/missing", changes)[0], 404)
+        self.assertEqual(self.request(self.alice, endpoint, {**changes, "answer": "无效答案"})[0], 400)
+        self.assertEqual(store.load(), before)
+        status, result = self.request(self.alice, endpoint, changes)
+        self.assertEqual(status, 200)
+        expected = {**changes, "id": original["id"], "priority": True, "poem": poem}
+        self.assertEqual(result, {"question": expected})
+        server.STORE = server.StateStore(self.path)
+        persisted = server.STORE.for_account(2).load()
+        self.assertEqual([item["id"] for item in persisted["questions"]], [item["id"] for item in before["questions"]])
+        self.assertEqual(persisted["questions"][-1], expected)
+        self.assertEqual(persisted["answerRecords"], before["answerRecords"])
+        self.assertEqual(self.request(self.device, "/api/v1/device/state", headers=self.headers)[1]["questions"][-1], expected)
+
+    def test_advanced_question_edits_switch_answer_type_without_changing_past_attempts(self):
+        self.bind(self.alice)
+        bank = "/api/v1/admin/reward-questions"
+        poem = {"title": "相思", "author": "王维", "content": "红豆生南国，春来发几枝。"}
+        _, original = self.request(self.alice, bank, {
+            "prompt": "Original question", "category": "数学", "options": ["A", "B", "C", "D"], "answer": "A", "poem": poem,
+        })
+        now = server.datetime.now(server.timezone.utc)
+        self.request(self.device, "/api/v1/device/usage", {
+            "deviceId": "test-tv", "date": now.date().isoformat(), "utcOffsetMinutes": 0,
+            "usageMillis": 60 * server.MILLIS_PER_MINUTE,
+        }, self.headers)
+        challenge = "/api/v1/device/reward-challenge"
+        self.assertEqual(self.request(self.device, challenge, {
+            "questionId": original["id"], "selectedIndex": 1, "attemptId": "before-advanced-edit",
+            "answeredAt": int(now.timestamp() * 1000),
+        }, self.headers)[0], 200)
+        endpoint = bank + "/" + original["id"]
+        numeric = {"prompt": "Numeric question", "type": "numeric", "category": "数学", "difficulty": "高",
+                   "numericAnswer": "+0000", "rewardMinutes": 15}
+        self.assertEqual(self.request(self.bob, endpoint, numeric)[0], 404)
+        self.assertEqual(self.request(self.alice, endpoint, {**numeric, "numericAnswer": "1.5"})[0], 400)
+        status, result = self.request(self.alice, endpoint, numeric)
+        self.assertEqual(status, 200)
+        self.assertEqual(result["question"], {**numeric, "id": original["id"], "numericAnswer": "0", "poem": poem})
+        choice = {"prompt": "New choice question", "type": "choice", "category": "科学", "difficulty": "低",
+                  "options": ["W", "X", "Y", "Z"], "answer": "X", "rewardMinutes": 6}
+        status, result = self.request(self.alice, endpoint, choice)
+        self.assertEqual(status, 200)
+        self.assertNotIn("numericAnswer", result["question"])
+        self.assertEqual(result["question"]["id"], original["id"])
+        self.assertEqual(result["question"]["poem"], poem)
+        self.assertEqual(server.STORE.for_account(2).load()["answerRecords"][0]["question"], original)
+        self.assertEqual(self.request(self.device, challenge, {
+            "questionId": original["id"], "selectedIndex": 1, "attemptId": "after-advanced-edit",
+            "answeredAt": int(now.timestamp() * 1000) + 1000,
+        }, self.headers)[1]["earnedMinutes"], 6)
+        self.assertEqual(self.request(self.alice, endpoint, choice)[0], 404)
+        self.assertEqual(server.STORE.for_account(2).load()["answerRecords"][0]["question"], original)
+
+    def test_cached_answers_after_edit_use_the_shown_snapshot_without_deleting_new_content(self):
+        self.bind(self.alice)
+        original, priority_only = self.request(self.alice, "/api/v1/admin/state")[1]["questions"][:2]
+        changes = {**original, "prompt": "Updated while the TV was offline", "options": ["W", "X", "Y", "Z"], "answer": "W"}
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/questions/" + original["id"], changes)[0], 200)
+        body = {"deviceId": "test-tv", "attemptId": "cached-before-edit", "date": "2026-11-25", "answeredAt": 1000,
+                "questionId": original["id"], "selectedAnswer": original["answer"], "question": original}
+        for _ in range(2):
+            self.assertEqual(self.request(self.device, "/api/v1/device/answers", body, self.headers),
+                             (200, {"accepted": True, "correct": True, "removed": False}))
+        state = server.STORE.for_account(2).load()
+        self.assertEqual(state["questions"][0], changes)
+        self.assertEqual(state["answerRecords"][0]["question"], original)
+        self.assertEqual(len(state["answerRecords"]), 1)
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/questions/" + priority_only["id"] + "/priority", {"priority": True})[0], 200)
+        status, result = self.request(self.device, "/api/v1/device/answers", {
+            **body, "attemptId": "cached-priority-only", "questionId": priority_only["id"],
+            "selectedAnswer": priority_only["answer"], "question": priority_only,
+        }, self.headers)
+        self.assertEqual((status, result), (200, {"accepted": True, "correct": True, "removed": True}))
+
+    def test_answered_advanced_history_lists_each_device_once_after_unbinding(self):
+        self.bind(self.alice)
+        store = server.STORE.for_account(2)
+        state = store.load()
+        question = state["rewardQuestions"][0]
+        latest = {**question, "prompt": "Latest snapshot"}
+        state["devices"]["second-tv"] = {"name": ""}
+        state["answerRecords"] = [
+            {"questionKind": "reward", "questionId": question["id"], "question": question,
+             "deviceId": "test-tv", "answeredAt": 1000},
+            {"questionKind": "reward", "questionId": question["id"], "question": question,
+             "deviceId": "second-tv", "answeredAt": 2000},
+            {"questionKind": "reward", "questionId": question["id"], "question": latest,
+             "deviceId": "test-tv", "answeredAt": 3000},
+        ]
+        store.save(state)
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/devices/unbind", {"deviceId": "test-tv"})[0], 200)
+        server.STORE = server.StateStore(self.path)
+        history = self.request(self.alice, "/api/v1/admin/poems")[1]["advancedQuestions"]
+        self.assertEqual(history, [{**latest, "answeredDevices": [
+            {"deviceId": "test-tv", "name": "Living room TV"}, {"deviceId": "second-tv", "name": "second-tv"},
+        ]}])
+        self.assertEqual(self.request(self.bob, "/api/v1/admin/poems")[1]["advancedQuestions"], [])
+        self.assertEqual(server.STORE.for_account(2).load()["answerRecords"], state["answerRecords"])
 
     def test_advanced_numeric_retries_are_recorded_and_transport_retries_are_idempotent(self):
         bank = "/api/v1/admin/reward-questions"

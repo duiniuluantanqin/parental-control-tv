@@ -28,6 +28,7 @@ let rewardDevices = [];
 let settingsDeviceId = "";
 let settingsLoadRequest = 0;
 let rewardQuestionForm = false;
+let editingQuestion = null;
 let questionTypeFilter = "";
 const questionTypeTabs = [...document.querySelectorAll("[data-question-type]")];
 let poemHistory = [];
@@ -80,6 +81,7 @@ async function api(path, options = {}) {
 
 function renderCategories() {
   const selected = categoryFilter.value;
+  const selectedInput = categoryInput.value;
   const categories = [...new Set([...questions, ...rewardQuestions].map(question => question.category))].sort((a, b) => a.localeCompare(b, "zh-CN"));
   categoryFilter.replaceChildren(new Option("全部类别", ""));
   for (const category of categories) categoryFilter.add(new Option(category, category));
@@ -88,6 +90,7 @@ function renderCategories() {
   for (const category of new Set(["古诗词", "英语", "数学", "科学", "地理历史", "其他", ...categories])) {
     categoryInput.add(new Option(category, category, category === "其他", category === "其他"));
   }
+  if ([...categoryInput.options].some(option => option.value === selectedInput)) categoryInput.value = selectedInput;
 }
 
 function renderQuestions() {
@@ -143,6 +146,11 @@ function renderQuestions() {
     action.dataset.label = "操作";
     const actions = document.createElement("div");
     actions.className = "question-actions";
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "text-button";
+    edit.textContent = "编辑";
+    edit.addEventListener("click", () => openQuestionForm(Boolean(question.rewardMinutes), question));
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "delete-button";
@@ -159,7 +167,7 @@ function renderQuestions() {
       priority.addEventListener("change", () => setQuestionPriority(question, priority, remove));
       actions.append(priorityLabel);
     }
-    actions.append(remove);
+    actions.append(edit, remove);
     action.append(actions);
     tr.append(action);
     rows.append(tr);
@@ -306,15 +314,17 @@ function renderWeeklySettings(settings) {
 
 function renderPoemHistory() {
   const advanced = answeredHistoryType === "advanced";
+  document.querySelector(".poem-history-table").classList.toggle("advanced-history-table", advanced);
   const search = document.querySelector("#poemSearch");
-  search.placeholder = advanced ? "搜索题目或答案" : "搜索作品或作者";
+  search.placeholder = advanced ? "搜索题目、答案或答题设备" : "搜索作品或作者";
   document.querySelector("#poemSearchLabel").textContent = search.placeholder;
   const query = search.value.trim().toLowerCase();
   const history = advanced ? advancedQuestionHistory : poemHistory;
   const visible = history.filter(item => (advanced
-    ? [item.prompt, item.answer, item.numericAnswer, ...(item.options || [])].join(" ")
+    ? [item.prompt, item.answer, item.numericAnswer, ...(item.options || []),
+      ...(item.answeredDevices || []).flatMap(device => [device.name, device.deviceId])].join(" ")
     : `${item.title} ${item.author}`).toLowerCase().includes(query));
-  const headers = advanced ? ["题目", "正确答案", "答对奖励"] : ["作品名称", "作者"];
+  const headers = advanced ? ["题目", "正确答案", "答对奖励", "答题设备"] : ["作品名称", "作者"];
   const heading = document.querySelector("#answeredHistoryHeaders");
   heading.replaceChildren();
   for (const value of headers) {
@@ -333,7 +343,8 @@ function renderPoemHistory() {
   for (const item of visible) {
     const row = document.createElement("tr");
     const values = advanced
-      ? [item.prompt, item.numericAnswer ?? item.answer, `${item.rewardMinutes} 分钟`]
+      ? [item.prompt, item.numericAnswer ?? item.answer, `${item.rewardMinutes} 分钟`,
+        (item.answeredDevices || []).map(device => device.name || device.deviceId).join("、") || "设备未知"]
       : [`《${item.title}》`, item.author || "待补全"];
     for (const [index, value] of values.entries()) {
       const cell = document.createElement("td");
@@ -993,6 +1004,8 @@ async function saveSettings(event) {
 async function addQuestion(event) {
   event.preventDefault();
   const button = document.querySelector("#submitQuestion");
+  if (button.disabled) return;
+  const target = editingQuestion;
   const options = [...document.querySelectorAll(".option-input")].map(input => input.value.trim());
   const answerIndex = Number(document.querySelector("#answerInput").value);
   const numeric = rewardQuestionForm && document.querySelector("#rewardAnswerType").value === "numeric";
@@ -1020,10 +1033,11 @@ async function addQuestion(event) {
       question.rewardMinutes = document.querySelector("#challengeRewardMinutes").valueAsNumber;
       if (!numeric) question.type = "choice";
     }
-    await api(`/api/v1/admin/${bank}`, { method: "POST", body: JSON.stringify(question) });
+    const path = `/api/v1/admin/${bank}${target ? `/${encodeURIComponent(target.id)}` : ""}`;
+    await api(path, { method: "POST", body: JSON.stringify(question) });
     questionDialog.close();
     await loadState();
-    setNotice("题目已添加");
+    setNotice(target ? "题目已更新，电视将在下次同步时应用" : "题目已添加");
   } catch (error) {
     handleError(error, questionDialog.open ? document.querySelector("#questionNotice") : notice);
   } finally {
@@ -1379,15 +1393,29 @@ function updateQuestionAnswerFields() {
   }
 }
 
-function openQuestionForm(reward) {
+function openQuestionForm(reward, question = null) {
+  if (document.querySelector("#submitQuestion").disabled) return;
   rewardQuestionForm = reward;
+  editingQuestion = question;
   questionForm.reset();
-  document.querySelector("#questionDialogTitle").textContent = reward ? "添加进阶题" : "添加题目";
+  document.querySelector("#questionDialogTitle").textContent = question
+    ? (reward ? "编辑进阶题" : "编辑题目") : (reward ? "添加进阶题" : "添加题目");
   document.querySelector("#rewardMinutesField").hidden = !reward;
   document.querySelector("#challengeRewardMinutes").disabled = !reward;
   document.querySelector("#rewardAnswerTypeField").hidden = !reward;
   document.querySelector("#rewardAnswerType").disabled = !reward;
-  document.querySelector("#rewardAnswerType").value = "choice";
+  document.querySelector("#rewardAnswerType").value = question?.type === "numeric" ? "numeric" : "choice";
+  if (question) {
+    document.querySelector("#promptInput").value = question.prompt;
+    categoryInput.value = question.category;
+    document.querySelector("#difficultyInput").value = question.difficulty;
+    document.querySelector("#challengeRewardMinutes").value = question.rewardMinutes || 10;
+    document.querySelector("#numericAnswerInput").value = question.numericAnswer ?? "";
+    document.querySelectorAll(".option-input").forEach((input, index) => {
+      input.value = question.options?.[index] || "";
+    });
+    document.querySelector("#answerInput").value = Math.max(0, (question.options || []).indexOf(question.answer));
+  }
   updateQuestionAnswerFields();
   document.querySelector("#questionNotice").textContent = "";
   questionDialog.showModal();
@@ -1397,18 +1425,24 @@ document.querySelector("#rewardAnswerType").addEventListener("change", updateQue
 document.querySelector("#addQuestionButton").addEventListener("click", () => openQuestionForm(false));
 document.querySelector("#addRewardQuestionButton").addEventListener("click", () => openQuestionForm(true));
 for (const id of ["closeQuestionDialog", "cancelQuestion"]) {
-  document.getElementById(id).addEventListener("click", () => questionDialog.close());
+  document.getElementById(id).addEventListener("click", () => {
+    if (!document.querySelector("#submitQuestion").disabled) questionDialog.close();
+  });
 }
+questionDialog.addEventListener("cancel", event => {
+  if (document.querySelector("#submitQuestion").disabled) event.preventDefault();
+});
 for (const dialog of [questionDialog, questionDetailDialog]) {
   dialog.addEventListener("click", event => {
     if (event.target === dialog) {
+      if (dialog === questionDialog && document.querySelector("#submitQuestion").disabled) return;
       const bounds = dialog.getBoundingClientRect();
       if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) dialog.close();
     }
   });
 }
 questionDialog.addEventListener("close", () => {
-  document.querySelector(rewardQuestionForm ? "#addRewardQuestionButton" : "#addQuestionButton").focus();
+  if (!editingQuestion) document.querySelector(rewardQuestionForm ? "#addRewardQuestionButton" : "#addQuestionButton").focus();
 });
 questionForm.addEventListener("submit", addQuestion);
 
