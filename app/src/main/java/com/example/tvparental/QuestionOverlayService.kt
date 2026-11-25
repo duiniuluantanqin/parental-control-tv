@@ -38,6 +38,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONObject
+import java.util.UUID
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
@@ -567,7 +568,7 @@ class QuestionOverlayService : Service() {
             buttons += action("Use reward time") { useRewardTime() }
         }
         if (rewardChallengeOffered) {
-            buttons += action("Challenge a hard question") { openRewardChallenge() }
+            buttons += action("Try an advanced question") { openRewardChallenge() }
         }
         buttons += action("Unlock with PIN") { showPasswordEntry(MODE_DAILY_LOCK) }
         buttons.forEachIndexed { index, button ->
@@ -697,10 +698,10 @@ class QuestionOverlayService : Service() {
         if (currentMode != MODE_REWARD_CHALLENGE) {
             rewardChallengeBinding = DeviceBinding.bindingId(this)
         }
-        requestRewardChallenge(pendingMessage = "Loading a hard question…", retry = ::openRewardChallenge) { response ->
+        requestRewardChallenge(pendingMessage = "Loading an advanced question…", retry = ::openRewardChallenge) { response ->
             val question = response.optJSONObject("question")
             if (question == null) {
-                showRewardPanel("No hard questions are available right now.")
+                showRewardPanel("No advanced questions are available right now.")
             } else {
                 val minutes = question.getInt("rewardMinutes")
                 val questionId = question.getString("id")
@@ -720,21 +721,22 @@ class QuestionOverlayService : Service() {
     }
 
     private fun submitRewardAnswer(questionId: String, selectedIndex: Int) {
-        if (!canChallengeForRewards() || DeviceBinding.bindingId(this) != rewardChallengeBinding) {
-            return refreshBlockingState()
-        }
         val answer = JSONObject().put("questionId", questionId).put("selectedIndex", selectedIndex)
-        requestRewardChallenge(answer, "Checking your answer…", { submitRewardAnswer(questionId, selectedIndex) }) { response ->
-            showRewardAnswerResult(response)
-        }
+            .put("attemptId", UUID.randomUUID().toString()).put("answeredAt", System.currentTimeMillis())
+        submitRewardAnswer(answer)
     }
 
     private fun submitRewardAnswer(questionId: String, numericAnswer: String) {
+        val answer = JSONObject().put("questionId", questionId).put("numericAnswer", numericAnswer)
+            .put("attemptId", UUID.randomUUID().toString()).put("answeredAt", System.currentTimeMillis())
+        submitRewardAnswer(answer)
+    }
+
+    private fun submitRewardAnswer(answer: JSONObject) {
         if (!canChallengeForRewards() || DeviceBinding.bindingId(this) != rewardChallengeBinding) {
             return refreshBlockingState()
         }
-        val answer = JSONObject().put("questionId", questionId).put("numericAnswer", numericAnswer)
-        requestRewardChallenge(answer, "Checking your answer…", { submitRewardAnswer(questionId, numericAnswer) }) { response ->
+        requestRewardChallenge(answer, "Checking your answer…", { submitRewardAnswer(answer) }) { response ->
             showRewardAnswerResult(response)
         }
     }
@@ -749,13 +751,7 @@ class QuestionOverlayService : Service() {
             return
         }
         val minutes = response.getInt("earnedMinutes")
-        val available = ControlState.rewardOfferMillis(this)
-        val message = when {
-            available > 0L -> "Correct! ${minuteLabel(minutes)} added.\n${ControlState.rewardTimeLabel(available)} available today."
-            else -> "Correct! ${minuteLabel(minutes)} saved in your reward balance."
-        }
-        val actions = if (available > 0L) listOf("Use reward time" to ::useRewardTime) else emptyList()
-        showRewardPanel(message, actions = actions)
+        showRewardPanel("Correct! ${minuteLabel(minutes)} saved in your reward balance.")
     }
 
     private fun requestRewardChallenge(
@@ -770,10 +766,18 @@ class QuestionOverlayService : Service() {
         Thread {
             val result = runCatching { RemoteSync.rewardChallenge(context, binding, answer) }
             handler.post {
-                if (overlayView !== pendingView || DeviceBinding.bindingId(this) != binding) return@post
+                if (DeviceBinding.bindingId(this) != binding) return@post
+                val response = result.getOrNull()
+                if (answer != null && response?.optBoolean("correct") == true && ControlState.activateRewardTime(this)) {
+                    val minutes = response.getInt("earnedMinutes")
+                    Toast.makeText(this, "Correct! ${minuteLabel(minutes)} added.", Toast.LENGTH_LONG).show()
+                    refreshBlockingState()
+                    return@post
+                }
+                if (overlayView !== pendingView) return@post
                 result.fold(onSuccess = { response ->
                     when {
-                        response.optBoolean("unavailable") -> showRewardPanel("This reward challenge is no longer available.")
+                        response.optBoolean("unavailable") -> showRewardPanel("This advanced question is no longer available.")
                         !response.optBoolean("eligible", true) -> showRewardPanel("Today's usage could not be confirmed. Sync and try again.")
                         else -> onSuccess(response)
                     }
@@ -822,7 +826,7 @@ class QuestionOverlayService : Service() {
             textSize = size
             setTextColor(color)
         }
-        root.addView(label("Reward challenge", 30f, gold).apply { setTypeface(null, Typeface.BOLD) }, matchParams())
+        root.addView(label("Advanced question", 30f, gold).apply { setTypeface(null, Typeface.BOLD) }, matchParams())
         if (prize != null) root.addView(label(prize, 19f, lavender), matchParams())
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val scroll = ScrollView(this).apply {

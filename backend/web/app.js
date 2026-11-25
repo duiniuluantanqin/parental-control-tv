@@ -126,7 +126,7 @@ function renderQuestions() {
         if (question.rewardMinutes) {
           const reward = document.createElement("span");
           reward.className = "category-badge reward-question-badge";
-          reward.textContent = `奖励难题 · ${question.type === "numeric" ? "计算题" : "选择题"} · ${question.rewardMinutes} 分钟`;
+          reward.textContent = `进阶题 · ${question.type === "numeric" ? "计算题" : "选择题"} · ${question.rewardMinutes} 分钟`;
           td.append(reward);
         }
       } else {
@@ -163,7 +163,7 @@ function renderQuestions() {
 
 function showQuestionDetail(question) {
   document.querySelector("#questionDetailMeta").textContent = question.rewardMinutes
-    ? `奖励难题 · ${question.type === "numeric" ? "计算题" : "选择题"} · 答对奖励 ${question.rewardMinutes} 分钟 · 类别：${question.category}`
+    ? `进阶题 · ${question.type === "numeric" ? "计算题" : "选择题"} · 答对奖励 ${question.rewardMinutes} 分钟 · 类别：${question.category}`
     : `类别：${question.category} · 难度：${question.difficulty}`;
   document.querySelector("#questionDetailPrompt").textContent = question.prompt;
   const options = document.querySelector("#questionDetailOptions");
@@ -472,6 +472,7 @@ function renderRecords(records) {
 function renderChallengeRecords(records, deviceNames) {
   const container = document.querySelector("#challengeRecords");
   const challenges = records.challenges || [];
+  const advancedAnswers = (records.answers || []).filter(answer => answer.questionKind === "reward");
   const answersByChallenge = new Map();
   for (const answer of records.answers || []) {
     if (!answer.challengeId) continue;
@@ -495,9 +496,18 @@ function renderChallengeRecords(records, deviceNames) {
     unknown: "历史记录 / 类型未知",
   };
   container.replaceChildren();
-  document.querySelector("#recordsSummary").textContent = `${records.usage.length} 台设备 · ${challenges.length} 次五题答题`;
+  document.querySelector("#recordsSummary").textContent = `${records.usage.length} 台设备 · ${challenges.length} 次五题答题 · ${advancedAnswers.length} 次进阶题作答`;
 
-  for (const challenge of challenges) {
+  const entries = [
+    ...challenges.map(challenge => ({ challenge, time: challenge.startedAt })),
+    ...advancedAnswers.map(answer => ({ answer, time: answer.answeredAt })),
+  ].sort((a, b) => b.time - a.time);
+  for (const entry of entries) {
+    if (entry.answer) {
+      container.append(renderAdvancedAnswerRecord(entry.answer, deviceNames));
+      continue;
+    }
+    const challenge = entry.challenge;
     const pane = document.createElement("details");
     pane.className = "challenge-record";
     const summary = document.createElement("summary");
@@ -575,19 +585,7 @@ function renderChallengeRecords(records, deviceNames) {
         row.append(answer);
       }
       if (attempt?.correct) {
-        if (attempt.restorable && !attempt.inQuestionBank) {
-          const restoreButton = document.createElement("button");
-          restoreButton.className = "text-button restore-question-button";
-          restoreButton.type = "button";
-          restoreButton.textContent = "放回题库";
-          restoreButton.addEventListener("click", () => restoreAnsweredQuestion(attempt, restoreButton));
-          row.append(restoreButton);
-        } else {
-          const restoreStatus = document.createElement("span");
-          restoreStatus.className = "challenge-question-restore-status";
-          restoreStatus.textContent = attempt.inQuestionBank ? "已在题库" : "题目内容不可恢复";
-          row.append(restoreStatus);
-        }
+        addAnswerRestoreAction(row, attempt);
       }
       questions.append(row);
     }
@@ -595,11 +593,79 @@ function renderChallengeRecords(records, deviceNames) {
     container.append(pane);
   }
 
-  if (!challenges.length) {
+  if (!entries.length) {
     const empty = document.createElement("div");
     empty.className = "challenge-empty";
     empty.textContent = "当天暂无答题记录";
     container.append(empty);
+  }
+}
+
+function renderAdvancedAnswerRecord(attempt, deviceNames) {
+  const pane = document.createElement("details");
+  pane.className = "challenge-record";
+  const summary = document.createElement("summary");
+  summary.className = "challenge-summary";
+  const main = document.createElement("span");
+  main.className = "challenge-summary-main";
+  const device = document.createElement("span");
+  device.className = "challenge-device";
+  device.textContent = attempt.deviceName || deviceNames.get(attempt.deviceId) || attempt.deviceId;
+  device.title = `${device.textContent} · ${attempt.deviceId}`;
+  const time = document.createElement("time");
+  time.className = "challenge-time";
+  time.dateTime = new Date(attempt.answeredAt).toISOString();
+  time.textContent = new Date(attempt.answeredAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  main.append(device, time);
+  const meta = document.createElement("span");
+  meta.className = "challenge-summary-meta";
+  const type = document.createElement("span");
+  type.className = "challenge-trigger";
+  type.textContent = `进阶题 · ${attempt.questionType === "numeric" ? "计算题" : "选择题"}`;
+  const status = document.createElement("span");
+  status.className = `challenge-status status-${attempt.correct ? "correct" : "incorrect"}`;
+  status.textContent = attempt.correct ? "答对" : "答错";
+  meta.append(type, status);
+  if (attempt.earnedMinutes > 0) {
+    const reward = document.createElement("span");
+    reward.className = "challenge-score";
+    reward.textContent = `奖励 ${attempt.earnedMinutes} 分钟`;
+    meta.append(reward);
+  }
+  summary.append(main, meta);
+  const questions = document.createElement("div");
+  questions.className = "challenge-questions";
+  const row = document.createElement("div");
+  row.className = "challenge-question";
+  const number = document.createElement("span");
+  number.className = "challenge-question-number";
+  number.textContent = "01";
+  const prompt = document.createElement("span");
+  prompt.className = "challenge-question-prompt";
+  prompt.textContent = attempt.prompt;
+  const answer = document.createElement("span");
+  answer.className = "challenge-question-answer";
+  answer.textContent = `作答：${attempt.selectedAnswer}`;
+  row.append(number, prompt, answer);
+  addAnswerRestoreAction(row, attempt);
+  questions.append(row);
+  pane.append(summary, questions);
+  return pane;
+}
+
+function addAnswerRestoreAction(row, attempt) {
+  if (attempt.restorable && !attempt.inQuestionBank) {
+    const restoreButton = document.createElement("button");
+    restoreButton.className = "text-button restore-question-button";
+    restoreButton.type = "button";
+    restoreButton.textContent = "放回题库";
+    restoreButton.addEventListener("click", () => restoreAnsweredQuestion(attempt, restoreButton));
+    row.append(restoreButton);
+  } else {
+    const restoreStatus = document.createElement("span");
+    restoreStatus.className = "challenge-question-restore-status";
+    restoreStatus.textContent = attempt.inQuestionBank ? "已在题库" : "题目内容不可恢复";
+    row.append(restoreStatus);
   }
 }
 
@@ -1231,7 +1297,7 @@ function updateQuestionAnswerFields() {
 function openQuestionForm(reward) {
   rewardQuestionForm = reward;
   questionForm.reset();
-  document.querySelector("#questionDialogTitle").textContent = reward ? "添加奖励难题" : "添加题目";
+  document.querySelector("#questionDialogTitle").textContent = reward ? "添加进阶题" : "添加题目";
   document.querySelector("#rewardMinutesField").hidden = !reward;
   document.querySelector("#challengeRewardMinutes").disabled = !reward;
   document.querySelector("#rewardAnswerTypeField").hidden = !reward;

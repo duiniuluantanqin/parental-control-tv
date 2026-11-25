@@ -213,7 +213,7 @@ tbody tr:hover { background: #fafcfd; }
 .challenge-time, .challenge-score { color: #8b97a5; font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .challenge-status { padding: 4px 9px; border-radius: 5px; color: #29816c; background: #edf7f1; font-size: 11px; white-space: nowrap; }
 .challenge-status.status-timeout, .challenge-status.status-reboot { color: #a47c44; background: #fcf4e8; }
-.challenge-status.status-daily_limit { color: #ad675b; background: #fcf0ec; }
+.challenge-status.status-daily_limit, .challenge-status.status-incorrect { color: #ad675b; background: #fcf0ec; }
 .challenge-questions { padding: 0 20px 6px; }
 .challenge-question { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: start; gap: 9px; padding: 16px 0; border-top: 1px solid #edf1f5; }
 .challenge-question-number { color: #a4afba; font-size: 12px; font-variant-numeric: tabular-nums; }

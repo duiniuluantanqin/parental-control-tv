@@ -509,11 +509,7 @@ class StateStore:
             device = state["devices"].get(device_id, {})
             if not self.reward_challenge_allowed(state, device_id, self.reward_challenge_day(device)):
                 return {"eligible": False, "question": None}
-            attempts = device.get("rewardQuestionAttempts", {})
-            question = next((
-                item for item in state["rewardQuestions"]
-                if attempts.get(item["id"], {}).get("correct") is not True
-            ), None)
+            question = next(iter(state["rewardQuestions"]), None)
             if question is None:
                 public_question = None
             elif question.get("type") == "numeric":
@@ -523,7 +519,8 @@ class StateStore:
             return {"eligible": True, "question": public_question}
 
     def answer_reward_question(self, device_id: str, question_id: object, selected: object = None,
-                               numeric_answer: object = None) -> tuple[int, dict]:
+                               numeric_answer: object = None, attempt_id: object = None,
+                               answered_at: object = None) -> tuple[int, dict]:
         selected_is_valid = type(selected) is int and 0 <= selected < 4
         numeric_is_valid = (
             selected is None and isinstance(numeric_answer, str)
@@ -531,35 +528,62 @@ class StateStore:
         )
         if (not isinstance(question_id, str) or not 1 <= len(question_id) <= 80
                 or selected_is_valid == numeric_is_valid):
-            raise ValueError("无效的奖励难题答案")
+            raise ValueError("无效的进阶题答案")
+        if not isinstance(attempt_id, str) or not 1 <= len(attempt_id) <= 80:
+            raise ValueError("无效的答题记录 ID")
+        if type(answered_at) is not int or not 0 <= answered_at <= 253_402_214_399_999:
+            raise ValueError("答题时间无效")
         with self.lock:
             state = self.load()
             device = state["devices"].get(device_id, {})
             local_time = self.reward_challenge_day(device)
-            attempts = device.get("rewardQuestionAttempts", {})
-            previous_result = attempts.get(question_id)
-            result = previous_result if previous_result and previous_result.get("correct") is True else None
+            existing = next((
+                item for item in state["answerRecords"]
+                if item.get("questionKind") == "reward" and item["deviceId"] == device_id
+                and item["attemptId"] == attempt_id
+            ), None)
             question = next((item for item in state["rewardQuestions"] if item["id"] == question_id), None)
-            if question is not None and (question.get("type") == "numeric") != numeric_is_valid:
-                raise ValueError("无效的奖励难题答案")
-            if result is None:
+            if existing is None:
                 if not self.reward_challenge_allowed(state, device_id, local_time):
                     return 409, {"error": "达到每日使用限额后才可挑战"}
                 if question is None:
-                    return 404, {"error": "奖励难题已删除"}
+                    return 404, {"error": "进阶题已删除"}
+                if (question.get("type") == "numeric") != numeric_is_valid:
+                    raise ValueError("无效的进阶题答案")
                 if question.get("type") == "numeric":
                     correct = str(int(numeric_answer.strip())) == question["numericAnswer"]
+                    selected_answer = numeric_answer.strip()
+                    correct_answer = question["numericAnswer"]
                 else:
-                    correct = question["options"][selected] == question["answer"]
+                    selected_answer = question["options"][selected]
+                    correct_answer = question["answer"]
+                    correct = selected_answer == correct_answer
                 minutes = question["rewardMinutes"] if correct else 0
-                result = {"correct": correct, "earnedMinutes": minutes}
+                existing = {
+                    "attemptId": attempt_id,
+                    "deviceId": device_id,
+                    "date": datetime.fromtimestamp(answered_at / 1000, timezone(timedelta(minutes=device["utcOffsetMinutes"]))).date().isoformat(),
+                    "answeredAt": answered_at,
+                    "questionId": question_id,
+                    "questionKind": "reward",
+                    "questionType": question.get("type", "choice"),
+                    "prompt": question["prompt"],
+                    "selectedAnswer": selected_answer,
+                    "answered": True,
+                    "correctAnswer": correct_answer,
+                    "correct": correct,
+                    "rewardMinutes": question["rewardMinutes"],
+                    "earnedMinutes": minutes,
+                    "question": question,
+                }
+                state["answerRecords"].append(existing)
                 if correct:
-                    attempts[question_id] = result
-                    device["rewardQuestionAttempts"] = attempts
                     device["rewardGrantedMillis"] = device.get("rewardGrantedMillis", 0) + minutes * MILLIS_PER_MINUTE
-                    self.save(state)
+                    state["rewardQuestions"] = [item for item in state["rewardQuestions"] if item["id"] != question_id]
+                self.save(state)
             record_date = local_time.date().isoformat() if local_time is not None else ""
-            return 200, {**result, "rewardTime": reward_snapshot(device, record_date)}
+            return 200, {"correct": existing["correct"], "earnedMinutes": existing["earnedMinutes"],
+                         "rewardTime": reward_snapshot(device, record_date)}
 
     @staticmethod
     def _create_schema(connection: sqlite3.Connection) -> None:
@@ -1173,6 +1197,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                         and (not device_id or item.get("deviceId") == device_id)
                     ]
                     question_ids = {item["id"] for item in state["questions"]}
+                    reward_question_ids = {item["id"] for item in state["rewardQuestions"]}
                     seed_question_ids = {item["id"] for item in json.loads(SEED_FILE.read_text(encoding="utf-8"))}
                 self.send_json(200, {
                     "date": record_date,
@@ -1184,7 +1209,9 @@ class RequestHandler(BaseHTTPRequestHandler):
                             **{key: value for key, value in item.items() if key not in ("correctAnswer", "question")},
                             "deviceName": state["devices"].get(item.get("deviceId"), {}).get("name", item["deviceId"]),
                             "restorable": isinstance(item.get("question"), dict) or item.get("questionId") in seed_question_ids,
-                            "inQuestionBank": item.get("questionId") in question_ids,
+                            "inQuestionBank": item.get("questionId") in (
+                                reward_question_ids if item.get("questionKind") == "reward" else question_ids
+                            ),
                         }
                         for item in sorted(answers, key=lambda item: item["answeredAt"], reverse=True)
                     ],
@@ -1266,6 +1293,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 payload = self.read_json()
                 status, result = self.store.answer_reward_question(
                     self.device_id, payload.get("questionId"), payload.get("selectedIndex"), payload.get("numericAnswer"),
+                    payload.get("attemptId"), payload.get("answeredAt"),
                 )
                 self.send_json(status, result)
             except ValueError as error:
@@ -1476,7 +1504,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                     with self.store.lock:
                         state = self.store.load()
                         records = state["answerRecords"]
-                        existing = next((item for item in records if item["deviceId"] == device_id and item["attemptId"] == attempt_id), None)
+                        existing = next((
+                            item for item in records if item.get("questionKind") != "reward"
+                            and item["deviceId"] == device_id and item["attemptId"] == attempt_id
+                        ), None)
                         if existing is not None:
                             self.send_json(200, {"accepted": True, "correct": existing["correct"], "removed": False})
                             return
@@ -1609,10 +1640,11 @@ class RequestHandler(BaseHTTPRequestHandler):
                 with self.store.lock:
                     state = self.store.load()
                     record = next((item for item in state["answerRecords"] if item.get("attemptId") == attempt_id), None)
-                    if record is None or not record.get("correct"):
+                    reward = record is not None and record.get("questionKind") == "reward"
+                    if record is None or (not reward and not record.get("correct")):
                         self.send_json(404, {"error": "找不到答对的题目记录"})
                         return
-                    questions = state["questions"]
+                    questions = state["rewardQuestions"] if reward else state["questions"]
                     if any(item["id"] == record.get("questionId") for item in questions):
                         self.send_json(200, {"restored": False, "inQuestionBank": True})
                         return
@@ -1625,7 +1657,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     if not isinstance(snapshot, dict):
                         self.send_json(409, {"error": "该答题记录没有完整题目，无法恢复"})
                         return
-                    question = validate_question(snapshot)
+                    question = validate_reward_question(snapshot) if reward else validate_question(snapshot)
                     if question["id"] != record.get("questionId"):
                         raise ValueError("题目快照与答题记录不匹配")
                     questions.append(question)

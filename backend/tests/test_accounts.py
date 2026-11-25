@@ -199,7 +199,7 @@ class AccountBindingTests(unittest.TestCase):
         self.assertEqual(state(second_day)["balanceMillis"], 25 * minute)
         self.assertEqual(self.request(self.alice, "/api/v1/admin/devices")[1]["devices"][0]["rewardBalanceMillis"], 25 * minute)
 
-    def test_reward_challenges_have_separate_banks_and_grant_once_per_device(self):
+    def test_advanced_choice_attempts_are_recorded_deleted_and_restorable(self):
         bank = "/api/v1/admin/reward-questions"
         challenge = "/api/v1/device/reward-challenge"
         minute = server.MILLIS_PER_MINUTE
@@ -215,8 +215,9 @@ class AccountBindingTests(unittest.TestCase):
         self.assertEqual(first["rewardMinutes"], 10)
         status, second = self.request(self.alice, bank, {**question, "prompt": "Another challenge", "rewardMinutes": 45})
         self.assertEqual(status, 201)
-        first_answer = {"questionId": first["id"], "selectedIndex": 0}
-        second_answer = {"questionId": second["id"], "selectedIndex": 2}
+        answered_at = int(server.time.time() * 1000)
+        first_answer = {"questionId": first["id"], "selectedIndex": 0, "attemptId": "first-correct", "answeredAt": answered_at}
+        second_answer = {"questionId": second["id"], "selectedIndex": 2, "attemptId": "second-wrong", "answeredAt": answered_at + 1000}
         self.assertEqual(self.request(self.bob, bank + "/" + first["id"], method="DELETE")[0], 404)
         bob_rewards = self.request(self.bob, "/api/v1/admin/state")[1]["rewardQuestions"]
         self.assertEqual([item["id"] for item in bob_rewards], [server.DEFAULT_REWARD_QUESTION["id"]])
@@ -247,13 +248,15 @@ class AccountBindingTests(unittest.TestCase):
         self.assertFalse(wrong["correct"])
         self.assertEqual(wrong["earnedMinutes"], 0)
         self.assertEqual(self.request(self.device, challenge, headers=self.headers)[1]["question"]["id"], second["id"])
-        status, retried = self.request(self.device, challenge, {**second_answer, "selectedIndex": 0}, self.headers)
+        status, retried = self.request(self.device, challenge, {
+            **second_answer, "selectedIndex": 0, "attemptId": "second-correct", "answeredAt": answered_at + 2000,
+        }, self.headers)
         self.assertEqual(status, 200)
         self.assertTrue(retried["correct"])
         self.assertEqual(retried["earnedMinutes"], 45)
         self.assertEqual(retried["rewardTime"]["balanceMillis"], 55 * minute)
         self.assertEqual(self.request(self.device, challenge, headers=self.headers), (200, {"eligible": True, "question": None}))
-        self.assertEqual(self.request(self.alice, bank + "/" + first["id"], method="DELETE")[0], 200)
+        self.assertEqual(self.request(self.alice, bank + "/" + first["id"], method="DELETE")[0], 404)
         server.STORE = server.StateStore(self.path)
         status, repeated = self.request(self.device, challenge, first_answer, self.headers)
         self.assertEqual(status, 200)
@@ -262,7 +265,28 @@ class AccountBindingTests(unittest.TestCase):
         self.assertEqual(repeated["rewardTime"]["balanceMillis"], 55 * minute)
         self.assertEqual(self.request(self.alice, "/api/v1/admin/devices")[1]["devices"][0]["rewardBalanceMillis"], 55 * minute)
 
-    def test_numeric_reward_challenge_normalizes_answers_and_grants_once(self):
+        records = self.request(self.alice, f"/api/v1/admin/records?date={local_day}")[1]["answers"]
+        self.assertEqual([item["attemptId"] for item in records], ["second-correct", "second-wrong", "first-correct"])
+        self.assertEqual([item["correct"] for item in records], [True, False, True])
+        self.assertEqual([item["answeredAt"] for item in records], [answered_at + 2000, answered_at + 1000, answered_at])
+        self.assertTrue(all(item["questionKind"] == "reward" and item["questionType"] == "choice" for item in records))
+        self.assertTrue(all(item["restorable"] and not item["inQuestionBank"] for item in records))
+        self.assertEqual(records[1]["selectedAnswer"], "122")
+        self.assertEqual(records[1]["earnedMinutes"], 0)
+        self.assertEqual(records[0]["earnedMinutes"], 45)
+        self.assertEqual(self.request(self.bob, f"/api/v1/admin/records?date={local_day}")[1]["answers"], [])
+
+        restore = "/api/v1/admin/answers/restore"
+        self.assertEqual(self.request(self.bob, restore, {"attemptId": "second-correct"})[0], 404)
+        self.assertEqual(self.request(self.alice, restore, {"attemptId": "second-wrong"})[0], 200)
+        state = self.request(self.alice, "/api/v1/admin/state")[1]
+        self.assertEqual(state["rewardQuestions"], [second])
+        self.assertNotIn(second["id"], {item["id"] for item in state["questions"]})
+        self.assertEqual(self.request(self.device, challenge, headers=self.headers)[1]["question"]["id"], second["id"])
+        repeated = self.request(self.alice, restore, {"attemptId": "second-correct"})
+        self.assertEqual(repeated, (200, {"restored": False, "inQuestionBank": True}))
+
+    def test_advanced_numeric_retries_are_recorded_and_transport_retries_are_idempotent(self):
         bank = "/api/v1/admin/reward-questions"
         challenge = "/api/v1/device/reward-challenge"
         minute = server.MILLIS_PER_MINUTE
@@ -301,15 +325,18 @@ class AccountBindingTests(unittest.TestCase):
                 "questionId": seeded["id"], "numericAnswer": invalid,
             }, self.headers)[0], 400)
 
-        status, wrong = self.request(self.device, challenge, {
-            "questionId": seeded["id"], "numericAnswer": "0",
-        }, self.headers)
+        answered_at = int(server.time.time() * 1000)
+        wrong_body = {"questionId": seeded["id"], "numericAnswer": "0", "attemptId": "numeric-wrong", "answeredAt": answered_at}
+        status, wrong = self.request(self.device, challenge, wrong_body, self.headers)
         self.assertEqual(status, 200)
         self.assertFalse(wrong["correct"])
         self.assertEqual(wrong["earnedMinutes"], 0)
         self.assertEqual(self.request(self.device, challenge, headers=self.headers)[1]["question"]["id"], seeded["id"])
 
-        body = {"questionId": seeded["id"], "numericAnswer": "000495"}
+        self.assertEqual(self.request(self.device, challenge, wrong_body, self.headers), (200, wrong))
+        next_wrong = {**wrong_body, "attemptId": "numeric-wrong-again", "answeredAt": answered_at + 1000}
+        self.assertEqual(self.request(self.device, challenge, next_wrong, self.headers)[0], 200)
+        body = {"questionId": seeded["id"], "numericAnswer": "000495", "attemptId": "numeric-correct", "answeredAt": answered_at + 2000}
         with ThreadPoolExecutor(max_workers=2) as executor:
             answers = list(executor.map(lambda _: self.request(build_opener(), challenge, body, self.headers), range(2)))
         self.assertEqual(answers[0], answers[1])
@@ -318,10 +345,66 @@ class AccountBindingTests(unittest.TestCase):
         self.assertTrue(result["correct"])
         self.assertEqual(result["earnedMinutes"], 10)
         self.assertEqual(result["rewardTime"]["balanceMillis"], 10 * minute)
-        self.assertEqual(self.request(self.device, challenge, {
-            "questionId": seeded["id"], "numericAnswer": "0",
-        }, self.headers), (200, result))
+        self.assertEqual(self.request(self.device, challenge, body, self.headers), (200, result))
         self.assertEqual(self.request(self.device, challenge, headers=self.headers)[1]["question"]["id"], created["id"])
+        records = self.request(self.alice, f"/api/v1/admin/records?date={local_day}")[1]["answers"]
+        self.assertEqual([item["correct"] for item in records], [True, False, False])
+        self.assertEqual([item["selectedAnswer"] for item in records], ["000495", "0", "0"])
+        self.assertTrue(all(item["questionType"] == "numeric" for item in records))
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/answers/restore", {"attemptId": body["attemptId"]})[0], 200)
+        restored = self.request(self.alice, "/api/v1/admin/state")[1]["rewardQuestions"][-1]
+        self.assertEqual(restored, seeded)
+        self.assertEqual(self.request(self.device, challenge, {
+            **body, "attemptId": "numeric-restored-correct", "answeredAt": answered_at + 3000,
+        }, self.headers)[1]["rewardTime"]["balanceMillis"], 20 * minute)
+
+    def test_advanced_attempt_validation_and_device_local_answer_date(self):
+        self.bind(self.alice)
+        challenge = "/api/v1/device/reward-challenge"
+        answered_at = int(server.datetime(2026, 11, 25, 17, 30, tzinfo=server.timezone.utc).timestamp() * 1000)
+        local_day = "2026-11-26"
+        with patch.object(server.time, "time", return_value=answered_at / 1000):
+            self.assertEqual(self.request(self.device, "/api/v1/device/usage", {
+                "deviceId": "test-tv", "date": local_day, "utcOffsetMinutes": 480,
+                "usageMillis": 60 * server.MILLIS_PER_MINUTE,
+            }, self.headers)[0], 200)
+            body = {
+                "questionId": server.DEFAULT_REWARD_QUESTION["id"], "numericAnswer": "0",
+                "attemptId": "local-date-attempt", "answeredAt": answered_at,
+            }
+            for invalid in (None, "", True, "x" * 81):
+                self.assertEqual(self.request(self.device, challenge, {**body, "attemptId": invalid}, self.headers)[0], 400)
+            for invalid in (None, True, -1, 1.5, 253_402_214_400_000):
+                self.assertEqual(self.request(self.device, challenge, {**body, "answeredAt": invalid}, self.headers)[0], 400)
+            self.assertEqual(self.request(self.device, challenge, body, self.headers)[0], 200)
+        answer = self.request(self.alice, f"/api/v1/admin/records?date={local_day}")[1]["answers"][0]
+        self.assertEqual(answer["date"], local_day)
+        self.assertEqual(answer["answeredAt"], answered_at)
+        self.assertFalse(answer["correct"])
+        self.assertTrue(answer["inQuestionBank"])
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/records?date=2026-11-25")[1]["answers"], [])
+
+    def test_advanced_and_regular_attempt_ids_do_not_hide_each_others_results(self):
+        self.bind(self.alice)
+        local_day = server.datetime.now(server.timezone.utc).date().isoformat()
+        answered_at = int(server.time.time() * 1000)
+        self.request(self.device, "/api/v1/device/usage", {
+            "deviceId": "test-tv", "date": local_day, "utcOffsetMinutes": 0,
+            "usageMillis": 60 * server.MILLIS_PER_MINUTE,
+        }, self.headers)
+        question = self.request(self.device, "/api/v1/device/state", headers=self.headers)[1]["questions"][0]
+        regular = {
+            "deviceId": "test-tv", "date": local_day, "attemptId": "shared-attempt", "answeredAt": answered_at,
+            "questionId": question["id"], "selectedAnswer": question["answer"],
+        }
+        advanced = {
+            "questionId": server.DEFAULT_REWARD_QUESTION["id"], "numericAnswer": "0",
+            "attemptId": "shared-attempt", "answeredAt": answered_at,
+        }
+        self.assertFalse(self.request(self.device, "/api/v1/device/reward-challenge", advanced, self.headers)[1]["correct"])
+        self.assertTrue(self.request(self.device, "/api/v1/device/answers", regular, self.headers)[1]["correct"])
+        self.assertFalse(self.request(self.device, "/api/v1/device/reward-challenge", advanced, self.headers)[1]["correct"])
+        self.assertEqual(len(self.request(self.alice, f"/api/v1/admin/records?date={local_day}")[1]["answers"]), 2)
 
     def test_default_reward_question_migration_runs_once_and_preserves_deletion(self):
         store = server.STORE.for_account(1)

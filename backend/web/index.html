@@ -141,7 +141,7 @@
     <section id="questionsPage" aria-label="题库管理" hidden>
       <div class="question-page-actions" role="group" aria-label="题库操作">
         <button id="addQuestionButton" class="button secondary" type="button"><span aria-hidden="true">＋</span> 添加题目</button>
-        <button id="addRewardQuestionButton" class="button secondary" type="button">＋ 添加奖励难题</button>
+        <button id="addRewardQuestionButton" class="button secondary" type="button">＋ 添加进阶题</button>
         <button id="aiQuestionButton" class="button primary" type="button">AI 出题</button>
       </div>
       <div class="page-callout"><p><strong>优先出题</strong>勾选后，电视优先抽取这些题目，不足五题时用普通题补足。下次同步后，在新一轮抽题时生效。</p><a href="/poems">添加诗词前查重 <span aria-hidden="true">→</span></a></div>
@@ -152,7 +152,7 @@
           <input id="questionSearch" type="search" placeholder="搜索题目、选项或答案">
           <div class="question-type-tabs" role="group" aria-label="题型">
             <button class="question-type-tab" type="button" aria-pressed="false" data-question-type="regular">普通题</button>
-            <button class="question-type-tab" type="button" aria-pressed="false" data-question-type="reward">奖励难题</button>
+            <button class="question-type-tab" type="button" aria-pressed="false" data-question-type="reward">进阶题</button>
           </div>
           <label class="sr-only" for="categoryFilter">筛选类别</label>
           <select id="categoryFilter"><option value="">全部类别</option></select>
@@ -211,7 +211,7 @@
         </div>
       </section>
       <section class="records-section" aria-labelledby="answerRecordsTitle">
-        <div class="records-section-heading"><div><h2 id="answerRecordsTitle">答题记录</h2><p>查看每轮弹出类型和结束原因；展开可查看每题结果或将题目恢复到题库。</p></div></div>
+        <div class="records-section-heading"><div><h2 id="answerRecordsTitle">答题记录</h2><p>查看每轮答题和每次进阶题作答；展开可查看结果、作答时间或将题目恢复到题库。</p></div></div>
         <div id="challengeRecords" class="challenge-records"></div>
       </section>
     </section>
@@ -244,7 +244,7 @@
       </div>
       <label id="rewardMinutesField" for="challengeRewardMinutes" hidden>答对奖励（分钟）
         <input id="challengeRewardMinutes" type="number" min="1" max="1440" step="1" value="10" disabled required>
-        <small class="muted">电视达到每日限额后可挑战；答错可重试，答对后每台电视只奖励一次。</small>
+        <small class="muted">电视达到每日限额后可挑战；答错可重试，答对后自动移出题库、发放奖励并解锁。</small>
       </label>
       <label id="rewardAnswerTypeField" for="rewardAnswerType" hidden>答题类型
         <select id="rewardAnswerType" disabled><option value="choice">选择题</option><option value="numeric">计算题（数字答案）</option></select>

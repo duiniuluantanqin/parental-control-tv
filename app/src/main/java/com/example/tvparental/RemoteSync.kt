@@ -275,7 +275,7 @@ object RemoteSync {
                 }
                 409 -> JSONObject().put("eligible", false)
                 404 -> JSONObject().put("unavailable", true)
-                else -> error("Could not reach the reward challenge service.")
+                else -> error("Could not reach the advanced question service.")
             }
         } finally {
             connection.disconnect()
