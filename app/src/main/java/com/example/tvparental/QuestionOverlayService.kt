@@ -514,26 +514,9 @@ class QuestionOverlayService : Service() {
 
         if (mode == MODE_WRONG_LOCK) {
             addLockPoem(root, ControlState.wrongAnswerLockPoem(this))
-        } else {
-            val message = TextView(this).apply {
-                text = when {
-                    mode == MODE_USAGE_WINDOW -> "Try again during an allowed time window."
-                    rewardOfferMillis > 0L ->
-                        "Use reward time?\n${ControlState.rewardTimeLabel(rewardOfferMillis)} available today."
-                    rewardChallengeOffered -> "Answer a hard question to earn reward time."
-                    else -> "Today's allowance is used. Access returns tomorrow."
-                }
-                setTextColor(Color.WHITE)
-                textSize = if (mode == MODE_DAILY_LOCK) 18f else 32f
-                gravity = Gravity.CENTER
-                if (mode == MODE_DAILY_LOCK) setPadding(0, dp(8), 0, dp(8))
-                else setPadding(0, dp(35), 0, dp(20))
-            }
-            root.addView(message, if (mode == MODE_DAILY_LOCK) matchParams() else weightedParams(1f))
-            if (mode == MODE_DAILY_LOCK) {
-                val poem = dailyLimitPoem ?: QuestionBank.poemForDailyLimitLock(this).also { dailyLimitPoem = it }
-                addLockPoem(root, poem)
-            }
+        } else if (mode == MODE_DAILY_LOCK) {
+            val poem = dailyLimitPoem ?: QuestionBank.poemForDailyLimitLock(this).also { dailyLimitPoem = it }
+            addLockPoem(root, poem)
         }
 
         if (mode == MODE_USAGE_WINDOW) addLockCountdown(root)
@@ -630,6 +613,14 @@ class QuestionOverlayService : Service() {
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
         }, matchParams())
+        box.addView(TextView(this).apply {
+            val balance = ControlState.rewardTimeLabel(ControlState.rewardBalanceMillis(this@QuestionOverlayService))
+            val available = ControlState.rewardTimeLabel(ControlState.rewardAvailableToday(this@QuestionOverlayService))
+            text = "Total reward time: $balance\nAvailable today: $available"
+            textSize = 22f
+            setTextColor(Color.rgb(210, 239, 111))
+            gravity = Gravity.CENTER
+        }, matchParams().apply { topMargin = dp(16) })
         box.addView(TextView(this).apply {
             text = "Using reward time starts access until the TV is turned off. After restart, the daily limit screen appears again."
             textSize = 20f
