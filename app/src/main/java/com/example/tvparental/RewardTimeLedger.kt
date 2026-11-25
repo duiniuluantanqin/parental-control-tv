@@ -15,6 +15,11 @@ internal object RewardTimeLedger {
     fun availableToday(preferences: SharedPreferences, dailyLimitMillis: Long): Long =
         minOf(balance(preferences), (dailyLimitMillis - preferences.getLong(USED_TODAY, 0L)).coerceAtLeast(0L))
 
+    fun clearActivation(preferences: SharedPreferences) {
+        if (!preferences.contains(ACTIVATED)) return
+        check(preferences.edit().remove(ACTIVATED).commit()) { "Could not clear reward time activation." }
+    }
+
     fun reconcile(preferences: SharedPreferences, sameDay: Boolean, granted: Long, spent: Long, usedToday: Long): Boolean {
         val localGranted = preferences.getLong(GRANTED, 0L)
         val localSpent = preferences.getLong(SPENT, 0L)

@@ -1,18 +1,18 @@
 package com.example.tvparental
 
 import android.animation.ObjectAnimator
-import android.app.AlertDialog
+import android.app.Dialog
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.content.DialogInterface
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
@@ -30,6 +30,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.Window
 import android.view.WindowManager
 import android.widget.GridLayout
 import android.widget.LinearLayout
@@ -55,7 +56,7 @@ class QuestionOverlayService : Service() {
     private var pinHint: TextView? = null
     private var pinEntryActive = false
     private var rewardOfferMillis = 0L
-    private var rewardConfirmDialog: AlertDialog? = null
+    private var rewardConfirmDialog: Dialog? = null
     private var rewardConfirmReturnFocus: View? = null
     private var dailyLimitPoem: Poem? = null
     private var rewardChallengeOffered = false
@@ -604,22 +605,82 @@ class QuestionOverlayService : Service() {
         if (rewardConfirmDialog?.isShowing == true) return
 
         val returnFocus = overlayView?.findFocus()
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Use reward time?")
-            .setMessage("Using reward time starts access until the TV is turned off. After restart, the daily limit screen appears again.")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Use time", null)
-            .create()
-        rewardConfirmReturnFocus = returnFocus
-        dialog.window?.setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
-        dialog.setCanceledOnTouchOutside(false)
-        dialog.setOnShowListener {
-            dialog.getButton(DialogInterface.BUTTON_NEGATIVE).requestFocus()
-            dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener {
-                dialog.dismiss()
-                activateRewardTime()
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        dialog.window?.apply {
+            setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            setDimAmount(0.65f)
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(32), dp(28), dp(32), dp(28))
+            background = GradientDrawable().apply {
+                setColor(Color.rgb(20, 24, 25))
+                setStroke(dp(2), Color.rgb(70, 84, 76))
+                cornerRadius = dp(24).toFloat()
             }
         }
+        box.addView(TextView(this).apply {
+            text = "Use reward time?"
+            textSize = 28f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+        }, matchParams())
+        box.addView(TextView(this).apply {
+            text = "Using reward time starts access until the TV is turned off. After restart, the daily limit screen appears again."
+            textSize = 20f
+            setTextColor(Color.rgb(193, 203, 194))
+            gravity = Gravity.CENTER
+        }, matchParams().apply {
+            topMargin = dp(16)
+            bottomMargin = dp(28)
+        })
+        fun action(label: String, clicked: () -> Unit) = TextView(this).apply {
+            id = View.generateViewId()
+            text = label
+            textSize = 20f
+            gravity = Gravity.CENTER
+            isFocusable = true
+            isFocusableInTouchMode = true
+            isClickable = true
+            fun showFocus(focused: Boolean) {
+                setTextColor(if (focused) Color.rgb(20, 24, 25) else Color.WHITE)
+                background = GradientDrawable().apply {
+                    cornerRadius = dp(10).toFloat()
+                    setColor(if (focused) Color.rgb(210, 239, 111) else Color.rgb(45, 58, 60))
+                }
+            }
+            showFocus(false)
+            setOnFocusChangeListener { _, focused -> showFocus(focused) }
+            setOnClickListener { clicked() }
+        }
+        val cancel = action("Cancel") { dialog.dismiss() }
+        val confirm = action("Use time") {
+            dialog.dismiss()
+            activateRewardTime()
+        }
+        val actions = LinearLayout(this).apply {
+            gravity = Gravity.CENTER
+            addView(cancel, LinearLayout.LayoutParams(0, dp(56), 1f))
+            addView(confirm, LinearLayout.LayoutParams(0, dp(56), 1f).apply { marginStart = dp(12) })
+        }
+        cancel.nextFocusLeftId = cancel.id
+        cancel.nextFocusRightId = confirm.id
+        confirm.nextFocusLeftId = cancel.id
+        confirm.nextFocusRightId = confirm.id
+        listOf(cancel, confirm).forEach { button ->
+            button.nextFocusUpId = button.id
+            button.nextFocusDownId = button.id
+        }
+        box.addView(actions, matchParams())
+        dialog.setContentView(box)
+        rewardConfirmReturnFocus = returnFocus
+        dialog.setCanceledOnTouchOutside(false)
+        dialog.setOnShowListener { cancel.requestFocus() }
         dialog.setOnDismissListener {
             if (rewardConfirmDialog === dialog) rewardConfirmDialog = null
             if (rewardConfirmReturnFocus === returnFocus) {
@@ -632,6 +693,7 @@ class QuestionOverlayService : Service() {
         }
         rewardConfirmDialog = dialog
         dialog.show()
+        dialog.window?.setLayout(minOf(dp(680), (resources.displayMetrics.widthPixels * 0.8f).toInt()), -2)
     }
 
     private fun activateRewardTime() {
@@ -691,6 +753,7 @@ class QuestionOverlayService : Service() {
             showRewardPanel(
                 "Incorrect. Try this question again.",
                 actions = listOf("Try again" to ::openRewardChallenge),
+                actionsStacked = true,
             )
             return
         }
@@ -741,6 +804,7 @@ class QuestionOverlayService : Service() {
         message: String,
         prize: String? = null,
         actions: List<Pair<String, () -> Unit>> = emptyList(),
+        actionsStacked: Boolean = false,
         onNumericAnswer: ((String) -> Unit)? = null,
     ): View {
         handler.removeCallbacks(lockTicker)
@@ -792,17 +856,22 @@ class QuestionOverlayService : Service() {
                 setPadding(dp(10), dp(4), dp(10), dp(4))
             }.also { body.addView(it, matchParams()) }
         } else null
-        fun button(copy: String, onClick: () -> Unit) = label(copy, 20f, lavender).apply {
+        fun button(copy: String, emphasized: Boolean = false, onClick: () -> Unit) = label(copy, 20f, lavender).apply {
             id = View.generateViewId()
             gravity = Gravity.CENTER_VERTICAL
             minHeight = dp(48)
             setPadding(dp(16), dp(8), dp(16), dp(8))
             isFocusable = true
             isClickable = true
+            setTypeface(null, if (emphasized) Typeface.BOLD else Typeface.NORMAL)
             fun paint(focused: Boolean) {
-                setTextColor(if (focused) Color.rgb(40, 22, 65) else lavender)
+                setTextColor(if (focused || emphasized) Color.rgb(40, 22, 65) else lavender)
                 background = GradientDrawable().apply {
-                    setColor(if (focused) gold else Color.rgb(66, 43, 94))
+                    setColor(when {
+                        focused -> gold
+                        emphasized -> Color.rgb(77, 203, 180)
+                        else -> Color.rgb(66, 43, 94)
+                    })
                     cornerRadius = dp(10).toFloat()
                 }
             }
@@ -811,20 +880,20 @@ class QuestionOverlayService : Service() {
             setOnKeyListener { _, key, event -> handleBack(key, event) }
             setOnClickListener { onClick() }
         }
-        val back = button("Back to daily limit", ::returnToUsageLock)
+        val back = button("Back to daily limit", onClick = ::returnToUsageLock)
         val actionButtons = if (onNumericAnswer != null) {
             listOf(
                 button("Clear") { numericAnswer = ""; refreshNumericAnswer() },
-                button("Submit") {
+                button("Submit", emphasized = true) {
                     if (numericAnswer.isNotEmpty() && numericAnswer != "-") onNumericAnswer(numericAnswer)
-                }.apply { isEnabled = false },
+                },
             )
-        } else actions.map { (copy, onClick) -> button(copy, onClick) }
+        } else actions.map { (copy, onClick) -> button(copy, onClick = onClick) }
         val keyboardButtons = mutableListOf<TextView>()
         if (onNumericAnswer != null) {
             refreshNumericAnswer = {
                 answerDisplay?.text = numericAnswer.ifEmpty { "Enter an answer" }
-                actionButtons.lastOrNull()?.isEnabled = numericAnswer.isNotEmpty() && numericAnswer != "-"
+                actionButtons.lastOrNull()?.alpha = if (numericAnswer.isNotEmpty() && numericAnswer != "-") 1f else .78f
             }
             val keypad = GridLayout(this).apply {
                 columnCount = 3
@@ -856,42 +925,56 @@ class QuestionOverlayService : Service() {
                 })
             }
             keyboardButtons.forEachIndexed { index, key ->
-                key.nextFocusLeftId = keyboardButtons[if (index % 3 == 0) index else index - 1].id
-                key.nextFocusRightId = keyboardButtons[if (index % 3 == 2) index else index + 1].id
+                key.nextFocusLeftId = if (index % 3 == 0) key.id else keyboardButtons[index - 1].id
+                key.nextFocusRightId = if (index % 3 == 2) actionButtons.first().id
+                else keyboardButtons[index + 1].id
                 key.nextFocusUpId = keyboardButtons[(index - 3).coerceAtLeast(index % 3)].id
-                key.nextFocusDownId = if (index >= 9) actionButtons[if (index == 9) 0 else 1].id
+                key.nextFocusDownId = if (index >= 9) when (index) {
+                    9 -> actionButtons.first().id
+                    10 -> back.id
+                    else -> actionButtons.last().id
+                }
                 else keyboardButtons[index + 3].id
             }
-            body.addView(keypad, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
+            val answerControls = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(actionButtons.first(), LinearLayout.LayoutParams(-1, dp(48)))
+                back.text = "Back"
+                back.textSize = 15f
+                addView(back, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(8) })
+                addView(actionButtons.last(), LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(8) })
+            }
+            val entryRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER
+                addView(keypad, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ))
+                addView(answerControls, LinearLayout.LayoutParams(dp(160), -2).apply {
+                    marginStart = dp(12)
+                })
+            }
+            body.addView(entryRow, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply {
-                gravity = Gravity.CENTER_HORIZONTAL
                 setMargins(0, dp(8), 0, dp(4))
             })
             actionButtons.forEachIndexed { index, control ->
-                control.nextFocusLeftId = actionButtons.getOrElse(index - 1) { control }.id
-                control.nextFocusRightId = actionButtons.getOrElse(index + 1) { control }.id
-                control.nextFocusUpId = keyboardButtons[9 + index].id
-                control.nextFocusDownId = back.id
+                control.nextFocusUpId = if (index == 0) keyboardButtons[2].id else back.id
+                control.nextFocusDownId = if (index == 0) back.id else control.id
+                control.nextFocusLeftId = keyboardButtons[if (index == 0) 2 else 11].id
+                control.nextFocusRightId = control.id
             }
-            refreshNumericAnswer()
-        }
-        root.addView(back, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) })
-        if (onNumericAnswer != null && actionButtons.size == 2) {
-            val controls = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER
-            }
-            actionButtons.forEachIndexed { index, control ->
-                controls.addView(control, LinearLayout.LayoutParams(0, dp(48), 1f).apply {
-                    if (index > 0) marginStart = dp(8)
-                })
-            }
-            body.addView(controls, matchParams())
             back.nextFocusUpId = actionButtons.first().id
-            actionButtons.forEach { it.nextFocusDownId = back.id }
+            back.nextFocusDownId = actionButtons.last().id
+            back.nextFocusLeftId = keyboardButtons[11].id
+            back.nextFocusRightId = back.id
+            refreshNumericAnswer()
         } else if (prize != null && actionButtons.size == 4) {
+            root.addView(back, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) })
             actionButtons.chunked(2).forEachIndexed { rowIndex, pair ->
                 val row = LinearLayout(this)
                 pair.forEachIndexed { column, option ->
@@ -906,7 +989,34 @@ class QuestionOverlayService : Service() {
                 body.addView(row, matchParams().apply { if (rowIndex == 0) bottomMargin = dp(6) })
             }
             back.nextFocusUpId = actionButtons[2].id
+        } else if (actionsStacked && actionButtons.size == 1) {
+            back.text = "Back"
+            back.textSize = 20f
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                actionButtons.first().gravity = Gravity.CENTER
+                back.gravity = Gravity.CENTER
+                addView(actionButtons.first(), LinearLayout.LayoutParams(dp(280), dp(52)))
+                addView(back, LinearLayout.LayoutParams(dp(280), dp(52)).apply { topMargin = dp(10) })
+            }
+            actionButtons.first().nextFocusLeftId = actionButtons.first().id
+            actionButtons.first().nextFocusRightId = actionButtons.first().id
+            back.nextFocusLeftId = back.id
+            back.nextFocusRightId = back.id
+            actionButtons.first().nextFocusUpId = actionButtons.first().id
+            back.nextFocusUpId = actionButtons.first().id
+            actionButtons.first().nextFocusDownId = back.id
+            back.nextFocusDownId = back.id
+            root.addView(row, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                topMargin = dp(12)
+                bottomMargin = dp(8)
+            })
         } else {
+            root.addView(back, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) })
             val controls = actionButtons + back
             actionButtons.forEach { body.addView(it, matchParams().apply { bottomMargin = dp(6) }) }
             controls.forEachIndexed { index, view ->

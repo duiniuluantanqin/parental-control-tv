@@ -200,6 +200,23 @@ class UsageAccountingTest {
     }
 
     @Test
+    fun clearingRewardActivationPreservesSpentAndAvailableTime() {
+        val store = TestPreferenceStore(mapOf(
+            RewardTimeLedger.GRANTED to 50 * minute,
+            RewardTimeLedger.SPENT to 15 * minute,
+            RewardTimeLedger.USED_TODAY to 5 * minute,
+            RewardTimeLedger.ACTIVATED to true,
+        ))
+
+        RewardTimeLedger.clearActivation(store.open())
+        val restored = store.restart().open()
+
+        assertFalse(restored.getBoolean(RewardTimeLedger.ACTIVATED, false))
+        assertEquals(35 * minute, RewardTimeLedger.balance(restored))
+        assertEquals(25 * minute, RewardTimeLedger.availableToday(restored, 30 * minute))
+    }
+
+    @Test
     fun rewardBalanceSurvivesMidnightAndClockReversalRestoresTheEarlierCap() {
         val preferences = TestPreferenceStore(mapOf(RewardTimeLedger.GRANTED to 50 * minute)).open()
         val firstDay = local("2026-11-21 23:59")

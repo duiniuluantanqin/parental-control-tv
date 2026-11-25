@@ -79,7 +79,10 @@ class UsageTrackingService : Service() {
             } else {
                 accountElapsedTime(interactive = interactive)
             }
-            if (!interactive) DailyLimitUnlock.setActive(this@UsageTrackingService, false)
+            if (!interactive) {
+                DailyLimitUnlock.setActive(this@UsageTrackingService, false)
+                ControlState.clearRewardTimeActivation(this@UsageTrackingService)
+            }
             if (intent?.action == Intent.ACTION_SHUTDOWN) {
                 QuestionBank.finishForReboot(this@UsageTrackingService, shuttingDown = true)
                 return

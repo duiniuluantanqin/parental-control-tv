@@ -332,6 +332,11 @@ object ControlState {
     }
 
     @Synchronized
+    fun clearRewardTimeActivation(context: Context) {
+        RewardTimeLedger.clearActivation(prefs(context))
+    }
+
+    @Synchronized
     fun applyRemoteRewardTime(context: Context, reward: JSONObject): Boolean {
         resetForNewDay(context)
         val preferences = prefs(context)

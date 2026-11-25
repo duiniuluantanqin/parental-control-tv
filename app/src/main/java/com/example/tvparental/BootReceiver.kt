@@ -18,6 +18,7 @@ class BootReceiver : BroadcastReceiver() {
             return
         }
 
+        ControlState.clearRewardTimeActivation(context)
         QuestionBank.finishForReboot(context)
         QuestionAlarmReceiver.scheduleNext(context)
         val trackingIntent = Intent(context, UsageTrackingService::class.java)
