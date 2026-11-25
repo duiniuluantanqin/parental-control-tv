@@ -30,6 +30,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.Window
 import android.view.WindowManager
 import android.widget.GridLayout
@@ -830,7 +831,18 @@ class QuestionOverlayService : Service() {
         if (prize != null) root.addView(label(prize, 19f, lavender), matchParams())
         val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val scroll = ScrollView(this).apply {
-            isFocusable = false
+            id = View.generateViewId()
+            isFocusable = true
+            isFocusableInTouchMode = true
+            descendantFocusability = ViewGroup.FOCUS_BEFORE_DESCENDANTS
+            setPadding(dp(8), 0, dp(8), 0)
+            setOnFocusChangeListener { _, focused ->
+                background = GradientDrawable().apply {
+                    setColor(Color.TRANSPARENT)
+                    setStroke(dp(1), if (focused) gold else Color.TRANSPARENT)
+                    cornerRadius = dp(8).toFloat()
+                }
+            }
             addView(body)
         }
         root.addView(scroll, weightedParams(1f))
@@ -840,16 +852,16 @@ class QuestionOverlayService : Service() {
         var numericAnswer = ""
         var refreshNumericAnswer: () -> Unit = {}
         val answerDisplay = if (onNumericAnswer != null) {
-            label("", 28f, Color.WHITE).apply {
+            label("", 22f, Color.WHITE).apply {
                 gravity = Gravity.CENTER
                 background = GradientDrawable().apply {
                     setColor(Color.rgb(28, 18, 43))
                     setStroke(dp(1), Color.rgb(164, 119, 215))
                     cornerRadius = dp(8).toFloat()
                 }
-                minHeight = dp(52)
+                minHeight = dp(40)
                 setPadding(dp(10), dp(4), dp(10), dp(4))
-            }.also { body.addView(it, matchParams()) }
+            }.also { root.addView(it, matchParams()) }
         } else null
         fun button(copy: String, emphasized: Boolean = false, onClick: () -> Unit) = label(copy, 20f, lavender).apply {
             id = View.generateViewId()
@@ -886,6 +898,11 @@ class QuestionOverlayService : Service() {
         } else actions.map { (copy, onClick) -> button(copy, onClick = onClick) }
         val keyboardButtons = mutableListOf<TextView>()
         if (onNumericAnswer != null) {
+            (actionButtons + back).forEach { control ->
+                control.minHeight = dp(36)
+                control.textSize = 18f
+                control.setPadding(dp(10), dp(4), dp(10), dp(4))
+            }
             refreshNumericAnswer = {
                 answerDisplay?.text = numericAnswer.ifEmpty { "Enter an answer" }
                 actionButtons.lastOrNull()?.alpha = if (numericAnswer.isNotEmpty() && numericAnswer != "-") 1f else .78f
@@ -905,17 +922,17 @@ class QuestionOverlayService : Service() {
                     refreshNumericAnswer()
                 }.apply {
                     gravity = Gravity.CENTER
-                    minHeight = dp(40)
-                    setPadding(dp(8), dp(4), dp(8), dp(4))
-                    textSize = if (keyLabel == "Del") 16f else 20f
+                    minHeight = dp(32)
+                    setPadding(dp(6), dp(2), dp(6), dp(2))
+                    textSize = if (keyLabel == "Del") 14f else 18f
                 }
                 keyboardButtons += key
                 keypad.addView(key, GridLayout.LayoutParams(
                     GridLayout.spec(index / 3),
                     GridLayout.spec(index % 3),
                 ).apply {
-                    width = dp(112)
-                    height = dp(42)
+                    width = dp(80)
+                    height = dp(32)
                     setMargins(dp(4), dp(2), dp(4), dp(2))
                 })
             }
@@ -923,7 +940,7 @@ class QuestionOverlayService : Service() {
                 key.nextFocusLeftId = if (index % 3 == 0) key.id else keyboardButtons[index - 1].id
                 key.nextFocusRightId = if (index % 3 == 2) actionButtons.first().id
                 else keyboardButtons[index + 1].id
-                key.nextFocusUpId = keyboardButtons[(index - 3).coerceAtLeast(index % 3)].id
+                key.nextFocusUpId = if (index < 3) scroll.id else keyboardButtons[index - 3].id
                 key.nextFocusDownId = if (index >= 9) when (index) {
                     9 -> actionButtons.first().id
                     10 -> back.id
@@ -934,11 +951,11 @@ class QuestionOverlayService : Service() {
             val answerControls = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER_VERTICAL
-                addView(actionButtons.first(), LinearLayout.LayoutParams(-1, dp(48)))
+                addView(actionButtons.first(), LinearLayout.LayoutParams(-1, dp(36)))
                 back.text = "Back"
                 back.textSize = 15f
-                addView(back, LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(8) })
-                addView(actionButtons.last(), LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(8) })
+                addView(back, LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(6) })
+                addView(actionButtons.last(), LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(6) })
             }
             val entryRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -947,18 +964,18 @@ class QuestionOverlayService : Service() {
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                 ))
-                addView(answerControls, LinearLayout.LayoutParams(dp(160), -2).apply {
+                addView(answerControls, LinearLayout.LayoutParams(dp(112), -2).apply {
                     marginStart = dp(12)
                 })
             }
-            body.addView(entryRow, LinearLayout.LayoutParams(
+            root.addView(entryRow, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply {
                 setMargins(0, dp(8), 0, dp(4))
             })
             actionButtons.forEachIndexed { index, control ->
-                control.nextFocusUpId = if (index == 0) keyboardButtons[2].id else back.id
+                control.nextFocusUpId = if (index == 0) scroll.id else back.id
                 control.nextFocusDownId = if (index == 0) back.id else control.id
                 control.nextFocusLeftId = keyboardButtons[if (index == 0) 2 else 11].id
                 control.nextFocusRightId = control.id
@@ -969,7 +986,6 @@ class QuestionOverlayService : Service() {
             back.nextFocusRightId = back.id
             refreshNumericAnswer()
         } else if (prize != null && actionButtons.size == 4) {
-            root.addView(back, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) })
             actionButtons.chunked(2).forEachIndexed { rowIndex, pair ->
                 val row = LinearLayout(this)
                 pair.forEachIndexed { column, option ->
@@ -978,11 +994,12 @@ class QuestionOverlayService : Service() {
                     })
                     option.nextFocusLeftId = pair[0].id
                     option.nextFocusRightId = pair[1].id
-                    option.nextFocusUpId = actionButtons[column].id
+                    option.nextFocusUpId = if (rowIndex == 0) scroll.id else actionButtons[column].id
                     option.nextFocusDownId = if (rowIndex == 0) actionButtons[2 + column].id else back.id
                 }
                 body.addView(row, matchParams().apply { if (rowIndex == 0) bottomMargin = dp(6) })
             }
+            root.addView(back, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) })
             back.nextFocusUpId = actionButtons[2].id
         } else if (actionsStacked && actionButtons.size == 1) {
             back.text = "Back"
@@ -999,7 +1016,7 @@ class QuestionOverlayService : Service() {
             actionButtons.first().nextFocusRightId = actionButtons.first().id
             back.nextFocusLeftId = back.id
             back.nextFocusRightId = back.id
-            actionButtons.first().nextFocusUpId = actionButtons.first().id
+            actionButtons.first().nextFocusUpId = scroll.id
             back.nextFocusUpId = actionButtons.first().id
             actionButtons.first().nextFocusDownId = back.id
             back.nextFocusDownId = back.id
@@ -1011,17 +1028,31 @@ class QuestionOverlayService : Service() {
                 bottomMargin = dp(8)
             })
         } else {
-            root.addView(back, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) })
             val controls = actionButtons + back
-            actionButtons.forEach { body.addView(it, matchParams().apply { bottomMargin = dp(6) }) }
+            actionButtons.forEach { root.addView(it, matchParams().apply { bottomMargin = dp(6) }) }
+            root.addView(back, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8) })
             controls.forEachIndexed { index, view ->
-                view.nextFocusUpId = controls.getOrElse(index - 1) { view }.id
+                view.nextFocusUpId = controls.getOrNull(index - 1)?.id ?: scroll.id
                 view.nextFocusDownId = controls.getOrElse(index + 1) { view }.id
             }
         }
+        val firstControl = keyboardButtons.firstOrNull() ?: actionButtons.firstOrNull() ?: back
+        scroll.nextFocusUpId = scroll.id
+        scroll.nextFocusDownId = firstControl.id
+        scroll.setOnKeyListener { _, key, event ->
+            if (handleBack(key, event)) true
+            else if (key == KeyEvent.KEYCODE_DPAD_UP || key == KeyEvent.KEYCODE_DPAD_DOWN) {
+                if (event.action == KeyEvent.ACTION_DOWN) {
+                    val direction = if (key == KeyEvent.KEYCODE_DPAD_UP) -1 else 1
+                    if (scroll.canScrollVertically(direction)) scroll.scrollBy(0, direction * dp(72))
+                    else if (direction > 0) firstControl.requestFocus()
+                }
+                true
+            } else false
+        }
         attachOverlay(root, answering = prize != null)
         root.post {
-            (keyboardButtons.firstOrNull() ?: actionButtons.firstOrNull() ?: back).requestFocus()
+            (if (scroll.canScrollVertically(1)) scroll else firstControl).requestFocus()
             scroll.scrollTo(0, 0)
         }
         handler.postDelayed(lockTicker, 1_000L)
