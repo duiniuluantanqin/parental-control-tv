@@ -25,6 +25,8 @@ const weekdays = [
 let questions = [];
 let rewardQuestions = [];
 let rewardDevices = [];
+let settingsDeviceId = "";
+let settingsLoadRequest = 0;
 let rewardQuestionForm = false;
 let questionTypeFilter = "";
 const questionTypeTabs = [...document.querySelectorAll(".question-type-tab")];
@@ -359,17 +361,57 @@ function renderRewardBalance() {
     : "剩余奖励时间：—";
 }
 
-async function loadRewardDevices() {
+async function loadSettingsDevices() {
   try {
     const { devices } = await api("/api/v1/admin/devices");
     rewardDevices = devices.filter(device => device.bound);
     renderDevicePicker("rewardDevice", "grantReward", rewardDevices);
+    renderDevicePicker("settingsDevice", "saveSettings", rewardDevices);
+    await loadDeviceSettings();
   } catch (error) {
     rewardDevices = [];
     document.querySelector("#rewardDevice").replaceChildren(new Option("电视列表加载失败", ""));
+    document.querySelector("#settingsDevice").replaceChildren(new Option("电视列表加载失败", ""));
+    document.querySelector("#settingsDevice").disabled = true;
+    document.querySelector("#settingsFields").disabled = true;
+    settingsDeviceId = "";
+    settingsLoadRequest++;
     handleError(error, document.querySelector("#rewardGrantStatus"));
+    handleError(error, document.querySelector("#settingsDeviceStatus"));
   }
   renderRewardBalance();
+}
+
+async function loadDeviceSettings() {
+  const select = document.querySelector("#settingsDevice");
+  const fields = document.querySelector("#settingsFields");
+  const status = document.querySelector("#settingsDeviceStatus");
+  const deviceId = select.value;
+  const request = ++settingsLoadRequest;
+  settingsDeviceId = "";
+  fields.disabled = true;
+  document.querySelector("#weeklyRows").replaceChildren();
+  for (const id of ["questionInterval", "wrongLock", "syncInterval", "dailyRewardLimit"]) {
+    document.getElementById(id).value = "";
+  }
+  status.classList.remove("error");
+  status.textContent = deviceId ? "正在载入所选电视的规则…" : "请先在“设备与重置”绑定电视，再设置规则。";
+  if (!deviceId) return;
+  try {
+    const { settings } = await api(`/api/v1/admin/settings?deviceId=${encodeURIComponent(deviceId)}`);
+    if (request !== settingsLoadRequest || select.value !== deviceId) return;
+    renderWeeklySettings(settings);
+    document.querySelector("#questionInterval").value = settings.questionIntervalMinutes;
+    document.querySelector("#wrongLock").value = settings.wrongLockMinutes;
+    document.querySelector("#syncInterval").value = settings.syncIntervalMinutes;
+    document.querySelector("#dailyRewardLimit").value = settings.dailyRewardLimitMinutes;
+    settingsDeviceId = deviceId;
+    fields.disabled = false;
+    status.textContent = `以下两项规则仅适用于 ${select.selectedOptions[0].textContent}。`;
+  } catch (error) {
+    if (request !== settingsLoadRequest || select.value !== deviceId) return;
+    handleError(error, status);
+  }
 }
 
 async function loadState() {
@@ -378,11 +420,6 @@ async function loadState() {
   const currentAccount = document.querySelector("#currentAccount");
   currentAccount.textContent = `账号：${state.username}`;
   currentAccount.title = currentAccount.textContent;
-  renderWeeklySettings(state.settings);
-  document.querySelector("#questionInterval").value = state.settings.questionIntervalMinutes;
-  document.querySelector("#wrongLock").value = state.settings.wrongLockMinutes;
-  document.querySelector("#syncInterval").value = state.settings.syncIntervalMinutes;
-  document.querySelector("#dailyRewardLimit").value = state.settings.dailyRewardLimitMinutes;
   if (page === "devices" && !isLoginPage) {
     const { devices: allDevices } = await api("/api/v1/admin/devices");
     const devices = allDevices.filter(device => device.bound);
@@ -865,6 +902,11 @@ async function changePassword(event) {
 
 async function saveSettings(event) {
   event.preventDefault();
+  const select = document.querySelector("#settingsDevice");
+  const fields = document.querySelector("#settingsFields");
+  const deviceId = select.value;
+  if (fields.disabled || !deviceId || settingsDeviceId !== deviceId) return;
+  const name = select.selectedOptions[0].textContent;
   const button = document.querySelector("#saveSettings");
   const weeklyDailyLimitMinutes = Object.fromEntries(weekdays.map(([day]) => [
     day,
@@ -900,13 +942,17 @@ async function saveSettings(event) {
     dailyRewardLimitMinutes: document.querySelector("#dailyRewardLimit").valueAsNumber,
   };
   button.disabled = true;
+  fields.disabled = true;
+  select.disabled = true;
   try {
-    await api("/api/v1/admin/settings", { method: "POST", body: JSON.stringify(settings) });
-    setNotice("规则已保存，电视将在下次同步时应用");
+    await api("/api/v1/admin/settings", { method: "POST", body: JSON.stringify({ deviceId, settings }) });
+    setNotice(`${name} 的规则已保存，将在下次同步时应用`);
   } catch (error) {
     handleError(error);
   } finally {
     button.disabled = false;
+    select.disabled = false;
+    fields.disabled = settingsDeviceId !== select.value;
   }
 }
 
@@ -1147,7 +1193,7 @@ async function initialize() {
     if (window.matchMedia("(max-width: 1000px)").matches) currentLink.scrollIntoView({ block: "nearest", inline: "nearest" });
     const titles = { settings: "使用规则", questions: "题库管理", poems: "已出题古诗词", records: "使用记录", devices: "设备与重置" };
     document.querySelector("#currentSection").textContent = `${["questions", "poems"].includes(page) ? "内容管理" : page === "devices" ? "设备维护" : "使用管理"} / ${titles[page]}`;
-    if (page === "settings") await loadRewardDevices();
+    if (page === "settings") await loadSettingsDevices();
     if (page === "records") {
       const dateInput = document.querySelector("#recordsDate");
       if (!dateInput.value) {
@@ -1199,6 +1245,7 @@ document.querySelector("#changePasswordDialog").addEventListener("close", () => 
   document.querySelector("#changePasswordButton").focus();
 });
 document.querySelector("#settingsForm").addEventListener("submit", saveSettings);
+document.querySelector("#settingsDevice").addEventListener("change", loadDeviceSettings);
 document.querySelector("#recordsDate").addEventListener("change", () => loadRecords().catch(handleError));
 
 document.querySelector("#todayRecordsDate").addEventListener("click", () => {

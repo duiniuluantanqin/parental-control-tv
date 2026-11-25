@@ -83,6 +83,12 @@
         <p id="rewardGrantStatus" class="reward-grant-status" role="status"></p>
       </form>
       <form id="settingsForm" class="settings-form">
+        <div class="settings-panel settings-device-field">
+          <label for="settingsDevice">规则适用电视</label>
+          <select id="settingsDevice" required disabled><option value="">正在载入设备…</option></select>
+          <p id="settingsDeviceStatus" class="muted" role="status">请先选择电视，再设置以下两项规则。</p>
+        </div>
+        <fieldset id="settingsFields" class="settings-fields" disabled>
         <section class="settings-panel" aria-labelledby="challengeSettingsTitle">
           <div class="settings-panel-heading">
             <h2 id="challengeSettingsTitle">答题、同步与奖励上限</h2>
@@ -107,7 +113,8 @@
             </table>
           </div>
         </section>
-        <div class="settings-footer save-bar"><p>电视下次同步后应用规则。</p><button id="saveSettings" class="button primary" type="submit">保存规则</button></div>
+        <div class="settings-footer save-bar"><p>仅所选电视在下次同步后应用规则。</p><button id="saveSettings" class="button primary" type="submit">保存规则</button></div>
+        </fieldset>
       </form>
     </section>
 

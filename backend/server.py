@@ -330,6 +330,10 @@ def default_state() -> dict[str, object]:
     }
 
 
+def settings_for_device(state: dict, device_id: str) -> dict:
+    return state["devices"].get(device_id, {}).get("settings", state["settings"])
+
+
 def reward_snapshot(device: dict, record_date: str = "") -> dict:
     granted = device.get("rewardGrantedMillis", 0)
     spent = device.get("rewardSpentMillis", 0)
@@ -495,7 +499,7 @@ class StateStore:
     def reward_challenge_allowed(state: dict, device_id: str, local_time: datetime | None) -> bool:
         if local_time is None:
             return False
-        limit = state["settings"]["weeklyDailyLimitMinutes"][str(local_time.isoweekday())]
+        limit = settings_for_device(state, device_id)["weeklyDailyLimitMinutes"][str(local_time.isoweekday())]
         record_date = local_time.date().isoformat()
         return limit > 0 and any(
             record["deviceId"] == device_id and record["date"] == record_date
@@ -745,7 +749,7 @@ class StateStore:
                 self.ensure_refill()
             self.ensure_poem_enrichment()
             return {
-                "settings": state["settings"],
+                "settings": settings_for_device(state, device_id),
                 "questions": state["questions"],
                 **({} if device_id else {"rewardQuestions": state["rewardQuestions"]}),
                 "passwordReset": state["passwordReset"],
@@ -1144,6 +1148,16 @@ class RequestHandler(BaseHTTPRequestHandler):
         elif path == "/api/v1/admin/state":
             if self.require_admin():
                 self.send_json(200, {**self.store.snapshot(), "username": AUTH.username(self.account)})
+        elif path == "/api/v1/admin/settings":
+            with AUTH.lock:
+                if not self.require_admin():
+                    return
+                device_id = parse_qs(urlsplit(self.path).query).get("deviceId", [""])[0]
+                if not self.require_bound_device(device_id):
+                    return
+                with self.store.lock:
+                    settings = settings_for_device(self.store.load(), device_id)
+                self.send_json(200, {"deviceId": device_id, "settings": settings})
         elif path == "/api/v1/admin/poems":
             if self.require_admin():
                 self.send_json(200, {"poems": self.store.poem_history()})
@@ -1262,7 +1276,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/v1/device/"):
             with AUTH.lock:
                 self.handle_post()
-        elif path in ("/api/v1/admin/devices/bind", "/api/v1/admin/devices/unbind", "/api/v1/admin/rewards/grant"):
+        elif path in ("/api/v1/admin/devices/bind", "/api/v1/admin/devices/unbind", "/api/v1/admin/rewards/grant", "/api/v1/admin/settings"):
             with AUTH.lock:
                 self.handle_post()
         else:
@@ -1748,13 +1762,20 @@ class RequestHandler(BaseHTTPRequestHandler):
                 command = self.store.queue_usage_reset(payload.get("deviceId"))
                 self.send_json(202, {"queued": True, **command})
                 return
+            if path == "/api/v1/admin/settings":
+                device_id = payload.get("deviceId")
+                if not self.require_bound_device(device_id):
+                    return
+                settings = validate_settings(payload.get("settings"))
+                with self.store.lock:
+                    state = self.store.load()
+                    state["devices"].setdefault(device_id, {})["settings"] = settings
+                    self.store.save(state)
+                self.send_json(200, {"deviceId": device_id, "settings": settings})
+                return
             with self.store.lock:
                 state = self.store.load()
-                if path == "/api/v1/admin/settings":
-                    state["settings"] = validate_settings(payload)
-                    self.store.save(state)
-                    self.send_json(200, {"settings": state["settings"]})
-                elif path == "/api/v1/admin/reward-questions":
+                if path == "/api/v1/admin/reward-questions":
                     question = validate_reward_question(payload, question_id=f"reward-{uuid.uuid4().hex}")
                     state["rewardQuestions"].append(question)
                     self.store.save(state)
@@ -1827,6 +1848,20 @@ class RequestHandler(BaseHTTPRequestHandler):
             self.store = STORE.for_account(device["account_id"])
             self.device_id = device["device_id"]
         return device
+
+    def require_bound_device(self, device_id: object) -> bool:
+        if not isinstance(device_id, str) or not 1 <= len(device_id) <= 80:
+            self.send_json(400, {"error": "请选择要配置规则的电视"})
+            return False
+        with closing(AUTH.connect()) as connection:
+            owned = connection.execute(
+                "SELECT 1 FROM device_bindings WHERE account_id = ? AND device_id = ?",
+                (self.account, device_id),
+            ).fetchone()
+        if not owned:
+            self.send_json(404, {"error": "请选择当前账号绑定的电视"})
+            return False
+        return True
 
     def require_admin(self) -> bool:
         account_id = AUTH.account_id(self.session_id())

@@ -1100,7 +1100,7 @@ class AdminApiTests(unittest.TestCase):
             "syncIntervalMinutes": 3,
             "dailyRewardLimitMinutes": 25,
         }
-        status, body = self.request("/api/v1/admin/settings", method="POST", body=settings)
+        status, body = self.request("/api/v1/admin/settings", method="POST", body={"deviceId": "tv-01", "settings": settings})
         self.assertEqual(status, 200)
         self.assertEqual(body["settings"], settings)
         _, device_state = self.request("/api/v1/device/state", authenticated=False)
@@ -1124,25 +1124,25 @@ class AdminApiTests(unittest.TestCase):
         status, _ = self.request(
             "/api/v1/admin/settings",
             method="POST",
-            body={"weeklyDailyLimitMinutes": {**server.DEFAULT_SETTINGS["weeklyDailyLimitMinutes"], "1": -1}},
+            body={"deviceId": "tv-01", "settings": {"weeklyDailyLimitMinutes": {**server.DEFAULT_SETTINGS["weeklyDailyLimitMinutes"], "1": -1}}},
         )
         self.assertEqual(status, 400)
         status, _ = self.request(
             "/api/v1/admin/settings",
             method="POST",
-            body={"usageTimeWindows": {**server.DEFAULT_SETTINGS["usageTimeWindows"], "1": [{"start": "08:00", "end": "08:00"}]}},
+            body={"deviceId": "tv-01", "settings": {"usageTimeWindows": {**server.DEFAULT_SETTINGS["usageTimeWindows"], "1": [{"start": "08:00", "end": "08:00"}]}}},
         )
         self.assertEqual(status, 400)
         status, _ = self.request(
             "/api/v1/admin/settings",
             method="POST",
-            body={"disabledTimeWindows": {**server.DEFAULT_SETTINGS["disabledTimeWindows"], "1": [{"start": "08:00", "end": "08:00"}]}},
+            body={"deviceId": "tv-01", "settings": {"disabledTimeWindows": {**server.DEFAULT_SETTINGS["disabledTimeWindows"], "1": [{"start": "08:00", "end": "08:00"}]}}},
         )
         self.assertEqual(status, 400)
         status, _ = self.request(
             "/api/v1/admin/settings",
             method="POST",
-            body={"syncIntervalMinutes": 0},
+            body={"deviceId": "tv-01", "settings": {"syncIntervalMinutes": 0}},
         )
         self.assertEqual(status, 400)
         status, _ = self.request(

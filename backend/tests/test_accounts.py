@@ -423,10 +423,14 @@ class AccountBindingTests(unittest.TestCase):
 
     def test_reward_limit_defaults_can_be_disabled_and_validates_integer_bounds(self):
         self.assertEqual(self.request(self.alice, "/api/v1/admin/state")[1]["settings"]["dailyRewardLimitMinutes"], 30)
-        for invalid in (-1, 1441, True, "30", 1.5):
-            self.assertEqual(self.request(self.alice, "/api/v1/admin/settings", {"dailyRewardLimitMinutes": invalid})[0], 400)
-        self.assertEqual(self.request(self.alice, "/api/v1/admin/settings", {"dailyRewardLimitMinutes": 0})[0], 200)
         self.bind(self.alice)
+        for invalid in (-1, 1441, True, "30", 1.5):
+            self.assertEqual(self.request(self.alice, "/api/v1/admin/settings", {
+                "deviceId": "test-tv", "settings": {"dailyRewardLimitMinutes": invalid},
+            })[0], 400)
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/settings", {
+            "deviceId": "test-tv", "settings": {"dailyRewardLimitMinutes": 0},
+        })[0], 200)
         _, state = self.request(self.device, "/api/v1/device/state", headers=self.headers)
         self.assertEqual(state["settings"]["dailyRewardLimitMinutes"], 0)
 
@@ -434,7 +438,7 @@ class AccountBindingTests(unittest.TestCase):
         self.bind(self.alice)
         _, state = self.request(self.alice, "/api/v1/admin/state")
         settings = {**state["settings"], "questionIntervalMinutes": 17}
-        self.assertEqual(self.request(self.alice, "/api/v1/admin/settings", settings)[0], 200)
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/settings", {"deviceId": "test-tv", "settings": settings})[0], 200)
         question = {**state["questions"][0], "id": None, "prompt": "Alice only question", "category": "古诗词",
                     "poem": {"title": "独立作品", "author": "甲", "content": "甲乙丙丁"}}
         _, added = self.request(self.alice, "/api/v1/admin/questions", question)
@@ -540,14 +544,81 @@ class AccountBindingTests(unittest.TestCase):
         self.assertEqual(auth.login("admin", "admin")[0], 401)
 
     def test_one_account_can_bind_multiple_televisions(self):
+        store = server.STORE.for_account(2)
+        legacy = store.load()
+        legacy["settings"]["questionIntervalMinutes"] = 23
+        store.save(legacy)
         self.bind(self.alice)
         first_headers = dict(self.headers)
         self.headers = {"X-Device-Id": "second-tv", "Authorization": "Bearer " + secrets.token_urlsafe(32)}
         self.bind(self.alice)
-        _, state = self.request(self.alice, "/api/v1/admin/state")
-        self.request(self.alice, "/api/v1/admin/settings", {**state["settings"], "wrongLockMinutes": 7})
         for headers in (first_headers, self.headers):
-            self.assertEqual(self.request(self.device, "/api/v1/device/state", headers=headers)[1]["settings"]["wrongLockMinutes"], 7)
+            device_id = headers["X-Device-Id"]
+            status, result = self.request(self.alice, f"/api/v1/admin/settings?deviceId={device_id}")
+            self.assertEqual((status, result), (200, {"deviceId": device_id, "settings": legacy["settings"]}))
+
+        first_settings = {**legacy["settings"], "wrongLockMinutes": 7, "syncIntervalMinutes": 2,
+                          "dailyRewardLimitMinutes": 15, "weeklyDailyLimitMinutes": {str(day): 20 for day in range(1, 8)},
+                          "usageTimeWindows": {str(day): [{"start": "08:00", "end": "20:00"}] for day in range(1, 8)}}
+        status, result = self.request(self.alice, "/api/v1/admin/settings", {"deviceId": "test-tv", "settings": first_settings})
+        self.assertEqual((status, result), (200, {"deviceId": "test-tv", "settings": first_settings}))
+        self.assertEqual(self.request(self.device, "/api/v1/device/state", headers=first_headers)[1]["settings"], first_settings)
+        self.assertEqual(self.request(self.device, "/api/v1/device/state", headers=self.headers)[1]["settings"], legacy["settings"])
+
+        second_settings = {**legacy["settings"], "questionIntervalMinutes": 19, "dailyRewardLimitMinutes": 0,
+                           "disabledTimeWindows": {str(day): [{"start": "19:00", "end": "09:00"}] for day in range(1, 8)}}
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/settings", {
+            "deviceId": "second-tv", "settings": second_settings,
+        })[0], 200)
+        server.STORE = server.StateStore(self.path)
+        for headers, expected in ((first_headers, first_settings), (self.headers, second_settings)):
+            device_id = headers["X-Device-Id"]
+            self.assertEqual(self.request(self.device, "/api/v1/device/state", headers=headers)[1]["settings"], expected)
+            self.assertEqual(self.request(self.alice, f"/api/v1/admin/settings?deviceId={device_id}")[1]["settings"], expected)
+        self.assertEqual(server.STORE.for_account(2).load()["settings"], legacy["settings"])
         self.assertEqual(len(self.request(self.alice, "/api/v1/admin/devices")[1]["devices"]), 2)
         health = self.request(self.device, "/api/v1/health")[1]
         self.assertEqual(health, {"ok": True, "version": server.BACKEND_VERSION})
+
+    def test_device_settings_require_a_current_owned_binding(self):
+        endpoint = "/api/v1/admin/settings"
+        for invalid in ({}, {"deviceId": ""}, {"deviceId": True}, {"deviceId": "x" * 81}):
+            self.assertEqual(self.request(self.alice, endpoint, {**invalid, "settings": server.DEFAULT_SETTINGS})[0], 400)
+        self.assertEqual(self.request(self.alice, endpoint)[0], 400)
+        self.assertEqual(self.request(self.alice, endpoint + "?deviceId=test-tv")[0], 404)
+        self.pairing()
+        self.assertEqual(self.request(self.alice, endpoint, {"deviceId": "test-tv", "settings": server.DEFAULT_SETTINGS})[0], 404)
+        self.bind(self.alice)
+        for client in (self.bob, self.admin, self.device):
+            expected = 401 if client is self.device else 404
+            self.assertEqual(self.request(client, endpoint + "?deviceId=test-tv")[0], expected)
+            self.assertEqual(self.request(client, endpoint, {"deviceId": "test-tv", "settings": server.DEFAULT_SETTINGS})[0], expected)
+        self.assertEqual(self.request(self.alice, endpoint, {"deviceId": "test-tv"})[0], 400)
+        settings = {**server.DEFAULT_SETTINGS, "wrongLockMinutes": 7}
+        self.assertEqual(self.request(self.alice, endpoint, {"deviceId": "test-tv", "settings": settings})[0], 200)
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/devices/unbind", {"deviceId": "test-tv"})[0], 200)
+        self.assertEqual(self.request(self.alice, endpoint + "?deviceId=test-tv")[0], 404)
+        self.assertEqual(self.request(self.alice, endpoint, {"deviceId": "test-tv", "settings": settings})[0], 404)
+        self.bind(self.bob)
+        self.assertEqual(self.request(self.bob, endpoint + "?deviceId=test-tv")[1]["settings"], server.DEFAULT_SETTINGS)
+
+    def test_advanced_question_eligibility_uses_the_devices_weekly_limit(self):
+        self.bind(self.alice)
+        first_headers = dict(self.headers)
+        self.headers = {"X-Device-Id": "second-tv", "Authorization": "Bearer " + secrets.token_urlsafe(32)}
+        self.bind(self.alice)
+        now = server.datetime.now(server.timezone.utc)
+        for headers, limit in ((first_headers, 20), (self.headers, 80)):
+            device_id = headers["X-Device-Id"]
+            settings = {**server.DEFAULT_SETTINGS, "weeklyDailyLimitMinutes": {str(day): limit for day in range(1, 8)}}
+            self.assertEqual(self.request(self.alice, "/api/v1/admin/settings", {"deviceId": device_id, "settings": settings})[0], 200)
+            self.assertEqual(self.request(self.device, "/api/v1/device/usage", {
+                "deviceId": device_id, "date": now.date().isoformat(), "utcOffsetMinutes": 0,
+                "usageMillis": 60 * server.MILLIS_PER_MINUTE,
+            }, headers)[0], 200)
+        with patch.object(server.time, "time", return_value=now.timestamp()):
+            for headers, eligible in ((first_headers, True), (self.headers, False)):
+                self.assertEqual(self.request(self.device, "/api/v1/device/reward-challenge", headers=headers)[1]["eligible"], eligible)
+                answer = {"questionId": server.DEFAULT_REWARD_QUESTION["id"], "numericAnswer": "0",
+                          "attemptId": "per-device-limit", "answeredAt": int(now.timestamp() * 1000)}
+                self.assertEqual(self.request(self.device, "/api/v1/device/reward-challenge", answer, headers)[0], 200 if eligible else 409)
