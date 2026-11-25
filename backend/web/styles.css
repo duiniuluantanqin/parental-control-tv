@@ -75,10 +75,6 @@ button:disabled { opacity: .5; cursor: default; }
 .muted { color: var(--muted); font-size: 13px; line-height: 1.8; }
 #settingsPage, .settings-form, .settings-fields { display: grid; gap: 12px; }
 .settings-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
-.settings-device-field { display: grid; gap: 6px; padding: 12px 16px; }
-.settings-device-field label { color: #45566b; font-size: 13px; font-weight: 500; }
-.settings-device-field select { width: min(100%, 400px); min-height: 36px; }
-.settings-device-field .error { color: var(--danger); }
 .settings-panel, .table-panel { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 2px 3px #19283d02; }
 .settings-panel { overflow: hidden; }
 .settings-panel-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; padding: 12px 16px 0; }

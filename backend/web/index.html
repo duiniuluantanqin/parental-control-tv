@@ -81,13 +81,9 @@
           <output id="rewardBalance" class="reward-balance" for="rewardDevice" aria-live="polite">剩余奖励时间：—</output>
         </div>
         <p id="rewardGrantStatus" class="reward-grant-status" role="status"></p>
+        <p id="settingsDeviceStatus" class="reward-grant-status" role="status">所选电视同时用于发放奖励和设置下方规则。</p>
       </form>
       <form id="settingsForm" class="settings-form">
-        <div class="settings-panel settings-device-field">
-          <label for="settingsDevice">规则适用电视</label>
-          <select id="settingsDevice" required disabled><option value="">正在载入设备…</option></select>
-          <p id="settingsDeviceStatus" class="muted" role="status">请先选择电视，再设置以下两项规则。</p>
-        </div>
         <fieldset id="settingsFields" class="settings-fields" disabled>
         <section class="settings-panel" aria-labelledby="challengeSettingsTitle">
           <div class="settings-panel-heading">

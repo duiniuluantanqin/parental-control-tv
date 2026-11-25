@@ -366,13 +366,12 @@ async function loadSettingsDevices() {
     const { devices } = await api("/api/v1/admin/devices");
     rewardDevices = devices.filter(device => device.bound);
     renderDevicePicker("rewardDevice", "grantReward", rewardDevices);
-    renderDevicePicker("settingsDevice", "saveSettings", rewardDevices);
     await loadDeviceSettings();
   } catch (error) {
     rewardDevices = [];
     document.querySelector("#rewardDevice").replaceChildren(new Option("电视列表加载失败", ""));
-    document.querySelector("#settingsDevice").replaceChildren(new Option("电视列表加载失败", ""));
-    document.querySelector("#settingsDevice").disabled = true;
+    document.querySelector("#rewardDevice").disabled = true;
+    document.querySelector("#grantReward").disabled = true;
     document.querySelector("#settingsFields").disabled = true;
     settingsDeviceId = "";
     settingsLoadRequest++;
@@ -383,7 +382,7 @@ async function loadSettingsDevices() {
 }
 
 async function loadDeviceSettings() {
-  const select = document.querySelector("#settingsDevice");
+  const select = document.querySelector("#rewardDevice");
   const fields = document.querySelector("#settingsFields");
   const status = document.querySelector("#settingsDeviceStatus");
   const deviceId = select.value;
@@ -406,7 +405,7 @@ async function loadDeviceSettings() {
     document.querySelector("#syncInterval").value = settings.syncIntervalMinutes;
     document.querySelector("#dailyRewardLimit").value = settings.dailyRewardLimitMinutes;
     settingsDeviceId = deviceId;
-    fields.disabled = false;
+    fields.disabled = select.disabled;
     status.textContent = `以下两项规则仅适用于 ${select.selectedOptions[0].textContent}。`;
   } catch (error) {
     if (request !== settingsLoadRequest || select.value !== deviceId) return;
@@ -902,10 +901,10 @@ async function changePassword(event) {
 
 async function saveSettings(event) {
   event.preventDefault();
-  const select = document.querySelector("#settingsDevice");
+  const select = document.querySelector("#rewardDevice");
   const fields = document.querySelector("#settingsFields");
   const deviceId = select.value;
-  if (fields.disabled || !deviceId || settingsDeviceId !== deviceId) return;
+  if (fields.disabled || select.disabled || !deviceId || settingsDeviceId !== deviceId) return;
   const name = select.selectedOptions[0].textContent;
   const button = document.querySelector("#saveSettings");
   const weeklyDailyLimitMinutes = Object.fromEntries(weekdays.map(([day]) => [
@@ -944,6 +943,7 @@ async function saveSettings(event) {
   button.disabled = true;
   fields.disabled = true;
   select.disabled = true;
+  document.querySelector("#grantReward").disabled = true;
   try {
     await api("/api/v1/admin/settings", { method: "POST", body: JSON.stringify({ deviceId, settings }) });
     setNotice(`${name} 的规则已保存，将在下次同步时应用`);
@@ -952,6 +952,7 @@ async function saveSettings(event) {
   } finally {
     button.disabled = false;
     select.disabled = false;
+    document.querySelector("#grantReward").disabled = !select.value;
     fields.disabled = settingsDeviceId !== select.value;
   }
 }
@@ -1245,7 +1246,6 @@ document.querySelector("#changePasswordDialog").addEventListener("close", () => 
   document.querySelector("#changePasswordButton").focus();
 });
 document.querySelector("#settingsForm").addEventListener("submit", saveSettings);
-document.querySelector("#settingsDevice").addEventListener("change", loadDeviceSettings);
 document.querySelector("#recordsDate").addEventListener("change", () => loadRecords().catch(handleError));
 
 document.querySelector("#todayRecordsDate").addEventListener("click", () => {
@@ -1270,20 +1270,24 @@ document.querySelector("#resetDevicePin").addEventListener("click", async () => 
     button.disabled = false;
   }
 });
-document.querySelector("#rewardDevice").addEventListener("change", renderRewardBalance);
+document.querySelector("#rewardDevice").addEventListener("change", () => {
+  renderRewardBalance();
+  loadDeviceSettings();
+});
 document.querySelector("#rewardGrantForm").addEventListener("submit", async event => {
   event.preventDefault();
   const select = document.querySelector("#rewardDevice");
   const input = document.querySelector("#rewardMinutes");
   const button = document.querySelector("#grantReward");
   const status = document.querySelector("#rewardGrantStatus");
-  if (!select.value || button.disabled) return;
+  if (!select.value || select.disabled || button.disabled) return;
   const deviceId = select.value;
   const name = select.selectedOptions[0].textContent;
   const minutes = input.valueAsNumber;
   if (!window.confirm(`为 ${name} 发放 ${minutes} 分钟奖励时长？`)) return;
   button.disabled = true;
   select.disabled = true;
+  document.querySelector("#settingsFields").disabled = true;
   input.disabled = true;
   status.textContent = "";
   status.classList.remove("error");
@@ -1301,6 +1305,7 @@ document.querySelector("#rewardGrantForm").addEventListener("submit", async even
     select.disabled = false;
     input.disabled = false;
     button.disabled = !select.value;
+    document.querySelector("#settingsFields").disabled = settingsDeviceId !== select.value;
   }
 });
 document.querySelector("#resetDeviceUsage").addEventListener("click", async () => {
