@@ -468,6 +468,7 @@ async function loadState() {
     const devices = allDevices.filter(device => device.bound);
     renderBoundDevices(devices);
     renderDevicePicker("usageResetDevice", "resetDeviceUsage", devices);
+    renderDevicePicker("challengeResetDevice", "resetDeviceChallenges", devices);
   }
   questions = state.questions;
   rewardQuestions = state.rewardQuestions || [];
@@ -1402,6 +1403,27 @@ document.querySelector("#resetDeviceUsage").addEventListener("click", async () =
     button.disabled = false;
   }
 });
+document.querySelector("#resetDeviceChallenges").addEventListener("click", async () => {
+  const select = document.querySelector("#challengeResetDevice");
+  const button = document.querySelector("#resetDeviceChallenges");
+  if (!select.value || select.disabled || button.disabled) return;
+  const deviceId = select.value;
+  const name = select.selectedOptions[0].textContent;
+  if (!window.confirm(`确认将 ${name} 今天的进阶题挑战次数恢复为 2 次？答题记录、奖励和使用时长保持不变。`)) return;
+  button.disabled = true;
+  select.disabled = true;
+  try {
+    const { date } = await api("/api/v1/admin/reward-challenges/reset", { method: "POST", body: JSON.stringify({ deviceId }) });
+    document.querySelector("#passwordResetStatus").textContent = `${name}：${date} 进阶题挑战已恢复为 2 次，电视将在下次同步时应用。`;
+    setNotice("今日进阶题挑战次数已重置");
+  } catch (error) {
+    handleError(error);
+  } finally {
+    select.disabled = !select.value;
+    button.disabled = !select.value;
+  }
+});
+
 document.querySelector("#logoutButton").addEventListener("click", async () => {
   try {
     await api("/api/v1/admin/logout", { method: "POST" });

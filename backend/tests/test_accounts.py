@@ -367,6 +367,98 @@ class AccountBindingTests(unittest.TestCase):
                              {"date": "2026-11-26", "remainingAttempts": 2})
             self.assertEqual(len(server.STORE.for_account(2).load()["answerRecords"]), 2)
 
+    def test_advanced_attempt_reset_restores_two_attempts_without_losing_history_or_rewards(self):
+        self.bind(self.alice)
+        first_headers = dict(self.headers)
+        self.headers = {"X-Device-Id": "second-tv", "Authorization": "Bearer " + secrets.token_urlsafe(32)}
+        self.bind(self.alice)
+        challenge = "/api/v1/device/reward-challenge"
+        reset_path = "/api/v1/admin/reward-challenges/reset"
+        now = server.datetime(2026, 11, 26, 8, 0, tzinfo=server.timezone.utc)
+        body = {"questionId": server.DEFAULT_REWARD_QUESTION["id"], "numericAnswer": "0",
+                "attemptId": "before-reset-wrong", "answeredAt": int(now.timestamp() * 1000)}
+        with patch.object(server.time, "time", return_value=now.timestamp()):
+            for headers in (first_headers, self.headers):
+                self.assertEqual(self.request(self.device, "/api/v1/device/usage", {
+                    "deviceId": headers["X-Device-Id"], "date": "2026-11-26", "utcOffsetMinutes": 480,
+                    "usageMillis": 60 * server.MILLIS_PER_MINUTE,
+                }, headers)[0], 200)
+            for index in range(2):
+                self.assertEqual(self.request(self.device, challenge, {**body, "attemptId": f"other-{index}"}, self.headers)[0], 200)
+            self.assertEqual(self.request(self.device, challenge, body, first_headers)[0], 200)
+            correct_body = {**body, "numericAnswer": "495", "attemptId": "before-reset-correct"}
+            self.assertTrue(self.request(self.device, challenge, correct_body, first_headers)[1]["correct"])
+            self.assertEqual(self.request(self.alice, "/api/v1/admin/answers/restore", {"attemptId": correct_body["attemptId"]})[0], 200)
+            before = server.STORE.for_account(2).load()
+            status, reset = self.request(self.alice, reset_path, {"deviceId": "test-tv"})
+            self.assertEqual((status, reset), (200, {"deviceId": "test-tv", "date": "2026-11-26", "remainingAttempts": 2, "resetVersion": 1}))
+            after = server.STORE.for_account(2).load()
+            after["devices"]["test-tv"].pop("rewardChallengeReset")
+            self.assertEqual(after, before)
+            server.STORE = server.StateStore(self.path)
+            expected = {"date": "2026-11-26", "remainingAttempts": 2, "resetVersion": 1}
+            self.assertEqual(self.request(self.device, "/api/v1/device/state", headers=first_headers)[1]["rewardChallenge"], expected)
+            self.assertEqual(self.request(self.device, challenge, headers=first_headers)[1]["rewardChallenge"], expected)
+            old_retry = self.request(self.device, challenge, correct_body, first_headers)[1]
+            self.assertTrue(old_retry["correct"])
+            self.assertEqual(old_retry["earnedMinutes"], 10)
+            self.assertEqual(old_retry["rewardTime"]["balanceMillis"], 10 * server.MILLIS_PER_MINUTE)
+            self.assertEqual(old_retry["rewardChallenge"], expected)
+            self.assertEqual(self.request(self.device, challenge, headers=self.headers)[1]["rewardChallenge"],
+                             {"date": "2026-11-26", "remainingAttempts": 0})
+            for index in range(2):
+                status, result = self.request(self.device, challenge, {**body, "attemptId": f"after-reset-{index}"}, first_headers)
+                self.assertEqual(status, 200)
+                self.assertEqual(result["rewardChallenge"], {**expected, "remainingAttempts": 1 - index})
+            self.assertEqual(self.request(self.device, challenge, {**body, "attemptId": "after-reset-third"}, first_headers)[0], 429)
+            state = server.STORE.for_account(2).load()
+            self.assertEqual(len(state["answerRecords"]), 6)
+            self.assertEqual([record.get("challengeResetVersion") for record in state["answerRecords"][-2:]], [1, 1])
+            self.assertEqual(state["dailyUsage"], before["dailyUsage"])
+            self.assertEqual(state["devices"]["test-tv"]["rewardGrantedMillis"], 10 * server.MILLIS_PER_MINUTE)
+            self.assertEqual(self.request(self.alice, reset_path, {"deviceId": "test-tv"})[1]["resetVersion"], 2)
+            self.assertEqual(self.request(self.device, challenge, headers=first_headers)[1]["rewardChallenge"],
+                             {**expected, "resetVersion": 2})
+            self.assertEqual(server.STORE.for_account(2).load()["answerRecords"], state["answerRecords"])
+
+    def test_advanced_attempt_reset_requires_owner_and_reported_timezone(self):
+        path = "/api/v1/admin/reward-challenges/reset"
+        self.assertEqual(self.request(self.device, path, {"deviceId": "test-tv"})[0], 401)
+        self.bind(self.alice)
+        self.assertEqual(self.request(self.bob, path, {"deviceId": "test-tv"})[0], 404)
+        for device_id in (None, "", 1, [], "x" * 81):
+            self.assertEqual(self.request(self.alice, path, {"deviceId": device_id})[0], 400)
+        self.assertEqual(self.request(self.alice, path, {"deviceId": "missing-tv"})[0], 404)
+        self.assertEqual(self.request(self.alice, path, {"deviceId": "test-tv"})[0], 400)
+        store = server.STORE.for_account(2)
+        for offset in (None, True, 841, -841, "480"):
+            state = store.load()
+            state["devices"].setdefault("test-tv", {})["utcOffsetMinutes"] = offset
+            store.save(state)
+            self.assertEqual(self.request(self.alice, path, {"deviceId": "test-tv"})[0], 400)
+        self.assertNotIn("rewardChallengeReset", store.load()["devices"]["test-tv"])
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/devices/unbind", {"deviceId": "test-tv"})[0], 200)
+        self.assertEqual(self.request(self.alice, path, {"deviceId": "test-tv"})[0], 404)
+
+    def test_advanced_attempt_reset_uses_server_date_in_device_timezone(self):
+        self.bind(self.alice)
+        path = "/api/v1/admin/reward-challenges/reset"
+        now = server.datetime(2026, 11, 26, 16, 1, tzinfo=server.timezone.utc)
+        store = server.STORE.for_account(2)
+        state = store.load()
+        state["devices"].setdefault("test-tv", {})["utcOffsetMinutes"] = 480
+        store.save(state)
+        with patch.object(server.time, "time", return_value=now.timestamp()):
+            self.assertEqual(self.request(self.alice, path, {"deviceId": "test-tv", "date": "1970-01-01"}),
+                             (200, {"deviceId": "test-tv", "date": "2026-11-27", "remainingAttempts": 2, "resetVersion": 1}))
+        with patch.object(server.time, "time", return_value=now.timestamp() + 86_400):
+            self.assertEqual(self.request(self.device, "/api/v1/device/state", headers=self.headers)[1]["rewardChallenge"],
+                             {"date": "2026-11-28", "remainingAttempts": 2})
+            self.assertEqual(self.request(self.alice, "/api/v1/admin/login", {"username": "alice", "password": "long-password-123"})[0], 200)
+            self.assertEqual(self.request(self.alice, path, {"deviceId": "test-tv"})[1],
+                             {"deviceId": "test-tv", "date": "2026-11-28", "remainingAttempts": 2, "resetVersion": 2})
+        self.assertEqual(server.STORE.for_account(3).load()["devices"], {})
+
     def test_answered_advanced_history_is_unique_and_survives_removal(self):
         path = "/api/v1/admin/poems"
         self.assertEqual(self.request(self.device, path)[0], 401)

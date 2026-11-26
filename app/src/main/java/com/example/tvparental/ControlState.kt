@@ -50,6 +50,7 @@ object ControlState {
     private const val DAILY_REWARD_LIMIT_KEY = "daily_reward_limit_minutes"
     private const val REWARD_CHALLENGE_DAY_KEY = "reward_challenge_day"
     private const val REWARD_CHALLENGES_REMAINING_KEY = "reward_challenges_remaining"
+    private const val REWARD_CHALLENGE_RESET_VERSION_KEY = "reward_challenge_reset_version"
     private const val SYNC_INTERVAL_KEY = "sync_interval_minutes"
     private const val ALWAYS_SHOW_REMAINING_TIME_KEY = "always_show_remaining_time"
     private const val SHOW_QUESTION_ON_STARTUP_KEY = "show_question_on_startup"
@@ -322,13 +323,19 @@ object ControlState {
     @Synchronized
     fun applyRemoteRewardChallenge(context: Context, challenge: JSONObject) {
         applyRemoteRewardChallenge(prefs(context), challenge.getString("date"), challenge.getInt("remainingAttempts"),
-            DailyUsageLedger.localDay(System.currentTimeMillis()))
+            DailyUsageLedger.localDay(System.currentTimeMillis()), challenge.optLong("resetVersion", 0L))
     }
 
-    internal fun applyRemoteRewardChallenge(preferences: SharedPreferences, date: String, remaining: Int, today: String) {
+    internal fun applyRemoteRewardChallenge(preferences: SharedPreferences, date: String, remaining: Int, today: String,
+                                          resetVersion: Long = 0L) {
         if (date != today) return
-        val updated = minOf(rewardChallengesRemaining(preferences, today), remaining.coerceIn(0, 2))
+        val previousVersion = if (preferences.getString(REWARD_CHALLENGE_DAY_KEY, null) == today)
+            preferences.getLong(REWARD_CHALLENGE_RESET_VERSION_KEY, 0L) else 0L
+        if (resetVersion < previousVersion) return
+        val updated = if (resetVersion > previousVersion) remaining.coerceIn(0, 2)
+            else minOf(rewardChallengesRemaining(preferences, today), remaining.coerceIn(0, 2))
         check(preferences.edit().putString(REWARD_CHALLENGE_DAY_KEY, date)
+            .putLong(REWARD_CHALLENGE_RESET_VERSION_KEY, resetVersion)
             .putInt(REWARD_CHALLENGES_REMAINING_KEY, updated).commit()) { "Could not save today's advanced question limit." }
     }
 
@@ -567,7 +574,7 @@ object ControlState {
             REMOTE_QUESTIONS_KEY, WEEKLY_LIMITS_KEY, USAGE_WINDOWS_KEY, DISABLED_WINDOWS_KEY,
             QUESTION_INTERVAL_KEY, WRONG_LOCK_KEY, SYNC_INTERVAL_KEY, APPLIED_PASSWORD_RESET_ID_KEY,
             DAILY_REWARD_LIMIT_KEY, RewardTimeLedger.GRANTED, RewardTimeLedger.SPENT,
-            REWARD_CHALLENGE_DAY_KEY, REWARD_CHALLENGES_REMAINING_KEY,
+            REWARD_CHALLENGE_DAY_KEY, REWARD_CHALLENGES_REMAINING_KEY, REWARD_CHALLENGE_RESET_VERSION_KEY,
             RewardTimeLedger.USED_TODAY, RewardTimeLedger.ACTIVATED,
         )
         val editor = preferences.edit()

@@ -462,5 +462,28 @@ dialog::backdrop { background: #14253d66; backdrop-filter: blur(4px); }
 .binding-form input { width: 150px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; letter-spacing: 3px; }
 .bound-devices { display: grid; gap: 12px; margin-top: 18px; }
 .bound-device { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding-top: 12px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+#devicesPage .binding-panel { margin-bottom: 12px; padding: 14px 16px; }
+#devicesPage .binding-panel .muted { margin-top: 3px; font-size: 12px; line-height: 1.6; }
+#devicesPage .binding-form { gap: 8px; margin-top: 10px; }
+#devicesPage :is(input, select, .button) { min-height: 36px; }
+#devicesPage :is(input, select) { padding: 6px 10px; font-size: 12px; }
+#devicesPage .button { padding-inline: 12px; font-size: 12px; }
+#devicesPage .binding-form input { width: 140px; }
+#devicesPage .form-notice { margin-top: 8px; font-size: 12px; }
+#devicesPage .bound-devices { gap: 6px; margin-top: 10px; }
+#devicesPage .bound-device { gap: 6px 10px; padding-top: 6px; font-size: 12px; }
+#devicesPage .bound-device > span { flex: 1; min-width: 0; }
+#devicesPage .maintenance-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: 12px; }
+#devicesPage .card-heading { padding: 14px 16px 10px; }
+#devicesPage .card-kicker { margin-bottom: 4px; font-size: 10px; }
+#devicesPage .card-heading h2 { font-size: 16px; }
+#devicesPage .card-heading p { margin-top: 4px; line-height: 1.6; }
+#devicesPage .reset-device-field { gap: 4px; padding: 0 16px 12px; }
+#devicesPage .reset-device-field select { width: 100%; }
+#devicesPage .card-footer { flex-direction: row; align-items: center; gap: 8px; padding: 10px 16px; }
+#devicesPage .card-footer > span { min-width: 0; max-width: none; }
+#devicesPage .pin-reference { gap: 3px; margin: auto 16px 12px; padding: 8px 10px; }
+#devicesPage .pin-reference strong { font-size: 14px; }
+#devicesPage .maintenance-status { margin-top: 10px; line-height: 1.6; }
 
 .reward-question-badge { margin-inline-start: 0.35rem; background: #f5eaff; color: #6b328b; }

@@ -514,12 +514,30 @@ class StateStore:
         if local_time is None:
             return {"date": "", "remainingAttempts": 0}
         record_date = local_time.date().isoformat()
+        reset = state["devices"].get(device_id, {}).get("rewardChallengeReset", {})
+        reset_version = reset.get("version", 0) if reset.get("date") == record_date else 0
         attempts = sum(
             item.get("questionKind") == "reward" and item.get("deviceId") == device_id
             and item.get("challengeDate", item.get("date")) == record_date
+            and item.get("challengeResetVersion", 0) == reset_version
             for item in state["answerRecords"]
         )
-        return {"date": record_date, "remainingAttempts": max(0, 2 - attempts)}
+        return {"date": record_date, "remainingAttempts": max(0, 2 - attempts),
+                **({"resetVersion": reset_version} if reset_version else {})}
+
+    def reset_reward_challenges(self, device_id: str) -> dict:
+        with self.lock:
+            state = self.load()
+            device = state["devices"].get(device_id, {})
+            local_time = self.reward_challenge_day(device)
+            if local_time is None:
+                raise ValueError("尚未获取电视时区，请升级电视应用并同步后重试")
+            reset = {"date": local_time.date().isoformat(),
+                     "version": device.get("rewardChallengeReset", {}).get("version", 0) + 1}
+            device["rewardChallengeReset"] = reset
+            self.save(state)
+            return {"deviceId": device_id, "date": reset["date"], "remainingAttempts": 2,
+                    "resetVersion": reset["version"]}
 
     def next_reward_question(self, device_id: str) -> dict:
         with self.lock:
@@ -601,6 +619,7 @@ class StateStore:
                     "rewardMinutes": question["rewardMinutes"],
                     "earnedMinutes": minutes,
                     "question": question,
+                    **({"challengeResetVersion": challenge["resetVersion"]} if challenge.get("resetVersion") else {}),
                 }
                 state["answerRecords"].append(existing)
                 if correct:
@@ -1806,6 +1825,12 @@ class RequestHandler(BaseHTTPRequestHandler):
             if path == "/api/v1/admin/usage/reset":
                 command = self.store.queue_usage_reset(payload.get("deviceId"))
                 self.send_json(202, {"queued": True, **command})
+                return
+            if path == "/api/v1/admin/reward-challenges/reset":
+                device_id = payload.get("deviceId")
+                if not self.require_bound_device(device_id):
+                    return
+                self.send_json(200, self.store.reset_reward_challenges(device_id))
                 return
             if path == "/api/v1/admin/settings":
                 device_id = payload.get("deviceId")

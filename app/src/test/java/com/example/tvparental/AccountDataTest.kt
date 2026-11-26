@@ -20,6 +20,7 @@ class AccountDataTest {
             "daily_reward_limit_minutes" to 45,
             "reward_challenge_day" to "2026-11-19",
             "reward_challenges_remaining" to 0,
+            "reward_challenge_reset_version" to 3L,
             "temp_extension_millis" to 900_000L,
             DailyUsageLedger.INTERVALS to "100:200:100",
             "${DailyUsageLedger.INTERVALS}.2026-11-18" to "10:20:10",
