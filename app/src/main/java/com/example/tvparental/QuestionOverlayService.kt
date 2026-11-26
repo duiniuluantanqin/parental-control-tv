@@ -891,7 +891,7 @@ class QuestionOverlayService : Service() {
                 setPadding(dp(10), dp(4), dp(10), dp(4))
             }.also { root.addView(it, matchParams()) }
         } else null
-        fun button(copy: String, onClick: () -> Unit) = label(copy, 20f, lavender).apply {
+        fun button(copy: String, primary: Boolean = false, onClick: () -> Unit) = label(copy, 20f, lavender).apply {
             id = View.generateViewId()
             gravity = Gravity.CENTER_VERTICAL
             minHeight = dp(48)
@@ -900,9 +900,13 @@ class QuestionOverlayService : Service() {
             isClickable = true
             setTypeface(null, Typeface.NORMAL)
             fun paint(focused: Boolean) {
-                setTextColor(if (focused) Color.rgb(40, 22, 65) else lavender)
+                setTextColor(if (focused || primary) Color.rgb(40, 22, 65) else lavender)
                 background = GradientDrawable().apply {
-                    setColor(if (focused) gold else Color.rgb(66, 43, 94))
+                    setColor(when {
+                        focused -> gold
+                        primary -> Color.rgb(77, 203, 180)
+                        else -> Color.rgb(66, 43, 94)
+                    })
                     cornerRadius = dp(10).toFloat()
                 }
             }
@@ -914,9 +918,8 @@ class QuestionOverlayService : Service() {
         val back = button("Back to daily limit", onClick = ::returnToUsageLock)
         val actionButtons = if (onNumericAnswer != null) {
             listOf(
-                button("Clear") { numericAnswer = ""; refreshNumericAnswer() },
-                button("Submit") {
-                    if (numericAnswer.isNotEmpty() && numericAnswer != "-") onNumericAnswer(numericAnswer)
+                button("Submit", primary = true) {
+                    if (numericAnswer.any(Char::isDigit)) onNumericAnswer(numericAnswer)
                 },
             )
         } else actions.map { (copy, onClick) -> button(copy, onClick = onClick) }
@@ -925,19 +928,21 @@ class QuestionOverlayService : Service() {
             refreshNumericAnswer = {
                 answerDisplay?.text = numericAnswer.ifEmpty { "Enter an answer" }
             }
-            val keyLabels = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "±", "Del")
+            val keyLabels = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0", ".", "±", "Del")
             keyLabels.forEach { keyLabel ->
                 keyboardButtons += button(keyLabel) {
                     when (keyLabel) {
-                        "±" -> numericAnswer = if (numericAnswer.startsWith("-")) numericAnswer.drop(1) else "-$numericAnswer"
+                        "±" -> if (numericAnswer.startsWith("-")) numericAnswer = numericAnswer.drop(1)
+                            else if (numericAnswer.length < 120) numericAnswer = "-$numericAnswer"
                         "Del" -> numericAnswer = numericAnswer.dropLast(1)
-                        else -> if (numericAnswer.count(Char::isDigit) < 120) numericAnswer += keyLabel
+                        "." -> if ('.' !in numericAnswer && numericAnswer.length < 120) numericAnswer += "."
+                        else -> if (numericAnswer.length < 120) numericAnswer += keyLabel
                     }
                     refreshNumericAnswer()
                 }
             }
             back.text = "Back"
-            val controls = keyboardButtons + actionButtons.first() + back + actionButtons.last()
+            val controls = keyboardButtons + back + actionButtons
             val entryRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 isBaselineAligned = false

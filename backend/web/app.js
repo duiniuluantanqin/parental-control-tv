@@ -553,6 +553,14 @@ function renderChallengeRecords(records, deviceNames) {
   const container = document.querySelector("#challengeRecords");
   const challenges = records.challenges || [];
   const advancedAnswers = (records.answers || []).filter(answer => answer.questionKind === "reward");
+  const advancedGroups = new Map();
+  for (const answer of advancedAnswers) {
+    const key = JSON.stringify([answer.deviceId, answer.questionId || answer.attemptId, answer.prompt, answer.questionType]);
+    const attempts = advancedGroups.get(key) || [];
+    attempts.push(answer);
+    advancedGroups.set(key, attempts);
+  }
+  for (const attempts of advancedGroups.values()) attempts.sort((a, b) => a.answeredAt - b.answeredAt);
   const answersByChallenge = new Map();
   for (const answer of records.answers || []) {
     if (!answer.challengeId) continue;
@@ -576,15 +584,15 @@ function renderChallengeRecords(records, deviceNames) {
     unknown: "历史记录 / 类型未知",
   };
   container.replaceChildren();
-  document.querySelector("#recordsSummary").textContent = `${records.usage.length} 台设备 · ${challenges.length} 次五题答题 · ${advancedAnswers.length} 次进阶题作答`;
+  document.querySelector("#recordsSummary").textContent = `${records.usage.length} 台设备 · ${challenges.length} 次五题答题 · ${advancedGroups.size} 道进阶题（${advancedAnswers.length} 次作答）`;
 
   const entries = [
     ...challenges.map(challenge => ({ challenge, time: challenge.startedAt })),
-    ...advancedAnswers.map(answer => ({ answer, time: answer.answeredAt })),
+    ...[...advancedGroups.values()].map(attempts => ({ attempts, time: attempts[attempts.length - 1].answeredAt })),
   ].sort((a, b) => b.time - a.time);
   for (const entry of entries) {
-    if (entry.answer) {
-      container.append(renderAdvancedAnswerRecord(entry.answer, deviceNames));
+    if (entry.attempts) {
+      container.append(renderAdvancedAnswerRecord(entry.attempts, deviceNames));
       continue;
     }
     const challenge = entry.challenge;
@@ -594,6 +602,12 @@ function renderChallengeRecords(records, deviceNames) {
     summary.className = "challenge-summary";
     const main = document.createElement("span");
     main.className = "challenge-summary-main";
+    const title = document.createElement("span");
+    title.className = "challenge-title";
+    title.textContent = challenge.questions[0]?.prompt || "五题答题";
+    if (challenge.questions.length > 1) title.textContent += ` 等 ${challenge.questions.length} 题`;
+    title.title = challenge.questions.map(question => question.prompt).join("\n");
+    main.append(title);
     const device = document.createElement("span");
     device.className = "challenge-device";
     device.textContent = challenge.deviceName || deviceNames.get(challenge.deviceId) || challenge.deviceId;
@@ -601,8 +615,7 @@ function renderChallengeRecords(records, deviceNames) {
     const time = document.createElement("time");
     time.className = "challenge-time";
     time.dateTime = new Date(challenge.startedAt).toISOString();
-    time.textContent = new Date(challenge.startedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-    main.append(device, time);
+    time.textContent = new Date(challenge.startedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     const meta = document.createElement("span");
     meta.className = "challenge-summary-meta";
     const trigger = document.createElement("span");
@@ -616,7 +629,7 @@ function renderChallengeRecords(records, deviceNames) {
     score.className = "challenge-score";
     score.textContent = `已答 ${challenge.answeredCount}/5 · 答对 ${challenge.correctCount}/5`;
     meta.append(trigger, status, score);
-    summary.append(main, meta);
+    summary.append(main, device, time, meta);
     pane.append(summary);
 
     const questions = document.createElement("div");
@@ -681,54 +694,70 @@ function renderChallengeRecords(records, deviceNames) {
   }
 }
 
-function renderAdvancedAnswerRecord(attempt, deviceNames) {
+function renderAdvancedAnswerRecord(attempts, deviceNames) {
+  const latest = attempts[attempts.length - 1];
   const pane = document.createElement("details");
-  pane.className = "challenge-record";
+  pane.className = "challenge-record advanced-record";
   const summary = document.createElement("summary");
   summary.className = "challenge-summary";
   const main = document.createElement("span");
   main.className = "challenge-summary-main";
+  const title = document.createElement("span");
+  title.className = "challenge-title";
+  title.textContent = latest.prompt;
+  title.title = latest.prompt;
+  main.append(title);
   const device = document.createElement("span");
   device.className = "challenge-device";
-  device.textContent = attempt.deviceName || deviceNames.get(attempt.deviceId) || attempt.deviceId;
-  device.title = `${device.textContent} · ${attempt.deviceId}`;
+  device.textContent = latest.deviceName || deviceNames.get(latest.deviceId) || latest.deviceId;
+  device.title = `${device.textContent} · ${latest.deviceId}`;
   const time = document.createElement("time");
   time.className = "challenge-time";
-  time.dateTime = new Date(attempt.answeredAt).toISOString();
-  time.textContent = new Date(attempt.answeredAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  main.append(device, time);
+  time.dateTime = new Date(latest.answeredAt).toISOString();
+  time.textContent = new Date(latest.answeredAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   const meta = document.createElement("span");
   meta.className = "challenge-summary-meta";
   const type = document.createElement("span");
   type.className = "challenge-trigger";
-  type.textContent = `进阶题 · ${attempt.questionType === "numeric" ? "计算题" : "选择题"}`;
+  type.textContent = `进阶题 · ${latest.questionType === "numeric" ? "计算题" : "选择题"}`;
   const status = document.createElement("span");
-  status.className = `challenge-status status-${attempt.correct ? "correct" : "incorrect"}`;
-  status.textContent = attempt.correct ? "答对" : "答错";
-  meta.append(type, status);
-  if (attempt.earnedMinutes > 0) {
+  status.className = `challenge-status status-${latest.correct ? "correct" : "incorrect"}`;
+  status.textContent = latest.correct ? "答对" : "答错";
+  const count = document.createElement("span");
+  count.className = "challenge-score";
+  count.textContent = `${attempts.length} 次作答 · 答对 ${attempts.filter(attempt => attempt.correct).length} 次`;
+  meta.append(type, status, count);
+  const earnedMinutes = attempts.reduce((total, attempt) => total + (attempt.earnedMinutes || 0), 0);
+  if (earnedMinutes > 0) {
     const reward = document.createElement("span");
     reward.className = "challenge-score";
-    reward.textContent = `奖励 ${attempt.earnedMinutes} 分钟`;
+    reward.textContent = `奖励 ${earnedMinutes} 分钟`;
     meta.append(reward);
   }
-  summary.append(main, meta);
+  summary.append(main, device, time, meta);
   const questions = document.createElement("div");
-  questions.className = "challenge-questions";
-  const row = document.createElement("div");
-  row.className = "challenge-question";
-  const number = document.createElement("span");
-  number.className = "challenge-question-number";
-  number.textContent = "01";
-  const prompt = document.createElement("span");
-  prompt.className = "challenge-question-prompt";
-  prompt.textContent = attempt.prompt;
-  const answer = document.createElement("span");
-  answer.className = "challenge-question-answer";
-  answer.textContent = `作答：${attempt.selectedAnswer}`;
-  row.append(number, prompt, answer);
-  addAnswerRestoreAction(row, attempt);
-  questions.append(row);
+  questions.className = "challenge-questions advanced-attempts";
+  for (const [index, attempt] of attempts.entries()) {
+    const row = document.createElement("div");
+    row.className = "advanced-attempt";
+    const number = document.createElement("span");
+    number.className = "challenge-question-number";
+    number.textContent = String(index + 1).padStart(2, "0");
+    const answeredAt = document.createElement("time");
+    answeredAt.className = "challenge-time";
+    answeredAt.dateTime = new Date(attempt.answeredAt).toISOString();
+    answeredAt.textContent = new Date(attempt.answeredAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const answer = document.createElement("span");
+    answer.className = "challenge-question-answer";
+    answer.textContent = `作答：${attempt.selectedAnswer}`;
+    const result = document.createElement("span");
+    result.className = `challenge-question-result ${attempt.correct ? "correct" : "incorrect"}`;
+    result.textContent = attempt.correct ? "答对" : "答错";
+    if (attempt.earnedMinutes > 0) result.textContent += ` · 奖励 ${attempt.earnedMinutes} 分钟`;
+    row.append(number, answeredAt, answer, result);
+    addAnswerRestoreAction(row, attempt);
+    questions.append(row);
+  }
   pane.append(summary, questions);
   return pane;
 }
