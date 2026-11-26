@@ -40,6 +40,7 @@ import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONObject
 import java.util.UUID
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
@@ -1101,12 +1102,20 @@ class QuestionOverlayService : Service() {
             gravity = Gravity.CENTER
             setPadding(0, dp(6), 0, dp(14))
         }
-        val body = TextView(this).apply {
+        fun bodyView() = TextView(this).apply {
             text = poem.content
             textSize = 26f
             setTextColor(Color.WHITE)
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             setLineSpacing(dp(8).toFloat(), 1f)
+        }
+        val body = bodyView()
+        val secondBody = bodyView().apply { visibility = View.GONE }
+        val columnGap = dp(24)
+        val bodyRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(body, LinearLayout.LayoutParams(0, -1, 1f))
+            addView(secondBody, LinearLayout.LayoutParams(0, -1, 1f).apply { marginStart = columnGap })
         }
         val titlePaint = TextPaint(title.paint)
         val authorPaint = TextPaint(author.paint)
@@ -1122,16 +1131,17 @@ class QuestionOverlayService : Service() {
                 if (width > 0 && height > 0 && (width != lastWidth || height != lastHeight)) {
                     lastWidth = width
                     lastHeight = height
-                    fun textHeight(text: String, paint: TextPaint, spacing: Float = 0f): Int =
-                        StaticLayout.Builder.obtain(text, 0, text.length, paint, width)
+                    fun textLayout(text: CharSequence, paint: TextPaint, textWidth: Int = width, spacing: Float = 0f): StaticLayout =
+                        StaticLayout.Builder.obtain(text, 0, text.length, paint, textWidth)
                             .setIncludePad(true)
+                            .setUseLineSpacingFromFallbacks(body.isFallbackLineSpacing)
                             .setBreakStrategy(body.breakStrategy)
                             .setHyphenationFrequency(body.hyphenationFrequency)
                             .setLineSpacing(spacing, 1f)
-                            .build().height
-                    val normalHeight = textHeight(poem.title, titlePaint) +
-                        textHeight(poem.author, authorPaint) + author.paddingTop + author.paddingBottom +
-                        textHeight(poem.content, bodyPaint, dp(8).toFloat())
+                            .build()
+                    val normalHeight = textLayout(poem.title, titlePaint).height +
+                        textLayout(poem.author, authorPaint).height + author.paddingTop + author.paddingBottom +
+                        textLayout(poem.content, bodyPaint, spacing = dp(8).toFloat()).height
                     val needsCompact = normalHeight > height
                     if (needsCompact != compact) {
                         compact = needsCompact
@@ -1143,22 +1153,52 @@ class QuestionOverlayService : Service() {
                             setSpan(RelativeSizeSpan(0.5f), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                             setSpan(ForegroundColorSpan(Color.rgb(193, 203, 194)), start, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                         } else poem.title
-                        body.text = if (compact) poem.content.lineSequence().filter { it.isNotBlank() }.joinToString("\n")
-                        else poem.content
-                        if (compact) {
-                            body.setLineSpacing(0f, 1f)
-                            val scaledDensity = resources.displayMetrics.scaledDensity
-                            body.setAutoSizeTextTypeUniformWithConfiguration(
-                                scaledDensity.roundToInt().coerceAtLeast(1),
-                                (26f * scaledDensity).roundToInt(),
-                                1,
-                                TypedValue.COMPLEX_UNIT_PX,
-                            )
-                        } else {
-                            body.setAutoSizeTextTypeWithDefaults(TextView.AUTO_SIZE_TEXT_TYPE_NONE)
-                            body.textSize = 26f
-                            body.setLineSpacing(dp(8).toFloat(), 1f)
+                    }
+                    if (compact) {
+                        val text = poem.content.lineSequence().filter { it.isNotBlank() }.joinToString("\n")
+                        val availableHeight = (height - textLayout(title.text, TextPaint(title.paint)).height).coerceAtLeast(1)
+                        val useColumns = textLayout(text, bodyPaint).height > availableHeight && width > columnGap
+                        val columnWidth = if (useColumns) (width - columnGap) / 2 else width
+                        val measurePaint = TextPaint(bodyPaint)
+                        fun splitColumns(): Pair<String, String> {
+                            if (!useColumns) return text to ""
+                            val layout = textLayout(text, measurePaint, columnWidth)
+                            if (layout.lineCount < 2) return text to ""
+                            val middleLine = (layout.lineCount + 1) / 2
+                            val middle = layout.getLineStart(middleLine)
+                            val split = listOf(text.lastIndexOf('\n', middle - 1), text.indexOf('\n', middle))
+                                .filter { it > 0 && it < text.lastIndex }
+                                .minByOrNull { abs(layout.getLineForOffset(it) - middleLine) } ?: middle
+                            return text.substring(0, split) to text.substring(split + if (text[split] == '\n') 1 else 0)
                         }
+                        var minimum = resources.displayMetrics.scaledDensity.roundToInt().coerceAtLeast(1)
+                        var maximum = bodyPaint.textSize.roundToInt()
+                        var fittedSize = minimum
+                        var fittedText = text to ""
+                        while (minimum <= maximum) {
+                            val size = (minimum + maximum) / 2
+                            measurePaint.textSize = size.toFloat()
+                            val columns = splitColumns()
+                            val fits = textLayout(columns.first, measurePaint, columnWidth).height <= availableHeight &&
+                                (columns.second.isEmpty() || textLayout(columns.second, measurePaint, columnWidth).height <= availableHeight)
+                            if (fits) {
+                                fittedSize = size
+                                fittedText = columns
+                                minimum = size + 1
+                            } else maximum = size - 1
+                        }
+                        body.text = fittedText.first
+                        secondBody.text = fittedText.second
+                        secondBody.visibility = if (fittedText.second.isEmpty()) View.GONE else View.VISIBLE
+                        listOf(body, secondBody).forEach {
+                            it.setTextSize(TypedValue.COMPLEX_UNIT_PX, fittedSize.toFloat())
+                            it.setLineSpacing(0f, 1f)
+                        }
+                    } else {
+                        body.text = poem.content
+                        body.textSize = 26f
+                        body.setLineSpacing(dp(8).toFloat(), 1f)
+                        secondBody.visibility = View.GONE
                     }
                 }
                 super.onMeasure(widthMeasureSpec, heightMeasureSpec)
@@ -1173,7 +1213,7 @@ class QuestionOverlayService : Service() {
             }
             addView(title, matchParams())
             addView(author, matchParams())
-            addView(body, weightedParams(1f))
+            addView(bodyRow, weightedParams(1f))
         }
         root.addView(content, weightedParams(1f))
     }
