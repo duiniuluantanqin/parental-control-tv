@@ -488,7 +488,7 @@ async function loadDeviceSettings() {
     document.querySelector("#dailyRewardLimit").value = settings.dailyRewardLimitMinutes;
     settingsDeviceId = deviceId;
     updateDeviceActions();
-    status.textContent = `以下两项规则仅适用于 ${select.selectedOptions[0].textContent}。`;
+    status.textContent = "";
   } catch (error) {
     if (request !== settingsLoadRequest || select.value !== deviceId) return;
     handleError(error, status);
