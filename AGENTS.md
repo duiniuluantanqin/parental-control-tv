@@ -18,6 +18,8 @@
 
 ## Development rules
 
+- Every completed change request that modifies project files must increment the root `VERSION`, including Android, backend, Web and documentation changes. Increment the patch version by default, once per completed request. Read-only investigations do not require a version change. Updating Android `versionCode` alone does not satisfy this rule.
+- Android `versionName`, the backend version and the APK filename must all use the root `VERSION`. Also increment Android `versionCode` for each new installable APK. Before delivery, verify the updated `VERSION` and the built APK metadata/filename agree.
 - Keep Android app interface text in English except the account-binding entry and dialog, which are Chinese at the user's request. Keep the backend admin interface and its user-facing messages in Chinese unless the user explicitly requests another language.
 - Use Kotlin and Android Studio for the Android app. Keep Android dependencies minimal and support API 28.
 - Keep the launcher and overlay usable with a TV remote: large labels, visible focus, D-pad navigation, and OK activation.
