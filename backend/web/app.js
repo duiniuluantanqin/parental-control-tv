@@ -25,8 +25,14 @@ const weekdays = [
 let questions = [];
 let rewardQuestions = [];
 let rewardDevices = [];
+const globalDevice = document.querySelector("#globalDevice");
+let deviceStorageKey = "";
+let deviceLoadRequest = 0;
+let deviceMutationPending = false;
 let settingsDeviceId = "";
 let settingsLoadRequest = 0;
+let recordsLoadRequest = 0;
+let poemHistoryLoadRequest = 0;
 let rewardQuestionForm = false;
 let editingQuestion = null;
 let questionTypeFilter = "";
@@ -380,53 +386,85 @@ function updatePoemHistoryHint() {
 }
 
 async function loadPoemHistory() {
-  const result = await api("/api/v1/admin/poems");
+  const deviceId = globalDevice.value;
+  const request = ++poemHistoryLoadRequest;
+  advancedQuestionHistory = [];
+  renderPoemHistory();
+  const result = await api(`/api/v1/admin/poems${deviceId ? `?${new URLSearchParams({ deviceId })}` : ""}`);
+  if (request !== poemHistoryLoadRequest || deviceId !== globalDevice.value) return;
   poemHistory = result.poems;
-  advancedQuestionHistory = result.advancedQuestions || [];
+  advancedQuestionHistory = deviceId ? result.advancedQuestions || [] : [];
   renderPoemHistory();
   updatePoemHistoryHint();
 }
 
-function renderDevicePicker(selectId, buttonId, devices) {
-  const select = document.getElementById(selectId);
-  const previous = select.value;
-  select.replaceChildren();
-  for (const device of devices) select.add(new Option(`${device.name} (${device.deviceId})`, device.deviceId));
-  if (devices.some(device => device.deviceId === previous)) select.value = previous;
-  if (!devices.length) select.add(new Option("暂无已绑定电视", ""));
-  select.disabled = !devices.length;
-  document.getElementById(buttonId).disabled = !devices.length;
+function updateDeviceActions() {
+  const unavailable = deviceMutationPending || !rewardDevices.some(device => device.deviceId === globalDevice.value);
+  globalDevice.disabled = deviceMutationPending || !rewardDevices.length;
+  for (const id of ["grantReward", "resetDeviceUsage", "resetDeviceChallenges", "resetDevicePin"]) {
+    document.getElementById(id).disabled = unavailable;
+  }
+  document.querySelector("#settingsFields").disabled = unavailable || settingsDeviceId !== globalDevice.value;
+  document.querySelector("#saveSettings").disabled = unavailable || settingsDeviceId !== globalDevice.value;
+  document.querySelector("#bindDeviceButton").disabled = deviceMutationPending;
+  for (const button of document.querySelectorAll("#boundDevices button")) button.disabled = deviceMutationPending || !rewardDevices.length;
+}
+
+function setDeviceMutationPending(pending) {
+  deviceMutationPending = pending;
+  updateDeviceActions();
+}
+
+function rememberDevice() {
+  if (!deviceStorageKey) return;
+  if (globalDevice.value) localStorage.setItem(deviceStorageKey, globalDevice.value);
+  else localStorage.removeItem(deviceStorageKey);
 }
 
 function renderRewardBalance() {
-  const device = rewardDevices.find(device => device.deviceId === document.querySelector("#rewardDevice").value);
+  const device = rewardDevices.find(device => device.deviceId === globalDevice.value);
   document.querySelector("#rewardBalance").textContent = device
     ? `剩余奖励时间：${formatMinutes(device.rewardBalanceMillis)}`
     : "剩余奖励时间：—";
 }
 
-async function loadSettingsDevices() {
+async function loadGlobalDevices() {
+  const request = ++deviceLoadRequest;
   try {
     const { devices } = await api("/api/v1/admin/devices");
+    if (request !== deviceLoadRequest) return;
+    const previous = globalDevice.value || localStorage.getItem(deviceStorageKey);
     rewardDevices = devices.filter(device => device.bound);
-    renderDevicePicker("rewardDevice", "grantReward", rewardDevices);
-    await loadDeviceSettings();
+    globalDevice.replaceChildren();
+    for (const device of rewardDevices) globalDevice.add(new Option(`${device.name} (${device.deviceId})`, device.deviceId));
+    if (rewardDevices.some(device => device.deviceId === previous)) globalDevice.value = previous;
+    if (!rewardDevices.length) globalDevice.add(new Option("暂无已绑定电视", ""));
+    rememberDevice();
+    if (page === "devices") renderBoundDevices(rewardDevices);
   } catch (error) {
+    if (request !== deviceLoadRequest) return;
     rewardDevices = [];
-    document.querySelector("#rewardDevice").replaceChildren(new Option("电视列表加载失败", ""));
-    document.querySelector("#rewardDevice").disabled = true;
-    document.querySelector("#grantReward").disabled = true;
-    document.querySelector("#settingsFields").disabled = true;
+    globalDevice.replaceChildren(new Option("设备列表加载失败", ""));
+    if (page === "devices") renderBoundDevices([]);
     settingsDeviceId = "";
     settingsLoadRequest++;
-    handleError(error, document.querySelector("#rewardGrantStatus"));
-    handleError(error, document.querySelector("#settingsDeviceStatus"));
+    handleError(error);
   }
+  updateDeviceActions();
   renderRewardBalance();
 }
 
+async function refreshSelectedDevice() {
+  renderRewardBalance();
+  if (page === "settings") await loadDeviceSettings();
+  else if (page === "records") {
+    if (!document.querySelector("#recordsDate").value) document.querySelector("#recordsDate").value = localDate();
+    await loadRecords();
+  } else if (page === "poems") await loadPoemHistory();
+}
+
 async function loadDeviceSettings() {
-  const select = document.querySelector("#rewardDevice");
+  const select = globalDevice;
   const fields = document.querySelector("#settingsFields");
   const status = document.querySelector("#settingsDeviceStatus");
   const deviceId = select.value;
@@ -449,7 +487,7 @@ async function loadDeviceSettings() {
     document.querySelector("#syncInterval").value = settings.syncIntervalMinutes;
     document.querySelector("#dailyRewardLimit").value = settings.dailyRewardLimitMinutes;
     settingsDeviceId = deviceId;
-    fields.disabled = select.disabled;
+    updateDeviceActions();
     status.textContent = `以下两项规则仅适用于 ${select.selectedOptions[0].textContent}。`;
   } catch (error) {
     if (request !== settingsLoadRequest || select.value !== deviceId) return;
@@ -463,18 +501,17 @@ async function loadState() {
   const currentAccount = document.querySelector("#currentAccount");
   currentAccount.textContent = `账号：${state.username}`;
   currentAccount.title = currentAccount.textContent;
-  if (page === "devices" && !isLoginPage) {
-    const { devices: allDevices } = await api("/api/v1/admin/devices");
-    const devices = allDevices.filter(device => device.bound);
-    renderBoundDevices(devices);
-    renderDevicePicker("usageResetDevice", "resetDeviceUsage", devices);
-    renderDevicePicker("challengeResetDevice", "resetDeviceChallenges", devices);
+  if (!isLoginPage) {
+    const storageKey = `tvParentalDevice.${state.username}`;
+    if (deviceStorageKey !== storageKey) globalDevice.replaceChildren();
+    deviceStorageKey = storageKey;
+    await loadGlobalDevices();
   }
   questions = state.questions;
   rewardQuestions = state.rewardQuestions || [];
   renderCategories();
   renderQuestions();
-  if (page === "poems" && !isLoginPage) await loadPoemHistory();
+  if (!isLoginPage && !deviceMutationPending) await refreshSelectedDevice();
   if (refillTimer && questions.length) setNotice(`题库已更新，共 ${questions.length} 道题目`);
   clearTimeout(refillTimer);
   refillTimer = undefined;
@@ -825,12 +862,19 @@ function showUsageDetails(record, deviceName) {
 async function loadRecords() {
   const date = document.querySelector("#recordsDate").value;
   if (!date) return;
-  const records = await api(`/api/v1/admin/records?${new URLSearchParams({ date })}`);
+  const deviceId = globalDevice.value;
+  const request = ++recordsLoadRequest;
+  renderRecords({ usage: [], answers: [], challenges: [] });
+  if (!deviceId) return;
+  const records = await api(`/api/v1/admin/records?${new URLSearchParams({ date, deviceId })}`);
+  if (request !== recordsLoadRequest || deviceId !== globalDevice.value || date !== document.querySelector("#recordsDate").value) return;
   renderRecords(records);
 }
 
 async function restoreAnsweredQuestion(answer, button) {
+  if (deviceMutationPending || button.disabled) return;
   button.disabled = true;
+  setDeviceMutationPending(true);
   try {
     const result = await api("/api/v1/admin/answers/restore", {
       method: "POST",
@@ -845,6 +889,8 @@ async function restoreAnsweredQuestion(answer, button) {
   } catch (error) {
     handleError(error);
     button.disabled = false;
+  } finally {
+    setDeviceMutationPending(false);
   }
 }
 
@@ -878,15 +924,17 @@ function renderBoundDevices(devices) {
     button.className = "button caution";
     button.textContent = "解绑";
     button.addEventListener("click", async () => {
+      if (deviceMutationPending) return;
       if (!window.confirm(`确认解绑 ${device.name}？历史记录保留，电视可重新绑定其他账号。`)) return;
-      button.disabled = true;
+      setDeviceMutationPending(true);
       try {
         await api("/api/v1/admin/devices/unbind", { method: "POST", body: JSON.stringify({ deviceId: device.deviceId }) });
         await loadState();
         setNotice("设备已解绑，电视下次联网检查后生效");
       } catch (error) {
         handleError(error);
-        button.disabled = false;
+      } finally {
+        setDeviceMutationPending(false);
       }
     });
     row.append(name, button);
@@ -896,9 +944,9 @@ function renderBoundDevices(devices) {
 
 async function bindDevice(event) {
   event.preventDefault();
-  const button = document.querySelector("#bindDeviceButton");
+  if (deviceMutationPending) return;
   const notice = document.querySelector("#bindingNotice");
-  button.disabled = true;
+  setDeviceMutationPending(true);
   notice.textContent = "";
   try {
     const code = document.querySelector("#bindingCode").value.trim();
@@ -912,7 +960,7 @@ async function bindDevice(event) {
   } catch (error) {
     handleError(error, notice);
   } finally {
-    button.disabled = false;
+    setDeviceMutationPending(false);
   }
 }
 
@@ -975,12 +1023,11 @@ async function changePassword(event) {
 
 async function saveSettings(event) {
   event.preventDefault();
-  const select = document.querySelector("#rewardDevice");
+  const select = globalDevice;
   const fields = document.querySelector("#settingsFields");
   const deviceId = select.value;
   if (fields.disabled || select.disabled || !deviceId || settingsDeviceId !== deviceId) return;
   const name = select.selectedOptions[0].textContent;
-  const button = document.querySelector("#saveSettings");
   const weeklyDailyLimitMinutes = Object.fromEntries(weekdays.map(([day]) => [
     day,
     Number(document.querySelector(`.weekly-limit-input[data-day="${day}"]`).value),
@@ -1014,20 +1061,14 @@ async function saveSettings(event) {
     syncIntervalMinutes: Number(document.querySelector("#syncInterval").value),
     dailyRewardLimitMinutes: document.querySelector("#dailyRewardLimit").valueAsNumber,
   };
-  button.disabled = true;
-  fields.disabled = true;
-  select.disabled = true;
-  document.querySelector("#grantReward").disabled = true;
+  setDeviceMutationPending(true);
   try {
     await api("/api/v1/admin/settings", { method: "POST", body: JSON.stringify({ deviceId, settings }) });
     setNotice(`${name} 的规则已保存，将在下次同步时应用`);
   } catch (error) {
     handleError(error);
   } finally {
-    button.disabled = false;
-    select.disabled = false;
-    document.querySelector("#grantReward").disabled = !select.value;
-    fields.disabled = settingsDeviceId !== select.value;
+    setDeviceMutationPending(false);
   }
 }
 
@@ -1263,6 +1304,7 @@ async function initialize() {
     }
     adminView.hidden = false;
     document.querySelector("#currentAccount").hidden = false;
+    document.querySelector("#globalDeviceField").hidden = false;
     document.querySelector("#changePasswordButton").hidden = false;
     document.querySelector("#logoutButton").hidden = false;
     document.querySelector(`#${page}Page`).hidden = false;
@@ -1271,14 +1313,6 @@ async function initialize() {
     if (window.matchMedia("(max-width: 1000px)").matches) currentLink.scrollIntoView({ block: "nearest", inline: "nearest" });
     const titles = { settings: "使用规则", questions: "题库管理", poems: "已答题目", records: "使用记录", devices: "设备与重置" };
     document.querySelector("#currentSection").textContent = `${["questions", "poems"].includes(page) ? "内容管理" : page === "devices" ? "设备维护" : "使用管理"} / ${titles[page]}`;
-    if (page === "settings") await loadSettingsDevices();
-    if (page === "records") {
-      const dateInput = document.querySelector("#recordsDate");
-      if (!dateInput.value) {
-        dateInput.value = localDate();
-      }
-      await loadRecords();
-    }
     document.title = `${titles[page]} · 健康使用`;
   } catch (error) {
     if (error.status === 401 && !isLoginPage) {
@@ -1334,26 +1368,36 @@ document.querySelector("#nextRecordsDate").addEventListener("click", () => shift
 document.querySelector("#refreshRecords").addEventListener("click", () => loadRecords().catch(handleError));
 document.querySelector("#closeUsageDetail").addEventListener("click", () => document.querySelector("#usageDetailDialog").close());
 document.querySelector("#resetDevicePin").addEventListener("click", async () => {
-  if (!window.confirm("确认将电视 PIN 重置为“上下左右上上”？电视下次同步后生效。")) return;
+  const select = globalDevice;
   const button = document.querySelector("#resetDevicePin");
-  button.disabled = true;
+  if (!select.value || select.disabled || button.disabled) return;
+  const deviceId = select.value;
+  const name = select.selectedOptions[0].textContent;
+  if (!window.confirm(`确认将 ${name} 的 PIN 重置为“上下左右上上”？电视下次同步后生效。`)) return;
+  setDeviceMutationPending(true);
   try {
-    await api("/api/v1/admin/password/reset", { method: "POST", body: JSON.stringify({}) });
-    document.querySelector("#passwordResetStatus").textContent = "重置指令已发送，电视将在下次同步时应用。";
+    await api("/api/v1/admin/password/reset", { method: "POST", body: JSON.stringify({ deviceId }) });
+    document.querySelector("#passwordResetStatus").textContent = `${name}：PIN 重置指令已发送，电视将在下次同步时应用。`;
     setNotice("电视 PIN 重置指令已排队");
   } catch (error) {
     handleError(error);
   } finally {
-    button.disabled = false;
+    setDeviceMutationPending(false);
   }
 });
-document.querySelector("#rewardDevice").addEventListener("change", () => {
-  renderRewardBalance();
-  loadDeviceSettings();
+globalDevice.addEventListener("change", () => {
+  if (deviceMutationPending) return;
+  rememberDevice();
+  document.querySelector("#usageDetailDialog").close();
+  if (page === "poems") questionDetailDialog.close();
+  document.querySelector("#rewardGrantStatus").textContent = "";
+  document.querySelector("#passwordResetStatus").textContent = "";
+  updateDeviceActions();
+  refreshSelectedDevice().catch(handleError);
 });
 document.querySelector("#rewardGrantForm").addEventListener("submit", async event => {
   event.preventDefault();
-  const select = document.querySelector("#rewardDevice");
+  const select = globalDevice;
   const input = document.querySelector("#rewardMinutes");
   const button = document.querySelector("#grantReward");
   const status = document.querySelector("#rewardGrantStatus");
@@ -1362,9 +1406,7 @@ document.querySelector("#rewardGrantForm").addEventListener("submit", async even
   const name = select.selectedOptions[0].textContent;
   const minutes = input.valueAsNumber;
   if (!window.confirm(`为 ${name} 发放 ${minutes} 分钟奖励时长？`)) return;
-  button.disabled = true;
-  select.disabled = true;
-  document.querySelector("#settingsFields").disabled = true;
+  setDeviceMutationPending(true);
   input.disabled = true;
   status.textContent = "";
   status.classList.remove("error");
@@ -1372,27 +1414,26 @@ document.querySelector("#rewardGrantForm").addEventListener("submit", async even
     const { rewardBalanceMillis } = await api("/api/v1/admin/rewards/grant", {
       method: "POST", body: JSON.stringify({ deviceId, minutes }),
     });
-    rewardDevices.find(device => device.deviceId === deviceId).rewardBalanceMillis = rewardBalanceMillis;
+    const device = rewardDevices.find(device => device.deviceId === deviceId);
+    if (device) device.rewardBalanceMillis = rewardBalanceMillis;
     renderRewardBalance();
     input.value = "";
     status.textContent = `${name} 已收到 ${minutes} 分钟奖励，余额 ${formatMinutes(rewardBalanceMillis)}。`;
   } catch (error) {
     handleError(error, status);
   } finally {
-    select.disabled = false;
     input.disabled = false;
-    button.disabled = !select.value;
-    document.querySelector("#settingsFields").disabled = settingsDeviceId !== select.value;
+    setDeviceMutationPending(false);
   }
 });
 document.querySelector("#resetDeviceUsage").addEventListener("click", async () => {
-  const select = document.querySelector("#usageResetDevice");
-  if (!select.value) return;
+  const select = globalDevice;
+  const button = document.querySelector("#resetDeviceUsage");
+  if (!select.value || select.disabled || button.disabled) return;
   const deviceId = select.value;
   const name = select.selectedOptions[0].textContent;
   if (!window.confirm(`确认清零 ${name} 今天的使用时长和临时加时？电视下次同步后恢复当天配置额度，允许时段和答题规则仍然生效。`)) return;
-  const button = document.querySelector("#resetDeviceUsage");
-  button.disabled = true;
+  setDeviceMutationPending(true);
   try {
     const { date } = await api("/api/v1/admin/usage/reset", { method: "POST", body: JSON.stringify({ deviceId }) });
     document.querySelector("#passwordResetStatus").textContent = `${name}：${date} 使用时长重置指令已发送，电视将在下次同步时应用。`;
@@ -1400,18 +1441,17 @@ document.querySelector("#resetDeviceUsage").addEventListener("click", async () =
   } catch (error) {
     handleError(error);
   } finally {
-    button.disabled = false;
+    setDeviceMutationPending(false);
   }
 });
 document.querySelector("#resetDeviceChallenges").addEventListener("click", async () => {
-  const select = document.querySelector("#challengeResetDevice");
+  const select = globalDevice;
   const button = document.querySelector("#resetDeviceChallenges");
   if (!select.value || select.disabled || button.disabled) return;
   const deviceId = select.value;
   const name = select.selectedOptions[0].textContent;
   if (!window.confirm(`确认将 ${name} 今天的进阶题挑战次数恢复为 2 次？答题记录、奖励和使用时长保持不变。`)) return;
-  button.disabled = true;
-  select.disabled = true;
+  setDeviceMutationPending(true);
   try {
     const { date } = await api("/api/v1/admin/reward-challenges/reset", { method: "POST", body: JSON.stringify({ deviceId }) });
     document.querySelector("#passwordResetStatus").textContent = `${name}：${date} 进阶题挑战已恢复为 2 次，电视将在下次同步时应用。`;
@@ -1419,8 +1459,7 @@ document.querySelector("#resetDeviceChallenges").addEventListener("click", async
   } catch (error) {
     handleError(error);
   } finally {
-    select.disabled = !select.value;
-    button.disabled = !select.value;
+    setDeviceMutationPending(false);
   }
 });
 

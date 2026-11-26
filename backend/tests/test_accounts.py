@@ -94,6 +94,68 @@ class AccountBindingTests(unittest.TestCase):
         self.assertEqual(self.request(self.alice, "/api/v1/admin/state")[1]["username"], "alice")
         self.assertEqual(self.request(self.device, "/api/v1/admin/state")[0], 401)
 
+    def test_pin_reset_is_scoped_to_the_selected_owned_device(self):
+        path = "/api/v1/admin/password/reset"
+        self.bind(self.alice)
+        first_headers = dict(self.headers)
+        self.headers = {"X-Device-Id": "second-tv", "Authorization": "Bearer " + secrets.token_urlsafe(32)}
+        self.bind(self.alice)
+        self.assertEqual(self.request(self.device, path, {"deviceId": "test-tv"})[0], 401)
+        self.assertEqual(self.request(self.bob, path, {"deviceId": "test-tv"})[0], 404)
+        for device_id in (None, "", 1, [], "x" * 81):
+            self.assertEqual(self.request(self.alice, path, {"deviceId": device_id})[0], 400)
+        self.assertEqual(self.request(self.alice, path, {"deviceId": "missing-tv"})[0], 404)
+        before = server.STORE.for_account(2).load()
+        status, command = self.request(self.alice, path, {"deviceId": "test-tv"})
+        self.assertEqual(status, 202)
+        self.assertTrue(command["queued"])
+        server.STORE = server.StateStore(self.path)
+        self.assertEqual(self.request(self.device, "/api/v1/device/state", headers=first_headers)[1]["passwordReset"], {"id": command["id"]})
+        self.assertIsNone(self.request(self.device, "/api/v1/device/state", headers=self.headers)[1]["passwordReset"])
+        self.assertIsNone(self.request(self.bob, "/api/v1/admin/state")[1]["passwordReset"])
+        after = server.STORE.for_account(2).load()
+        after["devices"]["test-tv"].pop("passwordReset")
+        self.assertEqual(after, before)
+        state = server.STORE.for_account(2).load()
+        state["passwordReset"] = {"id": "previous-account-reset"}
+        server.STORE.for_account(2).save(state)
+        status, replacement = self.request(self.alice, path, {"deviceId": "test-tv"})
+        self.assertEqual(status, 202)
+        self.assertNotEqual(replacement["id"], command["id"])
+        self.assertEqual(self.request(self.device, "/api/v1/device/state", headers=first_headers)[1]["passwordReset"], {"id": replacement["id"]})
+        self.assertEqual(self.request(self.device, "/api/v1/device/state", headers=self.headers)[1]["passwordReset"], {"id": "previous-account-reset"})
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/devices/unbind", {"deviceId": "test-tv"})[0], 200)
+        self.assertEqual(self.request(self.alice, path, {"deviceId": "test-tv"})[0], 404)
+
+    def test_advanced_history_device_filter_uses_the_selected_devices_snapshot(self):
+        self.bind(self.alice)
+        self.headers = {"X-Device-Id": "second-tv", "Authorization": "Bearer " + secrets.token_urlsafe(32)}
+        self.bind(self.alice)
+        store = server.STORE.for_account(2)
+        state = store.load()
+        question = state["rewardQuestions"][0]
+        updated = {**question, "prompt": "Latest question on the second TV", "numericAnswer": "052"}
+        state["answerRecords"] = [
+            {"questionKind": "reward", "deviceId": "test-tv", "questionId": question["id"], "question": question, "answeredAt": 1000},
+            {"questionKind": "reward", "deviceId": "second-tv", "questionId": question["id"], "question": updated, "answeredAt": 2000},
+        ]
+        store.save(state)
+        path = "/api/v1/admin/poems"
+        shared_poems = self.request(self.alice, path)[1]["poems"]
+        self.assertEqual(self.request(self.alice, path + "?deviceId=test-tv")[1], {
+            "poems": shared_poems,
+            "advancedQuestions": [{**question, "answeredDevices": [{"deviceId": "test-tv", "name": "Living room TV"}]}],
+        })
+        self.assertEqual(self.request(self.alice, path + "?deviceId=second-tv")[1]["advancedQuestions"], [
+            {**updated, "answeredDevices": [{"deviceId": "second-tv", "name": "Living room TV"}]},
+        ])
+        self.assertEqual(self.request(self.alice, path)[1]["advancedQuestions"], [{**updated, "answeredDevices": [
+            {"deviceId": "second-tv", "name": "Living room TV"}, {"deviceId": "test-tv", "name": "Living room TV"},
+        ]}])
+        self.assertEqual(self.request(self.bob, path + "?deviceId=test-tv")[0], 404)
+        self.assertEqual(self.request(self.alice, path + "?deviceId=missing-tv")[0], 404)
+        self.assertEqual(store.load()["answerRecords"], state["answerRecords"])
+
     def test_registration_validation_and_case_insensitive_uniqueness(self):
         for body in ({}, {"username": "new", "password": "", "confirmPassword": ""},
                      {"username": "new", "password": 1, "confirmPassword": 1},
@@ -851,7 +913,7 @@ class AccountBindingTests(unittest.TestCase):
                     "poem": {"title": "独立作品", "author": "甲", "content": "甲乙丙丁"}}
         _, added = self.request(self.alice, "/api/v1/admin/questions", question)
         self.assertEqual(self.request(self.bob, f"/api/v1/admin/questions/{added['id']}", method="DELETE")[0], 404)
-        self.request(self.alice, "/api/v1/admin/password/reset", {})
+        self.request(self.alice, "/api/v1/admin/password/reset", {"deviceId": "test-tv"})
         status, synced = self.request(self.device, "/api/v1/device/state?deviceId=test-tv", headers=self.headers)
         self.assertEqual(status, 200)
         self.assertEqual(synced["settings"], settings)

@@ -24,13 +24,15 @@ h1, h2, h3, p { margin: 0; }
 h1, h2, h3 { color: var(--ink); }
 h1 { font-size: 28px; line-height: 1.4; font-weight: 700; letter-spacing: -.7px; }
 h2 { font-size: 17px; line-height: 1.5; font-weight: 650; }
-.topbar { position: sticky; top: 0; z-index: 40; height: 76px; display: flex; align-items: center; gap: 32px; padding: 0 28px; background: #fff; border-bottom: 1px solid var(--line); }
+.topbar { position: sticky; top: 0; z-index: 40; height: 76px; display: flex; align-items: center; gap: 20px; padding: 0 28px; background: #fff; border-bottom: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: 11px; width: 176px; flex-shrink: 0; text-decoration: none; }
 .brand-mark { display: grid; place-items: center; width: 38px; height: 38px; color: #fff; background: var(--ink); border-radius: 11px; font-size: 13px; font-weight: 800; letter-spacing: -.5px; }
 .brand strong, .brand small { display: block; }
 .brand strong { color: var(--ink); font-size: 17px; line-height: 1.45; }
 .brand small { color: var(--muted); font-size: 11px; letter-spacing: 1px; }
 .workspace-caption { color: var(--muted); font-size: 13px; }
+.global-device-field { display: flex; flex: 0 1 280px; align-items: center; gap: 8px; min-width: 160px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.global-device-field select { width: 100%; min-width: 0; min-height: 36px; padding: 6px 10px; font-size: 12px; text-overflow: ellipsis; }
 .topbar-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 .version-label { margin-right: 10px; color: #7a8796; font-size: 11px; white-space: nowrap; }
 .account-label { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 13px; }
@@ -83,7 +85,7 @@ button:disabled { opacity: .5; cursor: default; }
 .weekly-heading { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .weekly-heading strong { color: #966039; }
 .card-heading p { margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.85; }
-.reward-grant-fields { display: grid; grid-template-columns: minmax(0, 400px) 110px auto auto; align-items: end; justify-content: start; gap: 10px 12px; padding: 10px 16px 12px; }
+.reward-grant-fields { display: grid; grid-template-columns: 110px auto auto; align-items: end; justify-content: start; gap: 10px 12px; padding: 10px 16px 12px; }
 .reward-grant-fields select, .reward-grant-fields input { min-width: 0; width: 100%; }
 .reward-balance { display: flex; align-items: center; min-height: 36px; color: var(--accent); font-size: 13px; }
 .reward-grant-status { margin: 0 16px 12px; color: var(--accent); font-size: 12px; }
@@ -242,9 +244,6 @@ tbody tr:hover { background: #fafcfd; }
 .card-heading { padding: 26px 26px 18px; }
 .card-kicker { display: block; margin-bottom: 10px; color: #9ba5b1; font-size: 11px; letter-spacing: 1px; }
 .card-heading h2 { font-size: 19px; }
-.reset-device-field { display: grid; gap: 8px; padding: 0 26px 28px; margin-top: auto; }
-.reset-device-field label { color: #7c8a9a; font-size: 12px; }
-.reset-device-field select { min-width: 0; max-width: 100%; }
 .card-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 26px; border-top: 1px solid var(--line); background: #fcfdfe; }
 .card-footer > span { color: #929eac; font-size: 11px; }
 .pin-reference { display: grid; gap: 7px; margin: auto 26px 28px; padding: 15px 18px; border: 1px solid #e9edf1; border-radius: 8px; background: #f8fafc; }
@@ -302,6 +301,9 @@ dialog::backdrop { background: #14253d66; backdrop-filter: blur(4px); }
 .ai-options { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; margin: 15px 0 0 28px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (max-width: 1200px) {
+  .workspace-caption, .version-label { display: none; }
+  .global-device-field { flex-basis: 240px; }
+  .account-label { max-width: 140px; }
   .page-content { padding-inline: 28px; }
   .maintenance-grid { gap: 18px; }
   .card-footer { align-items: flex-start; flex-direction: column; }
@@ -310,6 +312,7 @@ dialog::backdrop { background: #14253d66; backdrop-filter: blur(4px); }
 }
 @media (max-width: 1000px) {
   .topbar { padding: 0 22px; gap: 20px; }
+  .brand { width: auto; }
   .workspace-caption { display: none; }
   #adminView { margin-left: 0; }
   .page-nav { position: sticky; top: 76px; z-index: 30; display: flex; gap: 14px; width: 100%; padding: 10px 22px; border-right: 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
@@ -324,19 +327,25 @@ dialog::backdrop { background: #14253d66; backdrop-filter: blur(4px); }
 @media (max-width: 760px) {
   h1 { font-size: 24px; }
   .topbar { height: 68px; gap: 8px; padding: 0 16px; }
-  .brand { width: auto; gap: 8px; }
-  .brand-mark { width: 32px; height: 32px; border-radius: 9px; }
+  .topbar:has(.global-device-field:not([hidden])) { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 52px 36px; height: 112px; gap: 4px 8px; padding: 8px 16px 12px; }
+  .global-device-field { grid-column: 1 / -1; grid-row: 2; width: 100%; min-width: 0; }
+  .global-device-field select { flex: 1; }
+  .topbar-actions { grid-column: 2; grid-row: 1; }
+  .brand { width: auto; gap: 8px; white-space: nowrap; }
+  .brand-mark { width: 32px; height: 32px; flex-shrink: 0; border-radius: 9px; }
   .brand strong { font-size: 15px; }
   .brand small { font-size: 10px; }
-  .topbar-actions { gap: 0 6px; min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
+  .topbar-actions { gap: 0 6px; width: 154px; min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
   .account-label { flex-basis: 100%; max-width: 160px; font-size: 11px; line-height: 1.4; text-align: right; }
   .topbar-button { min-height: 34px; padding: 0 9px; font-size: 11px; }
   .version-label { display: none; }
   .page-nav { top: 68px; gap: 8px; padding: 9px 12px; }
+  body:has(.global-device-field:not([hidden])) .page-nav { top: 112px; }
   .page-nav a { gap: 7px; padding: 8px 10px; }
   .nav-group + .nav-group { padding-left: 8px; }
   .page-content { padding-inline: 16px; padding-bottom: 30px; }
   .notice { top: 138px; }
+  body:has(.global-device-field:not([hidden])) .notice { top: 182px; }
   .question-page-actions .button { flex: 1; }
   .subtle-link { font-size: 11px; }
   .page-callout { align-items: flex-start; flex-direction: column; gap: 8px; padding: 13px 15px; font-size: 11px; }
@@ -382,7 +391,6 @@ dialog::backdrop { background: #14253d66; backdrop-filter: blur(4px); }
   .save-bar .button { min-width: 110px; padding: 0 14px; }
   .maintenance-grid { grid-template-columns: 1fr; gap: 18px; }
   .card-heading { padding: 22px 22px 18px; }
-  .reset-device-field { padding: 0 22px 24px; }
   .pin-reference { margin: 0 22px 24px; }
   .card-footer { flex-direction: row; align-items: center; padding: 16px 22px; }
   .card-footer > span { max-width: 135px; }
@@ -445,7 +453,6 @@ dialog::backdrop { background: #14253d66; backdrop-filter: blur(4px); }
 }
 @media (max-width: 760px) {
   .reward-grant-fields { grid-template-columns: minmax(0, 1fr) auto; }
-  .reward-device-field { grid-column: 1 / -1; }
   .reward-balance { grid-column: 1 / -1; min-height: 0; }
 }
 
@@ -478,9 +485,7 @@ dialog::backdrop { background: #14253d66; backdrop-filter: blur(4px); }
 #devicesPage .card-kicker { margin-bottom: 4px; font-size: 10px; }
 #devicesPage .card-heading h2 { font-size: 16px; }
 #devicesPage .card-heading p { margin-top: 4px; line-height: 1.6; }
-#devicesPage .reset-device-field { gap: 4px; padding: 0 16px 12px; }
-#devicesPage .reset-device-field select { width: 100%; }
-#devicesPage .card-footer { flex-direction: row; align-items: center; gap: 8px; padding: 10px 16px; }
+#devicesPage .card-footer { flex-direction: row; align-items: center; gap: 8px; margin-top: auto; padding: 10px 16px; }
 #devicesPage .card-footer > span { min-width: 0; max-width: none; }
 #devicesPage .pin-reference { gap: 3px; margin: auto 16px 12px; padding: 8px 10px; }
 #devicesPage .pin-reference strong { font-size: 14px; }

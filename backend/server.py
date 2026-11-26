@@ -443,11 +443,11 @@ class StateStore:
                 "devices": state.get("devices", {}),
             }
 
-    def queue_password_reset(self) -> dict[str, str]:
+    def queue_password_reset(self, device_id: str) -> dict[str, str]:
         with self.lock:
             state = self.load()
             command = {"id": uuid.uuid4().hex}
-            state["passwordReset"] = command
+            state["devices"].setdefault(device_id, {})["passwordReset"] = command
             self.save(state)
             return command
 
@@ -734,19 +734,21 @@ class StateStore:
             known_titles = {title for title, author in rows if author}
             return [{"title": title, "author": author} for title, author in rows if author or title not in known_titles]
 
-    def advanced_question_history(self) -> list[dict]:
+    def advanced_question_history(self, device_id: str = "") -> list[dict]:
         with self.lock:
             state = self.load()
             questions = {}
             for record in sorted(state["answerRecords"], key=lambda item: item.get("answeredAt", 0), reverse=True):
                 if record.get("questionKind") != "reward" or not isinstance(record.get("question"), dict):
                     continue
+                if device_id and record.get("deviceId") != device_id:
+                    continue
                 question = questions.setdefault(record["questionId"], {**record["question"], "answeredDevices": []})
-                device_id = record.get("deviceId")
-                if device_id and not any(item["deviceId"] == device_id for item in question["answeredDevices"]):
+                answered_device_id = record.get("deviceId")
+                if answered_device_id and not any(item["deviceId"] == answered_device_id for item in question["answeredDevices"]):
                     question["answeredDevices"].append({
-                        "deviceId": device_id,
-                        "name": state["devices"].get(device_id, {}).get("name") or device_id,
+                        "deviceId": answered_device_id,
+                        "name": state["devices"].get(answered_device_id, {}).get("name") or answered_device_id,
                     })
             return list(questions.values())
 
@@ -812,7 +814,7 @@ class StateStore:
                 "settings": settings_for_device(state, device_id),
                 "questions": state["questions"],
                 **({} if device_id else {"rewardQuestions": state["rewardQuestions"]}),
-                "passwordReset": state["passwordReset"],
+                "passwordReset": state["devices"].get(device_id, {}).get("passwordReset", state["passwordReset"]),
                 "usageReset": state["devices"].get(device_id, {}).get("usageResets", {}).get(record_date),
                 **({"rewardTime": reward_snapshot(state["devices"].get(device_id, {}), record_date),
                     "rewardChallenge": self.reward_challenge_snapshot(state, device_id,
@@ -1221,8 +1223,13 @@ class RequestHandler(BaseHTTPRequestHandler):
                     settings = settings_for_device(self.store.load(), device_id)
                 self.send_json(200, {"deviceId": device_id, "settings": settings})
         elif path == "/api/v1/admin/poems":
-            if self.require_admin():
-                self.send_json(200, {"poems": self.store.poem_history(), "advancedQuestions": self.store.advanced_question_history()})
+            with AUTH.lock:
+                if not self.require_admin():
+                    return
+                device_id = parse_qs(urlsplit(self.path).query).get("deviceId", [""])[0]
+                if device_id and not self.require_bound_device(device_id):
+                    return
+                self.send_json(200, {"poems": self.store.poem_history(), "advancedQuestions": self.store.advanced_question_history(device_id)})
         elif path == "/api/v1/admin/records":
             if self.require_admin():
                 params = parse_qs(urlsplit(self.path).query)
@@ -1338,7 +1345,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/v1/device/"):
             with AUTH.lock:
                 self.handle_post()
-        elif path in ("/api/v1/admin/devices/bind", "/api/v1/admin/devices/unbind", "/api/v1/admin/rewards/grant", "/api/v1/admin/settings"):
+        elif path in ("/api/v1/admin/devices/bind", "/api/v1/admin/devices/unbind", "/api/v1/admin/rewards/grant", "/api/v1/admin/settings", "/api/v1/admin/password/reset"):
             with AUTH.lock:
                 self.handle_post()
         else:
@@ -1806,7 +1813,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.send_json(200, {"added": added, "skipped": len(candidates) - added})
                 return
             if path == "/api/v1/admin/password/reset":
-                command = self.store.queue_password_reset()
+                device_id = payload.get("deviceId")
+                if not self.require_bound_device(device_id):
+                    return
+                command = self.store.queue_password_reset(device_id)
                 self.send_json(202, {"queued": True, "id": command["id"]})
                 return
             if path == "/api/v1/admin/rewards/grant":
