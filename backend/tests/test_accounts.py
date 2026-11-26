@@ -247,15 +247,19 @@ class AccountBindingTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertFalse(wrong["correct"])
         self.assertEqual(wrong["earnedMinutes"], 0)
-        self.assertEqual(self.request(self.device, challenge, headers=self.headers)[1]["question"]["id"], second["id"])
-        status, retried = self.request(self.device, challenge, {
-            **second_answer, "selectedIndex": 0, "attemptId": "second-correct", "answeredAt": answered_at + 2000,
-        }, self.headers)
+        self.assertEqual(self.request(self.device, challenge, headers=self.headers)[1]["rewardChallenge"]["remainingAttempts"], 0)
+        next_day = (server.datetime.fromtimestamp(answered_at / 1000, server.timezone.utc) + server.timedelta(days=1)).date().isoformat()
+        with patch.object(server.time, "time", return_value=answered_at / 1000 + 86_400):
+            self.assertEqual(self.request(self.device, "/api/v1/device/usage", {**report, "date": next_day}, self.headers)[0], 200)
+            status, retried = self.request(self.device, challenge, {
+                **second_answer, "selectedIndex": 0, "attemptId": "second-correct", "answeredAt": answered_at + 2000,
+            }, self.headers)
+            self.assertEqual(self.request(self.device, challenge, headers=self.headers),
+                             (200, {"eligible": True, "question": None, "rewardChallenge": {"date": next_day, "remainingAttempts": 1}}))
         self.assertEqual(status, 200)
         self.assertTrue(retried["correct"])
         self.assertEqual(retried["earnedMinutes"], 45)
         self.assertEqual(retried["rewardTime"]["balanceMillis"], 55 * minute)
-        self.assertEqual(self.request(self.device, challenge, headers=self.headers), (200, {"eligible": True, "question": None}))
         self.assertEqual(self.request(self.alice, bank + "/" + first["id"], method="DELETE")[0], 404)
         server.STORE = server.StateStore(self.path)
         status, repeated = self.request(self.device, challenge, first_answer, self.headers)
@@ -282,9 +286,86 @@ class AccountBindingTests(unittest.TestCase):
         state = self.request(self.alice, "/api/v1/admin/state")[1]
         self.assertEqual(state["rewardQuestions"], [second])
         self.assertNotIn(second["id"], {item["id"] for item in state["questions"]})
-        self.assertEqual(self.request(self.device, challenge, headers=self.headers)[1]["question"]["id"], second["id"])
+        with patch.object(server.time, "time", return_value=answered_at / 1000 + 86_400):
+            self.assertEqual(self.request(self.device, challenge, headers=self.headers)[1]["question"]["id"], second["id"])
         repeated = self.request(self.alice, restore, {"attemptId": "second-correct"})
         self.assertEqual(repeated, (200, {"restored": False, "inQuestionBank": True}))
+
+    def test_advanced_daily_limit_counts_answers_not_retries_and_resets_at_local_midnight(self):
+        self.bind(self.alice)
+        challenge = "/api/v1/device/reward-challenge"
+        now = server.datetime(2026, 11, 26, 15, 59, tzinfo=server.timezone.utc)
+        local_day = "2026-11-26"
+        body = {"questionId": server.DEFAULT_REWARD_QUESTION["id"], "numericAnswer": "0",
+                "attemptId": "daily-first", "answeredAt": 0}
+        with patch.object(server.time, "time", return_value=now.timestamp()):
+            self.assertEqual(self.request(self.device, "/api/v1/device/usage", {
+                "deviceId": "test-tv", "date": local_day, "utcOffsetMinutes": 480,
+                "usageMillis": 60 * server.MILLIS_PER_MINUTE,
+            }, self.headers)[0], 200)
+            expected = {"date": local_day, "remainingAttempts": 2}
+            self.assertEqual(self.request(self.device, challenge, headers=self.headers)[1]["rewardChallenge"], expected)
+            self.assertEqual(self.request(self.device, "/api/v1/device/state?date=1970-01-01", headers=self.headers)[1]["rewardChallenge"], expected)
+            status, first = self.request(self.device, challenge, body, self.headers)
+            self.assertEqual(status, 200)
+            self.assertFalse(first["correct"])
+            self.assertEqual(first["rewardChallenge"], {"date": local_day, "remainingAttempts": 1})
+            self.assertEqual(self.request(self.device, challenge, body, self.headers), (200, first))
+            status, second = self.request(self.device, challenge, {
+                **body, "attemptId": "daily-second", "numericAnswer": "495",
+            }, self.headers)
+            self.assertEqual(status, 200)
+            self.assertTrue(second["correct"])
+            exhausted = {"date": local_day, "remainingAttempts": 0}
+            self.assertEqual(second["rewardChallenge"], exhausted)
+            self.assertEqual(self.request(self.device, challenge, {**body, "attemptId": "daily-third"}, self.headers)[0], 429)
+            offer = self.request(self.device, challenge, headers=self.headers)[1]
+            self.assertEqual(offer, {"eligible": False, "question": None,
+                                     "errorCode": "daily_challenge_limit_reached", "rewardChallenge": exhausted})
+            self.assertEqual(self.request(self.device, challenge, {**body, "attemptId": "daily-second", "numericAnswer": "495"}, self.headers), (200, second))
+            server.STORE.for_account(2).queue_usage_reset("test-tv")
+            server.STORE = server.StateStore(self.path)
+            self.assertEqual(self.request(self.device, "/api/v1/device/state", headers=self.headers)[1]["rewardChallenge"], exhausted)
+            records = server.STORE.for_account(2).load()["answerRecords"]
+            self.assertEqual(len(records), 2)
+            self.assertEqual({item["challengeDate"] for item in records}, {local_day})
+            self.assertEqual({item["date"] for item in records}, {"1970-01-01"})
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/answers/restore", {"attemptId": "daily-second"})[0], 200)
+        with patch.object(server.time, "time", return_value=now.timestamp() + 120):
+            expected = {"date": "2026-11-27", "remainingAttempts": 2}
+            self.assertEqual(self.request(self.device, "/api/v1/device/state", headers=self.headers)[1]["rewardChallenge"], expected)
+            self.assertEqual(self.request(self.device, challenge, body, self.headers)[1]["rewardChallenge"], expected)
+            self.assertEqual(self.request(self.device, "/api/v1/device/usage", {
+                "deviceId": "test-tv", "date": "2026-11-27", "utcOffsetMinutes": 480,
+                "usageMillis": 60 * server.MILLIS_PER_MINUTE,
+            }, self.headers)[0], 200)
+            self.assertEqual(self.request(self.device, challenge, {**body, "attemptId": "tomorrow-first"}, self.headers)[1]["rewardChallenge"],
+                             {"date": "2026-11-27", "remainingAttempts": 1})
+
+    def test_advanced_daily_limit_serializes_distinct_attempts_and_is_device_scoped(self):
+        self.bind(self.alice)
+        first_headers = dict(self.headers)
+        self.headers = {"X-Device-Id": "second-tv", "Authorization": "Bearer " + secrets.token_urlsafe(32)}
+        self.bind(self.alice)
+        challenge = "/api/v1/device/reward-challenge"
+        now = server.datetime(2026, 11, 26, 8, 0, tzinfo=server.timezone.utc)
+        with patch.object(server.time, "time", return_value=now.timestamp()):
+            for headers in (first_headers, self.headers):
+                self.assertEqual(self.request(self.device, "/api/v1/device/usage", {
+                    "deviceId": headers["X-Device-Id"], "date": "2026-11-26", "utcOffsetMinutes": 480,
+                    "usageMillis": 60 * server.MILLIS_PER_MINUTE,
+                }, headers)[0], 200)
+            def submit(index):
+                return self.request(build_opener(), challenge, {
+                    "questionId": server.DEFAULT_REWARD_QUESTION["id"], "numericAnswer": "0",
+                    "attemptId": f"concurrent-{index}", "answeredAt": int(now.timestamp() * 1000),
+                }, first_headers)
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                results = list(executor.map(submit, range(3)))
+            self.assertEqual(sorted(status for status, _ in results), [200, 200, 429])
+            self.assertEqual(self.request(self.device, challenge, headers=self.headers)[1]["rewardChallenge"],
+                             {"date": "2026-11-26", "remainingAttempts": 2})
+            self.assertEqual(len(server.STORE.for_account(2).load()["answerRecords"]), 2)
 
     def test_answered_advanced_history_is_unique_and_survives_removal(self):
         path = "/api/v1/admin/poems"
@@ -309,9 +390,15 @@ class AccountBindingTests(unittest.TestCase):
             ("history-choice-wrong", choice, {"selectedIndex": 1}, 3000),
             ("history-numeric-correct", seeded, {"numericAnswer": "495"}, 2000),
         ):
-            self.assertEqual(self.request(self.device, challenge, {
-                "questionId": question["id"], "attemptId": attempt_id, "answeredAt": answered_at + offset, **answer,
-            }, self.headers)[0], 200)
+            receipt_time = now + server.timedelta(days=int(attempt_id == "history-numeric-correct"))
+            with patch.object(server.time, "time", return_value=receipt_time.timestamp()):
+                self.request(self.device, "/api/v1/device/usage", {
+                    "deviceId": "test-tv", "date": receipt_time.date().isoformat(), "utcOffsetMinutes": 0,
+                    "usageMillis": 60 * server.MILLIS_PER_MINUTE,
+                }, self.headers)
+                self.assertEqual(self.request(self.device, challenge, {
+                    "questionId": question["id"], "attemptId": attempt_id, "answeredAt": answered_at + offset, **answer,
+                }, self.headers)[0], 200)
         self.assertNotIn(seeded["id"], {item["id"] for item in self.request(self.alice, "/api/v1/admin/state")[1]["rewardQuestions"]})
         server.STORE = server.StateStore(self.path)
         devices = [{"deviceId": "test-tv", "name": "Living room TV"}]
@@ -506,16 +593,21 @@ class AccountBindingTests(unittest.TestCase):
         next_wrong = {**wrong_body, "attemptId": "numeric-wrong-again", "answeredAt": answered_at + 1000}
         self.assertEqual(self.request(self.device, challenge, next_wrong, self.headers)[0], 200)
         body = {"questionId": seeded["id"], "numericAnswer": "000495", "attemptId": "numeric-correct", "answeredAt": answered_at + 2000}
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            answers = list(executor.map(lambda _: self.request(build_opener(), challenge, body, self.headers), range(2)))
+        next_day = (server.datetime.fromtimestamp(answered_at / 1000, server.timezone.utc) + server.timedelta(days=1)).date().isoformat()
+        with patch.object(server.time, "time", return_value=answered_at / 1000 + 86_400):
+            self.assertEqual(self.request(self.device, "/api/v1/device/usage", {
+                "deviceId": "test-tv", "date": next_day, "utcOffsetMinutes": 0, "usageMillis": 60 * minute,
+            }, self.headers)[0], 200)
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                answers = list(executor.map(lambda _: self.request(build_opener(), challenge, body, self.headers), range(2)))
+            self.assertEqual(self.request(self.device, challenge, body, self.headers), answers[0])
+            self.assertEqual(self.request(self.device, challenge, headers=self.headers)[1]["question"]["id"], created["id"])
         self.assertEqual(answers[0], answers[1])
         status, result = answers[0]
         self.assertEqual(status, 200)
         self.assertTrue(result["correct"])
         self.assertEqual(result["earnedMinutes"], 10)
         self.assertEqual(result["rewardTime"]["balanceMillis"], 10 * minute)
-        self.assertEqual(self.request(self.device, challenge, body, self.headers), (200, result))
-        self.assertEqual(self.request(self.device, challenge, headers=self.headers)[1]["question"]["id"], created["id"])
         records = self.request(self.alice, f"/api/v1/admin/records?date={local_day}")[1]["answers"]
         self.assertEqual([item["correct"] for item in records], [True, False, False])
         self.assertEqual([item["selectedAnswer"] for item in records], ["000495", "0", "0"])
@@ -523,9 +615,10 @@ class AccountBindingTests(unittest.TestCase):
         self.assertEqual(self.request(self.alice, "/api/v1/admin/answers/restore", {"attemptId": body["attemptId"]})[0], 200)
         restored = self.request(self.alice, "/api/v1/admin/state")[1]["rewardQuestions"][-1]
         self.assertEqual(restored, seeded)
-        self.assertEqual(self.request(self.device, challenge, {
-            **body, "attemptId": "numeric-restored-correct", "answeredAt": answered_at + 3000,
-        }, self.headers)[1]["rewardTime"]["balanceMillis"], 20 * minute)
+        with patch.object(server.time, "time", return_value=answered_at / 1000 + 86_400):
+            self.assertEqual(self.request(self.device, challenge, {
+                **body, "attemptId": "numeric-restored-correct", "answeredAt": answered_at + 3000,
+            }, self.headers)[1]["rewardTime"]["balanceMillis"], 20 * minute)
 
     def test_advanced_attempt_validation_and_device_local_answer_date(self):
         self.bind(self.alice)

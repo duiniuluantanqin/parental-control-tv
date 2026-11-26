@@ -163,6 +163,7 @@ object RemoteSync {
             val parsed = QuestionBank.parseQuestions(questions.toString())
             val settingsChanged = ControlState.settings(context) != settings
             state.optJSONObject("rewardTime")?.let { ControlState.applyRemoteRewardTime(context, it) }
+            state.optJSONObject("rewardChallenge")?.let { ControlState.applyRemoteRewardChallenge(context, it) }
             ControlState.updateSettings(context, settings)
             state.optJSONObject("usageReset")?.let { command ->
                 if (ControlState.applyRemoteUsageReset(context, command.getString("id"), command.getString("date"))) {
@@ -265,15 +266,19 @@ object RemoteSync {
                 connection.setFixedLengthStreamingMode(body.size)
                 connection.outputStream.use { it.write(body) }
             }
-            return when (connection.responseCode) {
-                200 -> JSONObject(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }).also {
+            val code = connection.responseCode
+            return when (code) {
+                200, 409, 429 -> JSONObject((if (code == 200) connection.inputStream else connection.errorStream)
+                    .bufferedReader(Charsets.UTF_8).use { it.readText() }).also {
+                    check(bindingId == DeviceBinding.bindingId(context))
+                    if (code == 409) it.put("eligible", false)
+                    it.optJSONObject("rewardChallenge")?.let { challenge -> ControlState.applyRemoteRewardChallenge(context, challenge) }
                     it.optJSONObject("rewardTime")?.let { reward ->
                         if (ControlState.applyRemoteRewardTime(context, reward)) {
                             context.sendBroadcast(Intent(ACTION_SYNC_COMPLETED).setPackage(context.packageName))
                         }
                     }
                 }
-                409 -> JSONObject().put("eligible", false)
                 404 -> JSONObject().put("unavailable", true)
                 else -> error("Could not reach the advanced question service.")
             }

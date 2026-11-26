@@ -62,6 +62,7 @@ class QuestionOverlayService : Service() {
     private var rewardConfirmReturnFocus: View? = null
     private var dailyLimitPoem: Poem? = null
     private var rewardChallengeOffered = false
+    private var rewardChallengeVisible = false
     private var rewardChallengeBinding = ""
     private var currentQuestion: TvQuestion? = null
     private var isTestQuestion = false
@@ -429,7 +430,7 @@ class QuestionOverlayService : Service() {
                 if (result.settingsChanged) QuestionAlarmReceiver.scheduleForCurrentState(applicationContext)
             }
         }
-        if (currentMode == MODE_REWARD_CHALLENGE && canChallengeForRewards() &&
+        if (currentMode == MODE_REWARD_CHALLENGE && canAccessRewardChallenge() &&
             DeviceBinding.bindingId(this) == rewardChallengeBinding) return
         renderLock(MODE_DAILY_LOCK)
     }
@@ -468,6 +469,7 @@ class QuestionOverlayService : Service() {
         }
         rewardOfferMillis = if (mode == MODE_DAILY_LOCK) ControlState.rewardOfferMillis(this) else 0L
         rewardChallengeOffered = mode == MODE_DAILY_LOCK && canChallengeForRewards()
+        rewardChallengeVisible = mode == MODE_DAILY_LOCK && canAccessRewardChallenge()
         currentMode = mode
         isTestQuestion = false
         answerSubmitted = true
@@ -542,7 +544,7 @@ class QuestionOverlayService : Service() {
 
     private fun addDailyLockChoices(root: LinearLayout): View {
         val actions = LinearLayout(this).apply { gravity = Gravity.CENTER }
-        fun action(label: String, clicked: () -> Unit) = TextView(this).apply {
+        fun action(label: String, enabled: Boolean = true, clicked: () -> Unit) = TextView(this).apply {
             id = View.generateViewId()
             text = label
             textSize = 20f
@@ -550,17 +552,26 @@ class QuestionOverlayService : Service() {
             setPadding(dp(22), 0, dp(22), 0)
             isFocusable = true
             isFocusableInTouchMode = true
-            isClickable = true
+            isClickable = enabled
             fun showFocus(focused: Boolean) {
-                setTextColor(if (focused) Color.rgb(20, 24, 25) else Color.WHITE)
+                setTextColor(when {
+                    !enabled -> Color.rgb(138, 147, 147)
+                    focused -> Color.rgb(20, 24, 25)
+                    else -> Color.WHITE
+                })
                 background = GradientDrawable().apply {
                     cornerRadius = dp(10).toFloat()
-                    setColor(if (focused) Color.rgb(210, 239, 111) else Color.rgb(45, 58, 60))
+                    setColor(when {
+                        !enabled -> Color.rgb(35, 41, 42)
+                        focused -> Color.rgb(210, 239, 111)
+                        else -> Color.rgb(45, 58, 60)
+                    })
+                    if (!enabled) setStroke(dp(2), if (focused) Color.rgb(138, 147, 147) else Color.TRANSPARENT)
                 }
             }
             showFocus(false)
             setOnFocusChangeListener { _, focused -> showFocus(focused) }
-            setOnClickListener { clicked() }
+            if (enabled) setOnClickListener { clicked() }
             // Back on a child must not dismiss the quota lock.
             setOnKeyListener { _, keyCode, _ -> keyCode == KeyEvent.KEYCODE_BACK }
         }
@@ -568,8 +579,12 @@ class QuestionOverlayService : Service() {
         if (rewardOfferMillis > 0L) {
             buttons += action("Use reward time") { useRewardTime() }
         }
-        if (rewardChallengeOffered) {
-            buttons += action("Try an advanced question") { openRewardChallenge() }
+        if (rewardChallengeVisible) {
+            val label = if (rewardChallengeOffered) "Try an advanced question"
+                else "Try an advanced question\nDaily limit: 2 attempts"
+            buttons += action(label, enabled = rewardChallengeOffered) { openRewardChallenge() }.apply {
+                if (!rewardChallengeOffered) textSize = 16f
+            }
         }
         buttons += action("Unlock with PIN") { showPasswordEntry(MODE_DAILY_LOCK) }
         buttons.forEachIndexed { index, button ->
@@ -583,8 +598,11 @@ class QuestionOverlayService : Service() {
         return buttons.last()
     }
 
-    private fun canChallengeForRewards(): Boolean =
+    private fun canAccessRewardChallenge(): Boolean =
         DeviceBinding.bindingId(this).isNotEmpty() && ControlState.canOfferRewards(this)
+
+    private fun canChallengeForRewards(): Boolean =
+        canAccessRewardChallenge() && ControlState.rewardChallengesRemaining(this) > 0
 
     private fun useRewardTime() {
         if (rewardConfirmDialog?.isShowing == true) return
@@ -734,7 +752,7 @@ class QuestionOverlayService : Service() {
     }
 
     private fun submitRewardAnswer(answer: JSONObject) {
-        if (!canChallengeForRewards() || DeviceBinding.bindingId(this) != rewardChallengeBinding) {
+        if (!canAccessRewardChallenge() || DeviceBinding.bindingId(this) != rewardChallengeBinding) {
             return refreshBlockingState()
         }
         requestRewardChallenge(answer, "Checking your answer…", { submitRewardAnswer(answer) }) { response ->
@@ -744,6 +762,11 @@ class QuestionOverlayService : Service() {
 
     private fun showRewardAnswerResult(response: JSONObject) {
         if (!response.getBoolean("correct")) {
+            if (ControlState.rewardChallengesRemaining(this) == 0) {
+                Toast.makeText(this, "Incorrect. Today's 2 advanced question attempts are used. Try again tomorrow.", Toast.LENGTH_LONG).show()
+                returnToUsageLock()
+                return
+            }
             showRewardPanel(
                 "Incorrect. Try this question again.",
                 actions = listOf("Try again" to ::openRewardChallenge),
@@ -778,6 +801,10 @@ class QuestionOverlayService : Service() {
                 if (overlayView !== pendingView) return@post
                 result.fold(onSuccess = { response ->
                     when {
+                        response.optString("errorCode") == "daily_challenge_limit_reached" -> {
+                            Toast.makeText(this, "Today's 2 advanced question attempts are used. Try again tomorrow.", Toast.LENGTH_LONG).show()
+                            returnToUsageLock()
+                        }
                         response.optBoolean("unavailable") -> showRewardPanel("This advanced question is no longer available.")
                         !response.optBoolean("eligible", true) -> showRewardPanel("Today's usage could not be confirmed. Sync and try again.")
                         else -> onSuccess(response)
@@ -1402,7 +1429,7 @@ class QuestionOverlayService : Service() {
             return
         }
         if (currentMode == MODE_REWARD_CHALLENGE) {
-            if (!canChallengeForRewards() || DeviceBinding.bindingId(this) != rewardChallengeBinding) return returnToUsageLock()
+            if (!canAccessRewardChallenge() || DeviceBinding.bindingId(this) != rewardChallengeBinding) return returnToUsageLock()
             handler.removeCallbacks(lockTicker)
             handler.postDelayed(lockTicker, 1_000L)
             return
@@ -1420,6 +1447,7 @@ class QuestionOverlayService : Service() {
         if (currentMode == MODE_DAILY_LOCK) {
             if (!ControlState.isDailyLimitReached(this)) return refreshBlockingState()
             if (!pinEntryActive && (rewardOfferMillis != ControlState.rewardOfferMillis(this) ||
+                    rewardChallengeVisible != canAccessRewardChallenge() ||
                     rewardChallengeOffered != canChallengeForRewards())) {
                 return renderLock(MODE_DAILY_LOCK, force = true)
             }

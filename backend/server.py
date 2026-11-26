@@ -509,12 +509,28 @@ class StateStore:
             for record in state["dailyUsage"]
         )
 
+    @staticmethod
+    def reward_challenge_snapshot(state: dict, device_id: str, local_time: datetime | None) -> dict:
+        if local_time is None:
+            return {"date": "", "remainingAttempts": 0}
+        record_date = local_time.date().isoformat()
+        attempts = sum(
+            item.get("questionKind") == "reward" and item.get("deviceId") == device_id
+            and item.get("challengeDate", item.get("date")) == record_date
+            for item in state["answerRecords"]
+        )
+        return {"date": record_date, "remainingAttempts": max(0, 2 - attempts)}
+
     def next_reward_question(self, device_id: str) -> dict:
         with self.lock:
             state = self.load()
             device = state["devices"].get(device_id, {})
-            if not self.reward_challenge_allowed(state, device_id, self.reward_challenge_day(device)):
-                return {"eligible": False, "question": None}
+            local_time = self.reward_challenge_day(device)
+            challenge = self.reward_challenge_snapshot(state, device_id, local_time)
+            if local_time is not None and challenge["remainingAttempts"] == 0:
+                return {"eligible": False, "question": None, "errorCode": "daily_challenge_limit_reached", "rewardChallenge": challenge}
+            if not self.reward_challenge_allowed(state, device_id, local_time):
+                return {"eligible": False, "question": None, "rewardChallenge": challenge}
             question = next(iter(state["rewardQuestions"]), None)
             if question is None:
                 public_question = None
@@ -522,7 +538,7 @@ class StateStore:
                 public_question = {key: question[key] for key in ("id", "prompt", "type", "rewardMinutes")}
             else:
                 public_question = {key: question[key] for key in ("id", "prompt", "options", "rewardMinutes")}
-            return {"eligible": True, "question": public_question}
+            return {"eligible": True, "question": public_question, "rewardChallenge": challenge}
 
     def answer_reward_question(self, device_id: str, question_id: object, selected: object = None,
                                numeric_answer: object = None, attempt_id: object = None,
@@ -550,8 +566,11 @@ class StateStore:
             ), None)
             question = next((item for item in state["rewardQuestions"] if item["id"] == question_id), None)
             if existing is None:
+                challenge = self.reward_challenge_snapshot(state, device_id, local_time)
+                if local_time is not None and challenge["remainingAttempts"] == 0:
+                    return 429, {"error": "每台电视每天最多挑战两次进阶题", "errorCode": "daily_challenge_limit_reached", "rewardChallenge": challenge}
                 if not self.reward_challenge_allowed(state, device_id, local_time):
-                    return 409, {"error": "达到每日使用限额后才可挑战"}
+                    return 409, {"error": "达到每日使用限额后才可挑战", "rewardChallenge": challenge}
                 if question is None:
                     return 404, {"error": "进阶题已删除"}
                 if (question.get("type") == "numeric") != numeric_is_valid:
@@ -569,6 +588,7 @@ class StateStore:
                     "attemptId": attempt_id,
                     "deviceId": device_id,
                     "date": datetime.fromtimestamp(answered_at / 1000, timezone(timedelta(minutes=device["utcOffsetMinutes"]))).date().isoformat(),
+                    "challengeDate": local_time.date().isoformat(),
                     "answeredAt": answered_at,
                     "questionId": question_id,
                     "questionKind": "reward",
@@ -589,7 +609,8 @@ class StateStore:
                 self.save(state)
             record_date = local_time.date().isoformat() if local_time is not None else ""
             return 200, {"correct": existing["correct"], "earnedMinutes": existing["earnedMinutes"],
-                         "rewardTime": reward_snapshot(device, record_date)}
+                         "rewardTime": reward_snapshot(device, record_date),
+                         "rewardChallenge": self.reward_challenge_snapshot(state, device_id, local_time)}
 
     @staticmethod
     def _create_schema(connection: sqlite3.Connection) -> None:
@@ -774,7 +795,9 @@ class StateStore:
                 **({} if device_id else {"rewardQuestions": state["rewardQuestions"]}),
                 "passwordReset": state["passwordReset"],
                 "usageReset": state["devices"].get(device_id, {}).get("usageResets", {}).get(record_date),
-                **({"rewardTime": reward_snapshot(state["devices"].get(device_id, {}), record_date)} if device_id else {}),
+                **({"rewardTime": reward_snapshot(state["devices"].get(device_id, {}), record_date),
+                    "rewardChallenge": self.reward_challenge_snapshot(state, device_id,
+                        self.reward_challenge_day(state["devices"].get(device_id, {})))} if device_id else {}),
                 "version": BACKEND_VERSION,
                 "refill": {"running": self.refill_running, "error": self.refill_error},
                 "poemEnrichment": {

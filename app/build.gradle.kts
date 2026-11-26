@@ -13,7 +13,7 @@ android {
         applicationId = "com.example.tvparental"
         minSdk = 28
         targetSdk = 28
-        versionCode = 87
+        versionCode = 89
         versionName = appVersion
     }
 

@@ -48,6 +48,8 @@ object ControlState {
     private const val QUESTION_INTERVAL_KEY = "question_interval_minutes"
     private const val WRONG_LOCK_KEY = "wrong_lock_minutes"
     private const val DAILY_REWARD_LIMIT_KEY = "daily_reward_limit_minutes"
+    private const val REWARD_CHALLENGE_DAY_KEY = "reward_challenge_day"
+    private const val REWARD_CHALLENGES_REMAINING_KEY = "reward_challenges_remaining"
     private const val SYNC_INTERVAL_KEY = "sync_interval_minutes"
     private const val ALWAYS_SHOW_REMAINING_TIME_KEY = "always_show_remaining_time"
     private const val SHOW_QUESTION_ON_STARTUP_KEY = "show_question_on_startup"
@@ -309,6 +311,27 @@ object ControlState {
     @Synchronized
     fun rewardBalanceMillis(context: Context): Long = RewardTimeLedger.balance(prefs(context))
 
+    fun rewardChallengesRemaining(context: Context): Int =
+        rewardChallengesRemaining(prefs(context), DailyUsageLedger.localDay(System.currentTimeMillis()))
+
+    internal fun rewardChallengesRemaining(preferences: SharedPreferences, today: String): Int =
+        if (preferences.getString(REWARD_CHALLENGE_DAY_KEY, null) == today)
+            preferences.getInt(REWARD_CHALLENGES_REMAINING_KEY, 2).coerceIn(0, 2)
+        else 2
+
+    @Synchronized
+    fun applyRemoteRewardChallenge(context: Context, challenge: JSONObject) {
+        applyRemoteRewardChallenge(prefs(context), challenge.getString("date"), challenge.getInt("remainingAttempts"),
+            DailyUsageLedger.localDay(System.currentTimeMillis()))
+    }
+
+    internal fun applyRemoteRewardChallenge(preferences: SharedPreferences, date: String, remaining: Int, today: String) {
+        if (date != today) return
+        val updated = minOf(rewardChallengesRemaining(preferences, today), remaining.coerceIn(0, 2))
+        check(preferences.edit().putString(REWARD_CHALLENGE_DAY_KEY, date)
+            .putInt(REWARD_CHALLENGES_REMAINING_KEY, updated).commit()) { "Could not save today's advanced question limit." }
+    }
+
     @Synchronized
     fun rewardAvailableToday(context: Context): Long {
         resetForNewDay(context)
@@ -544,6 +567,7 @@ object ControlState {
             REMOTE_QUESTIONS_KEY, WEEKLY_LIMITS_KEY, USAGE_WINDOWS_KEY, DISABLED_WINDOWS_KEY,
             QUESTION_INTERVAL_KEY, WRONG_LOCK_KEY, SYNC_INTERVAL_KEY, APPLIED_PASSWORD_RESET_ID_KEY,
             DAILY_REWARD_LIMIT_KEY, RewardTimeLedger.GRANTED, RewardTimeLedger.SPENT,
+            REWARD_CHALLENGE_DAY_KEY, REWARD_CHALLENGES_REMAINING_KEY,
             RewardTimeLedger.USED_TODAY, RewardTimeLedger.ACTIVATED,
         )
         val editor = preferences.edit()
