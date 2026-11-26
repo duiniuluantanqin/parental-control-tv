@@ -291,10 +291,10 @@ def validate_reward_question(value: object, *, question_id: str | None = None) -
         question[key] = item.strip()
     if answer_type == "numeric":
         numeric_answer = value.get("numericAnswer")
-        if not isinstance(numeric_answer, str) or not re.fullmatch(r"[+-]?[0-9]{1,120}", numeric_answer.strip()):
-            raise ValueError("正确答案必须为整数")
+        if not isinstance(numeric_answer, str) or not 1 <= len(numeric_answer.strip()) <= 120:
+            raise ValueError("正确答案必须是 1 到 120 个字符的字符串")
         question["type"] = "numeric"
-        question["numericAnswer"] = str(int(numeric_answer.strip()))
+        question["numericAnswer"] = numeric_answer.strip()
         if value.get("poem") is not None:
             question["poem"] = validate_poem(value["poem"])
     else:
@@ -546,7 +546,7 @@ class StateStore:
         selected_is_valid = type(selected) is int and 0 <= selected < 4
         numeric_is_valid = (
             selected is None and isinstance(numeric_answer, str)
-            and re.fullmatch(r"[+-]?[0-9]{1,120}", numeric_answer.strip()) is not None
+            and 1 <= len(numeric_answer.strip()) <= 120
         )
         if (not isinstance(question_id, str) or not 1 <= len(question_id) <= 80
                 or selected_is_valid == numeric_is_valid):
@@ -576,7 +576,7 @@ class StateStore:
                 if (question.get("type") == "numeric") != numeric_is_valid:
                     raise ValueError("无效的进阶题答案")
                 if question.get("type") == "numeric":
-                    correct = str(int(numeric_answer.strip())) == question["numericAnswer"]
+                    correct = numeric_answer.strip() == question["numericAnswer"]
                     selected_answer = numeric_answer.strip()
                     correct_answer = question["numericAnswer"]
                 else:

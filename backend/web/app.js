@@ -183,7 +183,7 @@ function showQuestionDetail(question) {
   options.replaceChildren();
   if (question.type === "numeric") {
     const item = document.createElement("li");
-    item.textContent = `数字答案：${question.numericAnswer}`;
+    item.textContent = `正确答案：${question.numericAnswer}`;
     item.className = "correct";
     options.append(item);
   }
@@ -1432,15 +1432,12 @@ for (const id of ["closeQuestionDialog", "cancelQuestion"]) {
 questionDialog.addEventListener("cancel", event => {
   if (document.querySelector("#submitQuestion").disabled) event.preventDefault();
 });
-for (const dialog of [questionDialog, questionDetailDialog]) {
-  dialog.addEventListener("click", event => {
-    if (event.target === dialog) {
-      if (dialog === questionDialog && document.querySelector("#submitQuestion").disabled) return;
-      const bounds = dialog.getBoundingClientRect();
-      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) dialog.close();
-    }
-  });
-}
+questionDetailDialog.addEventListener("click", event => {
+  if (event.target === questionDetailDialog) {
+    const bounds = questionDetailDialog.getBoundingClientRect();
+    if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) questionDetailDialog.close();
+  }
+});
 questionDialog.addEventListener("close", () => {
   if (!editingQuestion) document.querySelector(rewardQuestionForm ? "#addRewardQuestionButton" : "#addQuestionButton").focus();
 });

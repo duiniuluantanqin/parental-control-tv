@@ -891,22 +891,18 @@ class QuestionOverlayService : Service() {
                 setPadding(dp(10), dp(4), dp(10), dp(4))
             }.also { root.addView(it, matchParams()) }
         } else null
-        fun button(copy: String, emphasized: Boolean = false, onClick: () -> Unit) = label(copy, 20f, lavender).apply {
+        fun button(copy: String, onClick: () -> Unit) = label(copy, 20f, lavender).apply {
             id = View.generateViewId()
             gravity = Gravity.CENTER_VERTICAL
             minHeight = dp(48)
             setPadding(dp(16), dp(8), dp(16), dp(8))
             isFocusable = true
             isClickable = true
-            setTypeface(null, if (emphasized) Typeface.BOLD else Typeface.NORMAL)
+            setTypeface(null, Typeface.NORMAL)
             fun paint(focused: Boolean) {
-                setTextColor(if (focused || emphasized) Color.rgb(40, 22, 65) else lavender)
+                setTextColor(if (focused) Color.rgb(40, 22, 65) else lavender)
                 background = GradientDrawable().apply {
-                    setColor(when {
-                        focused -> gold
-                        emphasized -> Color.rgb(77, 203, 180)
-                        else -> Color.rgb(66, 43, 94)
-                    })
+                    setColor(if (focused) gold else Color.rgb(66, 43, 94))
                     cornerRadius = dp(10).toFloat()
                 }
             }
@@ -919,82 +915,46 @@ class QuestionOverlayService : Service() {
         val actionButtons = if (onNumericAnswer != null) {
             listOf(
                 button("Clear") { numericAnswer = ""; refreshNumericAnswer() },
-                button("Submit", emphasized = true) {
+                button("Submit") {
                     if (numericAnswer.isNotEmpty() && numericAnswer != "-") onNumericAnswer(numericAnswer)
                 },
             )
         } else actions.map { (copy, onClick) -> button(copy, onClick = onClick) }
         val keyboardButtons = mutableListOf<TextView>()
         if (onNumericAnswer != null) {
-            (actionButtons + back).forEach { control ->
-                control.minHeight = dp(36)
-                control.textSize = 18f
-                control.setPadding(dp(10), dp(4), dp(10), dp(4))
-            }
             refreshNumericAnswer = {
                 answerDisplay?.text = numericAnswer.ifEmpty { "Enter an answer" }
-                actionButtons.lastOrNull()?.alpha = if (numericAnswer.isNotEmpty() && numericAnswer != "-") 1f else .78f
             }
-            val keypad = GridLayout(this).apply {
-                columnCount = 3
-                rowCount = 4
-            }
-            val keyLabels = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "±", "0", "Del")
-            keyLabels.forEachIndexed { index, keyLabel ->
-                val key = button(keyLabel) {
+            val keyLabels = listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "±", "Del")
+            keyLabels.forEach { keyLabel ->
+                keyboardButtons += button(keyLabel) {
                     when (keyLabel) {
                         "±" -> numericAnswer = if (numericAnswer.startsWith("-")) numericAnswer.drop(1) else "-$numericAnswer"
                         "Del" -> numericAnswer = numericAnswer.dropLast(1)
                         else -> if (numericAnswer.count(Char::isDigit) < 120) numericAnswer += keyLabel
                     }
                     refreshNumericAnswer()
-                }.apply {
-                    gravity = Gravity.CENTER
-                    minHeight = dp(32)
-                    setPadding(dp(6), dp(2), dp(6), dp(2))
-                    textSize = if (keyLabel == "Del") 14f else 18f
                 }
-                keyboardButtons += key
-                keypad.addView(key, GridLayout.LayoutParams(
-                    GridLayout.spec(index / 3),
-                    GridLayout.spec(index % 3),
-                ).apply {
-                    width = dp(80)
-                    height = dp(32)
-                    setMargins(dp(4), dp(2), dp(4), dp(2))
-                })
             }
-            keyboardButtons.forEachIndexed { index, key ->
-                key.nextFocusLeftId = if (index % 3 == 0) key.id else keyboardButtons[index - 1].id
-                key.nextFocusRightId = if (index % 3 == 2) actionButtons.first().id
-                else keyboardButtons[index + 1].id
-                key.nextFocusUpId = if (index < 3) scroll.id else keyboardButtons[index - 3].id
-                key.nextFocusDownId = if (index >= 9) when (index) {
-                    9 -> actionButtons.first().id
-                    10 -> back.id
-                    else -> actionButtons.last().id
-                }
-                else keyboardButtons[index + 3].id
-            }
-            val answerControls = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER_VERTICAL
-                addView(actionButtons.first(), LinearLayout.LayoutParams(-1, dp(36)))
-                back.text = "Back"
-                back.textSize = 15f
-                addView(back, LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(6) })
-                addView(actionButtons.last(), LinearLayout.LayoutParams(-1, dp(36)).apply { topMargin = dp(6) })
-            }
+            back.text = "Back"
+            val controls = keyboardButtons + actionButtons.first() + back + actionButtons.last()
             val entryRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER
-                addView(keypad, LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                ))
-                addView(answerControls, LinearLayout.LayoutParams(dp(112), -2).apply {
-                    marginStart = dp(12)
-                })
+                isBaselineAligned = false
+                controls.forEachIndexed { index, control ->
+                    control.gravity = Gravity.CENTER
+                    control.minHeight = dp(40)
+                    control.setPadding(dp(4), dp(2), dp(4), dp(2))
+                    control.maxLines = 1
+                    control.setAutoSizeTextTypeUniformWithConfiguration(12, 18, 1, TypedValue.COMPLEX_UNIT_SP)
+                    control.nextFocusLeftId = controls.getOrElse(index - 1) { control }.id
+                    control.nextFocusRightId = controls.getOrElse(index + 1) { control }.id
+                    control.nextFocusUpId = scroll.id
+                    control.nextFocusDownId = control.id
+                    addView(control, LinearLayout.LayoutParams(0, dp(40), if (control.text.length > 1) 1.6f else 1f).apply {
+                        if (index > 0) marginStart = dp(4)
+                    })
+                }
             }
             root.addView(entryRow, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -1002,16 +962,6 @@ class QuestionOverlayService : Service() {
             ).apply {
                 setMargins(0, dp(8), 0, dp(4))
             })
-            actionButtons.forEachIndexed { index, control ->
-                control.nextFocusUpId = if (index == 0) scroll.id else back.id
-                control.nextFocusDownId = if (index == 0) back.id else control.id
-                control.nextFocusLeftId = keyboardButtons[if (index == 0) 2 else 11].id
-                control.nextFocusRightId = control.id
-            }
-            back.nextFocusUpId = actionButtons.first().id
-            back.nextFocusDownId = actionButtons.last().id
-            back.nextFocusLeftId = keyboardButtons[11].id
-            back.nextFocusRightId = back.id
             refreshNumericAnswer()
         } else if (prize != null && actionButtons.size == 4) {
             actionButtons.chunked(2).forEachIndexed { rowIndex, pair ->

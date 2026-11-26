@@ -254,10 +254,11 @@
         <small class="muted">电视达到每日限额后可挑战；每台电视每天最多作答 2 次，答错重试也计次。答对后自动移出题库、发放奖励并解锁。</small>
       </label>
       <label id="rewardAnswerTypeField" for="rewardAnswerType" hidden>答题类型
-        <select id="rewardAnswerType" disabled><option value="choice">选择题</option><option value="numeric">计算题（数字答案）</option></select>
+        <select id="rewardAnswerType" disabled><option value="choice">选择题</option><option value="numeric">计算题（直接输入答案）</option></select>
       </label>
-      <label id="numericAnswerField" for="numericAnswerInput" hidden>正确答案（整数）
-        <input id="numericAnswerInput" type="text" inputmode="numeric" pattern="[+-]?[0-9]+" maxlength="120" disabled>
+      <label id="numericAnswerField" for="numericAnswerInput" hidden>正确答案（字符串）
+        <input id="numericAnswerInput" type="text" maxlength="120" aria-describedby="numericAnswerHint" disabled>
+        <small id="numericAnswerHint" class="muted">按原文匹配，保留前导零，如 052。</small>
       </label>
       <div id="choiceAnswerFields">
         <div class="options-fields">

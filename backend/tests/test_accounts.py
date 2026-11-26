@@ -477,10 +477,10 @@ class AccountBindingTests(unittest.TestCase):
         numeric = {"prompt": "Numeric question", "type": "numeric", "category": "数学", "difficulty": "高",
                    "numericAnswer": "+0000", "rewardMinutes": 15}
         self.assertEqual(self.request(self.bob, endpoint, numeric)[0], 404)
-        self.assertEqual(self.request(self.alice, endpoint, {**numeric, "numericAnswer": "1.5"})[0], 400)
+        self.assertEqual(self.request(self.alice, endpoint, {**numeric, "numericAnswer": ""})[0], 400)
         status, result = self.request(self.alice, endpoint, numeric)
         self.assertEqual(status, 200)
-        self.assertEqual(result["question"], {**numeric, "id": original["id"], "numericAnswer": "0", "poem": poem})
+        self.assertEqual(result["question"], {**numeric, "id": original["id"], "poem": poem})
         choice = {"prompt": "New choice question", "type": "choice", "category": "科学", "difficulty": "低",
                   "options": ["W", "X", "Y", "Z"], "answer": "X", "rewardMinutes": 6}
         status, result = self.request(self.alice, endpoint, choice)
@@ -558,8 +558,8 @@ class AccountBindingTests(unittest.TestCase):
             "prompt": "Add these values", "type": "numeric", "numericAnswer": "+00042", "rewardMinutes": 7,
         })
         self.assertEqual(status, 201)
-        self.assertEqual(created["numericAnswer"], "42")
-        for invalid in (42, True, "4.2", "", "x" * 121):
+        self.assertEqual(created["numericAnswer"], "+00042")
+        for invalid in (42, True, "", " ", "x" * 121):
             self.assertEqual(self.request(self.alice, bank, {
                 "prompt": "Bad numeric answer", "type": "numeric", "numericAnswer": invalid,
             })[0], 400)
@@ -592,7 +592,7 @@ class AccountBindingTests(unittest.TestCase):
         self.assertEqual(self.request(self.device, challenge, wrong_body, self.headers), (200, wrong))
         next_wrong = {**wrong_body, "attemptId": "numeric-wrong-again", "answeredAt": answered_at + 1000}
         self.assertEqual(self.request(self.device, challenge, next_wrong, self.headers)[0], 200)
-        body = {"questionId": seeded["id"], "numericAnswer": "000495", "attemptId": "numeric-correct", "answeredAt": answered_at + 2000}
+        body = {"questionId": seeded["id"], "numericAnswer": "495", "attemptId": "numeric-correct", "answeredAt": answered_at + 2000}
         next_day = (server.datetime.fromtimestamp(answered_at / 1000, server.timezone.utc) + server.timedelta(days=1)).date().isoformat()
         with patch.object(server.time, "time", return_value=answered_at / 1000 + 86_400):
             self.assertEqual(self.request(self.device, "/api/v1/device/usage", {
@@ -610,7 +610,7 @@ class AccountBindingTests(unittest.TestCase):
         self.assertEqual(result["rewardTime"]["balanceMillis"], 10 * minute)
         records = self.request(self.alice, f"/api/v1/admin/records?date={local_day}")[1]["answers"]
         self.assertEqual([item["correct"] for item in records], [True, False, False])
-        self.assertEqual([item["selectedAnswer"] for item in records], ["000495", "0", "0"])
+        self.assertEqual([item["selectedAnswer"] for item in records], ["495", "0", "0"])
         self.assertTrue(all(item["questionType"] == "numeric" for item in records))
         self.assertEqual(self.request(self.alice, "/api/v1/admin/answers/restore", {"attemptId": body["attemptId"]})[0], 200)
         restored = self.request(self.alice, "/api/v1/admin/state")[1]["rewardQuestions"][-1]
@@ -619,6 +619,60 @@ class AccountBindingTests(unittest.TestCase):
             self.assertEqual(self.request(self.device, challenge, {
                 **body, "attemptId": "numeric-restored-correct", "answeredAt": answered_at + 3000,
             }, self.headers)[1]["rewardTime"]["balanceMillis"], 20 * minute)
+
+    def test_advanced_direct_answers_preserve_strings_through_edit_history_and_restore(self):
+        self.bind(self.alice)
+        bank = "/api/v1/admin/reward-questions"
+        challenge = "/api/v1/device/reward-challenge"
+        status, created = self.request(self.alice, bank, {
+            "prompt": "Enter the three-character answer", "type": "numeric", "numericAnswer": " 0052 ", "rewardMinutes": 9,
+        })
+        self.assertEqual(status, 201)
+        self.assertEqual(created["numericAnswer"], "0052")
+        status, updated = self.request(self.alice, bank + "/" + created["id"], {**created, "numericAnswer": " 052 "})
+        self.assertEqual(status, 200)
+        self.assertEqual(updated["question"]["numericAnswer"], "052")
+        server.STORE = server.StateStore(self.path)
+        question = self.request(self.alice, "/api/v1/admin/state")[1]["rewardQuestions"][-1]
+        self.assertEqual(question["numericAnswer"], "052")
+        now = server.datetime.now(server.timezone.utc)
+        local_day = now.date().isoformat()
+        answered_at = int(now.timestamp() * 1000)
+        self.request(self.device, "/api/v1/device/usage", {
+            "deviceId": "test-tv", "date": local_day, "utcOffsetMinutes": 0,
+            "usageMillis": 60 * server.MILLIS_PER_MINUTE,
+        }, self.headers)
+        body = {"questionId": question["id"], "numericAnswer": "52", "attemptId": "string-wrong", "answeredAt": answered_at}
+        status, wrong = self.request(self.device, challenge, body, self.headers)
+        self.assertEqual(status, 200)
+        self.assertFalse(wrong["correct"])
+        self.assertEqual(wrong["earnedMinutes"], 0)
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/state")[1]["rewardQuestions"][-1], question)
+        correct_body = {**body, "numericAnswer": " 052 ", "attemptId": "string-correct", "answeredAt": answered_at + 1000}
+        status, correct = self.request(self.device, challenge, correct_body, self.headers)
+        self.assertEqual(status, 200)
+        self.assertTrue(correct["correct"])
+        self.assertEqual(correct["earnedMinutes"], 9)
+        self.assertEqual(correct["rewardChallenge"]["remainingAttempts"], 0)
+        self.assertNotIn(question["id"], {item["id"] for item in self.request(self.alice, "/api/v1/admin/state")[1]["rewardQuestions"]})
+        self.assertEqual(self.request(self.device, challenge, correct_body, self.headers), (200, correct))
+        self.assertEqual(self.request(self.device, challenge, {**body, "attemptId": "string-third"}, self.headers)[0], 429)
+        records = self.request(self.alice, f"/api/v1/admin/records?date={local_day}")[1]["answers"]
+        self.assertEqual([item["selectedAnswer"] for item in records], ["052", "52"])
+        history = self.request(self.alice, "/api/v1/admin/poems")[1]["advancedQuestions"]
+        self.assertEqual(history[0]["numericAnswer"], "052")
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/answers/restore", {"attemptId": "string-correct"})[0], 200)
+        server.STORE = server.StateStore(self.path)
+        self.assertEqual(self.request(self.alice, "/api/v1/admin/state")[1]["rewardQuestions"][-1], question)
+
+    def test_advanced_direct_answers_accept_text_and_reject_empty_or_non_string_values(self):
+        for answer in ("052", "+00042", "4.2", "A52", "甲 乙", "x" * 120):
+            with self.subTest(answer=answer):
+                question = server.validate_reward_question({"prompt": "Text answer", "type": "numeric", "numericAnswer": answer})
+                self.assertEqual(question["numericAnswer"], answer)
+        for answer in (None, 52, True, [], {}, "", " ", "x" * 121):
+            with self.subTest(answer=answer), self.assertRaises(ValueError):
+                server.validate_reward_question({"prompt": "Text answer", "type": "numeric", "numericAnswer": answer})
 
     def test_advanced_attempt_validation_and_device_local_answer_date(self):
         self.bind(self.alice)
